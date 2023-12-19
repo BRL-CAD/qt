@@ -6,6 +6,7 @@
 
 #include "qwasmintegration.h"
 #include <qpa/qplatformwindow.h>
+#include <qpa/qplatformwindow_p.h>
 #include <emscripten/html5.h>
 #include "qwasmbackingstore.h"
 #include "qwasmscreen.h"
@@ -37,12 +38,14 @@ struct PointerEvent;
 class QWasmDeadKeySupport;
 struct WheelEvent;
 
-class QWasmWindow final : public QPlatformWindow
+class QWasmWindow final : public QPlatformWindow, public QNativeInterface::Private::QWasmWindow
 {
 public:
     QWasmWindow(QWindow *w, QWasmDeadKeySupport *deadKeySupport, QWasmCompositor *compositor,
                 QWasmBackingStore *backingStore);
     ~QWasmWindow() final;
+
+    QSurfaceFormat format() const override;
 
     void destroy();
     void paint();
@@ -65,6 +68,7 @@ public:
     QMargins frameMargins() const override;
     WId winId() const override;
     void propagateSizeHints() override;
+    void setOpacity(qreal level) override;
     void raise() override;
     void lower() override;
     QRect normalGeometry() const override;
@@ -90,11 +94,19 @@ public:
     emscripten::val a11yContainer() const { return m_a11yContainer; }
     emscripten::val inputHandlerElement() const { return m_windowContents; }
 
+    // QNativeInterface::Private::QWasmWindow
+    emscripten::val document() const override { return m_document; }
+    emscripten::val clientArea() const override { return m_qtWindow; }
+
 private:
     friend class QWasmScreen;
+    static constexpr auto minSizeForRegularWindows = 100;
 
     void invalidate();
     bool hasFrame() const;
+    bool hasTitleBar() const;
+    bool hasBorder() const;
+    bool hasShadow() const;
     bool hasMaximizeButton() const;
     void applyWindowState();
 

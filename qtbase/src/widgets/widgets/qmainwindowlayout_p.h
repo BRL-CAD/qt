@@ -1,8 +1,8 @@
 // Copyright (C) 2016 The Qt Company Ltd.
 // SPDX-License-Identifier: LicenseRef-Qt-Commercial OR LGPL-3.0-only OR GPL-2.0-only OR GPL-3.0-only
 
-#ifndef QDYNAMICMAINWINDOWLAYOUT_P_H
-#define QDYNAMICMAINWINDOWLAYOUT_P_H
+#ifndef QMAINWINDOWLAYOUT_P_H
+#define QMAINWINDOWLAYOUT_P_H
 
 //
 //  W A R N I N G
@@ -29,6 +29,7 @@
 #include "QtCore/qset.h"
 #include "private/qlayoutengine_p.h"
 #include "private/qwidgetanimator_p.h"
+#include "private/qdockwidget_p.h"
 
 #if QT_CONFIG(dockwidget)
 #include "qdockarealayout_p.h"
@@ -306,14 +307,17 @@ class Q_AUTOTEST_EXPORT QDockWidgetGroupWindow : public QWidget
 {
     Q_OBJECT
 public:
-    explicit QDockWidgetGroupWindow(QWidget* parent = nullptr, Qt::WindowFlags f = { })
-        : QWidget(parent, f) {}
+    explicit QDockWidgetGroupWindow(QWidget *parent = nullptr, Qt::WindowFlags f = {})
+        : QWidget(parent, f)
+    {
+    }
     QDockAreaLayoutInfo *layoutInfo() const;
 #if QT_CONFIG(tabbar)
     const QDockAreaLayoutInfo *tabLayoutInfo() const;
     QDockWidget *activeTabbedDockWidget() const;
 #endif
     void destroyOrHideIfEmpty();
+    bool hasVisibleDockWidgets() const;
     void adjustFlags();
     bool hasNativeDecos() const;
 
@@ -321,6 +325,7 @@ public:
     void updateCurrentGapRect();
     void restore();
     void apply();
+    QList<QDockWidget *> dockWidgets() const { return findChildren<QDockWidget *>(); }
 
     QRect currentGapRect;
     QList<int> currentGapPos;
@@ -565,11 +570,17 @@ public:
 
     void hover(QLayoutItem *hoverTarget, const QPoint &mousePos);
     bool plug(QLayoutItem *widgetItem);
-    QLayoutItem *unplug(QWidget *widget, bool group = false);
+    QLayoutItem *unplug(QWidget *widget, QDockWidgetPrivate::DragScope scope);
     void revert(QLayoutItem *widgetItem);
     void applyState(QMainWindowLayoutState &newState, bool animate = true);
     void restore(bool keepSavedState = false);
     void animationFinished(QWidget *widget);
+
+#if QT_CONFIG(draganddrop)
+    static bool needsPlatformDrag();
+    Qt::DropAction performPlatformWidgetDrag(QLayoutItem *widgetItem, const QPoint &pressPosition);
+    QLayoutItem *draggingWidget = nullptr;
+#endif
 
 protected:
     void timerEvent(QTimerEvent *e) override;
@@ -597,4 +608,4 @@ QDebug operator<<(QDebug debug, const QMainWindowLayout *layout);
 
 QT_END_NAMESPACE
 
-#endif // QDYNAMICMAINWINDOWLAYOUT_P_H
+#endif // QMAINWINDOWLAYOUT_P_H

@@ -24,6 +24,10 @@
 #endif
 
 #include <qapplication.h>
+#if QT_CONFIG(draganddrop)
+#include <qdrag.h>
+#endif
+#include <qmimedata.h>
 #if QT_CONFIG(statusbar)
 #include <qstatusbar.h>
 #endif
@@ -428,6 +432,25 @@ void QDockWidgetGroupWindow::destroyOrHideIfEmpty()
     deleteLater();
 }
 
+/*!
+   \internal
+   \return \c true if the group window has at least one visible QDockWidget child,
+   otherwise false.
+ */
+bool QDockWidgetGroupWindow::hasVisibleDockWidgets() const
+{
+    const auto &children = findChildren<QDockWidget *>(Qt::FindChildrenRecursively);
+    for (auto child : children) {
+        // WA_WState_Visible is set on the dock widget, associated to the active tab
+        // and unset on all others.
+        // WA_WState_Hidden is set if the dock widgets have been explicitly hidden.
+        // This is the relevant information to check (equivalent to !child->isHidden()).
+        if (!child->testAttribute(Qt::WA_WState_Hidden))
+            return true;
+    }
+    return false;
+}
+
 /*! \internal
     Sets the flags of this window in accordance to the capabilities of the dock widgets
  */
@@ -476,7 +499,7 @@ void QDockWidgetGroupWindow::adjustFlags()
             m_removedFrameSize = QSize();
         }
 
-        show(); // setWindowFlags hides the window
+        setVisible(hasVisibleDockWidgets());
     }
 
     QWidget *titleBarOf = top ? top : parentWidget();
@@ -537,8 +560,12 @@ bool QDockWidgetGroupWindow::hover(QLayoutItem *widgetItem, const QPoint &mouseP
 
     auto newGapPos = newState.gapIndex(mousePos, nestingEnabled, tabMode);
     Q_ASSERT(!newGapPos.isEmpty());
-    if (newGapPos == currentGapPos)
-        return false; // gap is already there
+
+    // Do not insert a new gap item, if the current position already is a gap,
+    // or if the group window contains one
+    if (newGapPos == currentGapPos || newState.hasGapItem(newGapPos))
+        return false;
+
     currentGapPos = newGapPos;
     newState.insertGap(currentGapPos, widgetItem);
     newState.fitItems();
@@ -1765,7 +1792,7 @@ void QMainWindowTabBar::mouseMoveEvent(QMouseEvent *e)
                 QDockWidgetPrivate *dockPriv = static_cast<QDockWidgetPrivate *>(QObjectPrivate::get(draggingDock));
                 QDockWidgetLayout *dwlayout = static_cast<QDockWidgetLayout *>(draggingDock->layout());
                 dockPriv->initDrag(dwlayout->titleArea().center(), true);
-                dockPriv->startDrag(false);
+                dockPriv->startDrag(QDockWidgetPrivate::DragScope::Widget);
                 if (dockPriv->state)
                     dockPriv->state->ctrlDrag = e->modifiers() & Qt::ControlModifier;
             }
@@ -2525,25 +2552,25 @@ static QTabBar::Shape tabwidgetPositionToTabBarShape(QWidget *w)
     Returns the QLayoutItem of the dragged element.
     The layout item is kept in the layout but set as a gap item.
  */
-QLayoutItem *QMainWindowLayout::unplug(QWidget *widget, bool group)
+QLayoutItem *QMainWindowLayout::unplug(QWidget *widget, QDockWidgetPrivate::DragScope scope)
 {
 #if QT_CONFIG(dockwidget) && QT_CONFIG(tabwidget)
     auto *groupWindow = qobject_cast<const QDockWidgetGroupWindow *>(widget->parentWidget());
     if (!widget->isWindow() && groupWindow) {
-        if (group && groupWindow->tabLayoutInfo()) {
+        if (scope == QDockWidgetPrivate::DragScope::Group && groupWindow->tabLayoutInfo()) {
             // We are just dragging a floating window as it, not need to do anything, we just have to
             // look up the corresponding QWidgetItem* if it exists
             if (QDockAreaLayoutInfo *info = dockInfo(widget->parentWidget())) {
                 QList<int> groupWindowPath = info->indexOf(widget->parentWidget());
                 return groupWindowPath.isEmpty() ? nullptr : info->item(groupWindowPath).widgetItem;
             }
-            qCDebug(lcQpaDockWidgets) << "Drag only:" << widget << "Group:" << group;
+            qCDebug(lcQpaDockWidgets) << "Drag only:" << widget << "Group:" << (scope == QDockWidgetPrivate::DragScope::Group);
             return nullptr;
         }
         QList<int> path = groupWindow->layoutInfo()->indexOf(widget);
         QDockAreaLayoutItem parentItem = groupWindow->layoutInfo()->item(path);
         QLayoutItem *item = parentItem.widgetItem;
-        if (group && path.size() > 1
+        if (scope == QDockWidgetPrivate::DragScope::Group && path.size() > 1
             && unplugGroup(this, &item, parentItem)) {
             qCDebug(lcQpaDockWidgets) << "Unplugging:" << widget << "from" << item;
             return item;
@@ -2636,7 +2663,7 @@ QLayoutItem *QMainWindowLayout::unplug(QWidget *widget, bool group)
     if (QDockWidget *dw = qobject_cast<QDockWidget*>(widget)) {
         Q_ASSERT(path.constFirst() == 1);
 #if QT_CONFIG(tabwidget)
-        if (group && (dockOptions & QMainWindow::GroupedDragging) && path.size() > 3
+        if (scope == QDockWidgetPrivate::DragScope::Group && (dockOptions & QMainWindow::GroupedDragging) && path.size() > 3
             && unplugGroup(this, &item,
                            layoutState.dockAreaLayout.item(path.mid(1, path.size() - 2)))) {
             path.removeLast();
@@ -3007,6 +3034,41 @@ bool QMainWindowLayout::restoreState(QDataStream &stream)
 
     return true;
 }
+
+#if QT_CONFIG(draganddrop)
+bool QMainWindowLayout::needsPlatformDrag()
+{
+    static const bool wayland =
+            QGuiApplication::platformName().startsWith("wayland"_L1, Qt::CaseInsensitive);
+    return wayland;
+}
+
+Qt::DropAction QMainWindowLayout::performPlatformWidgetDrag(QLayoutItem *widgetItem,
+                                                            const QPoint &pressPosition)
+{
+    draggingWidget = widgetItem;
+    QWidget *widget = widgetItem->widget();
+    auto drag = QDrag(widget);
+    auto mimeData = new QMimeData();
+    auto window = widgetItem->widget()->windowHandle();
+
+    auto serialize = [](const auto &object) {
+        QByteArray data;
+        QDataStream dataStream(&data, QIODevice::WriteOnly);
+        dataStream << object;
+        return data;
+    };
+    mimeData->setData("application/x-qt-mainwindowdrag-window"_L1,
+                      serialize(reinterpret_cast<qintptr>(window)));
+    mimeData->setData("application/x-qt-mainwindowdrag-position"_L1, serialize(pressPosition));
+    drag.setMimeData(mimeData);
+
+    auto result = drag.exec();
+
+    draggingWidget = nullptr;
+    return result;
+}
+#endif
 
 QT_END_NAMESPACE
 

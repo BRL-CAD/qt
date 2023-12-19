@@ -94,9 +94,11 @@
     \value AA_DontShowShortcutsInContextMenus Actions with the Shortcut property
            won't be shown in any shortcut menus unless specifically set by the
            QAction::shortcutVisibleInContextMenu property. This value was added
-           in Qt 5.10, and defaults to the preference reported by the implementation
-           of QPlatformIntegration::styleHint. To override the platform integration,
-           set this attribute after QCoreApplication has been instantiated.
+           in Qt 5.10, and is by default based on the value reported by
+           QStyleHints::showShortcutsInContextMenus(). To override the default
+           behavior, set the style hint before QCoreApplication has been
+           instantiated, or set this attribute after QCoreApplication has
+           been instantiated.
 
     \value AA_NativeWindows Ensures that widgets have native windows.
 
@@ -118,15 +120,15 @@
            set to true won't be used as a native menubar (e.g, the menubar at
            the top of the main screen on \macos).
 
-    \value AA_MacDontSwapCtrlAndMeta Keyboard shortcuts on \macos are typically
+    \value AA_MacDontSwapCtrlAndMeta Keyboard shortcuts on Apple platforms are typically
            based on the Command (or Cmd) keyboard modifier, represented by
            the ⌘ symbol. For example, the 'Copy' action is Command+C (⌘+C).
            To ease cross platform development Qt will by default remap Command
            to the Qt::ControlModifier, to align with other platforms. This
            allows creating keyboard shortcuts such as "Ctrl+J", which on
            \macos will then map to Command+J, as expected by \macos users. The
-           actual Control (or Ctrl) modifier on \macos, represented by ⌃, is
-           mapped to Qt::MetaModifier.
+           actual Control (or Ctrl) modifier on Apple platforms, represented by ⌃,
+           is mapped to Qt::MetaModifier.
 
            When this attribute is true Qt will not do the remapping, and pressing
            the Command modifier will result in Qt::MetaModifier, while pressing
@@ -978,8 +980,7 @@
 
     \value WA_Hover Forces Qt to generate paint events when the mouse
     enters or leaves the widget. This feature is typically used when
-    implementing custom styles; see the \l{widgets/styles}{Styles}
-    example for details.
+    implementing custom styles.
 
     \value WA_InputMethodEnabled Enables input methods for Asian languages.
     Must be set when creating custom text editing widgets.
@@ -2872,7 +2873,10 @@
     \value ElideLeft    The ellipsis should appear at the beginning of the text.
     \value ElideRight   The ellipsis should appear at the end of the text.
     \value ElideMiddle  The ellipsis should appear in the middle of the text.
-    \value ElideNone    Ellipsis should NOT appear in the text.
+    \value ElideNone    Ellipsis should NOT appear in the text. When passed to functions such as
+                        QFontMetrics::elidedText(), this will cause the full string to return unless
+                        the text contains multi-length variants. Elision in this case must be done
+                        by clipping to the component width.
 
     Qt::ElideMiddle is normally the most appropriate choice for URLs (e.g.,
     "\l{http://bugreports.qt.io/browse/QTWEBSITE-13}{http://bugreports.qt.../QTWEBSITE-13/}"),

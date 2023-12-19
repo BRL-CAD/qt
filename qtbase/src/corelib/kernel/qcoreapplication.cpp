@@ -67,7 +67,7 @@
 #include <QtCore/qjniobject.h>
 #endif
 
-#ifdef Q_OS_MAC
+#ifdef Q_OS_DARWIN
 #  include "qcore_mac_p.h"
 #endif
 
@@ -123,7 +123,7 @@ Q_TRACE_POINT(qtcore, QCoreApplication_sendSpontaneousEvent, QObject *receiver, 
 Q_TRACE_POINT(qtcore, QCoreApplication_notify_entry, QObject *receiver, QEvent *event, QEvent::Type type);
 Q_TRACE_POINT(qtcore, QCoreApplication_notify_exit, bool consumed, bool filtered);
 
-#if defined(Q_OS_WIN) || defined(Q_OS_MAC)
+#if defined(Q_OS_WIN) || defined(Q_OS_DARWIN)
 extern QString qAppFileName();
 #endif
 
@@ -294,15 +294,15 @@ static void qt_call_pre_routines()
     if (!preRList.exists())
         return;
 
-    QVFuncList list;
-    {
+    const QStartUpFuncList list = [] {
         const auto locker = qt_scoped_lock(globalRoutinesMutex);
         // Unlike qt_call_post_routines, we don't empty the list, because
         // Q_COREAPP_STARTUP_FUNCTION is a macro, so the user expects
         // the function to be executed every time QCoreApplication is created.
-        list = *preRList;
-    }
-    for (QtCleanUpFunction f : std::as_const(list))
+        return *preRList;
+    }();
+
+    for (QtStartUpFunction f : list)
         f();
 }
 
@@ -577,7 +577,9 @@ void QCoreApplicationPrivate::initConsole()
             return;
         consoleAllocated = true;
     } else if (env.compare(u"attach"_s, Qt::CaseInsensitive) == 0) {
-        if (AttachConsole(ATTACH_PARENT_PROCESS) == FALSE)
+        // If the calling process is already attached to a console,
+        // the error code returned is ERROR_ACCESS_DENIED.
+        if (!::AttachConsole(ATTACH_PARENT_PROCESS) && ::GetLastError() != ERROR_ACCESS_DENIED)
             return;
     } else {
         // Unknown input, don't make any decision for the user.
@@ -748,7 +750,8 @@ void QCoreApplicationPrivate::initLocale()
     to reset the locale that is used for number formatting to "C"-locale.
 
     \sa QGuiApplication, QAbstractEventDispatcher, QEventLoop,
-    {Semaphores Example}, {Wait Conditions Example}
+    {Producer and Consumer using Semaphores},
+    {Producer and Consumer using Wait Conditions}
 */
 
 /*!
@@ -2135,6 +2138,12 @@ void QCoreApplicationPrivate::quit()
   last-second cleanup. Note that no user interaction is possible in
   this state.
 
+  \note At this point the main event loop is still running, but will
+  not process further events on return except QEvent::DeferredDelete
+  events for objects deleted via deleteLater(). If event processing is
+  needed, use a nested event loop or call QCoreApplication::processEvents()
+  manually.
+
   \sa quit()
 */
 
@@ -2446,7 +2455,7 @@ QString QCoreApplication::applicationFilePath()
         if (procName != d->argv[0]) {
             // clear the cache if the procname changes, so we reprocess it.
             QCoreApplicationPrivate::clearApplicationFilePath();
-            procName = QByteArray(d->argv[0]);
+            procName.assign(d->argv[0]);
         }
     }
 
@@ -2590,7 +2599,7 @@ QStringList QCoreApplication::arguments()
     \brief the name of the organization that wrote this application
 
     The value is used by the QSettings class when it is constructed
-    using the empty constructor. This saves having to repeat this
+    using the default constructor. This saves having to repeat this
     information each time a QSettings object is created.
 
     On Mac, QSettings uses \l {QCoreApplication::}{organizationDomain()} as the organization
@@ -2630,7 +2639,7 @@ QString QCoreApplication::organizationName()
     \brief the Internet domain of the organization that wrote this application
 
     The value is used by the QSettings class when it is constructed
-    using the empty constructor. This saves having to repeat this
+    using the default constructor. This saves having to repeat this
     information each time a QSettings object is created.
 
     On Mac, QSettings uses organizationDomain() as the organization
@@ -2666,11 +2675,15 @@ QString QCoreApplication::organizationDomain()
     \property QCoreApplication::applicationName
     \brief the name of this application
 
-    The value is used by the QSettings class when it is constructed
-    using the empty constructor. This saves having to repeat this
-    information each time a QSettings object is created.
+    The application name is used in various Qt classes and modules,
+    most prominently in \l{QSettings} when it is constructed using the default constructor.
+    Other uses are in formatted logging output (see \l{qSetMessagePattern()}),
+    in output by \l{QCommandLineParser}, in \l{QTemporaryDir} and \l{QTemporaryFile}
+    default paths, and in some file locations of \l{QStandardPaths}.
+    \l{Qt D-Bus}, \l{Accessibility}, and the XCB platform integration make use
+    of the application name, too.
 
-    If not set, the application name defaults to the executable name (since 5.0).
+    If not set, the application name defaults to the executable name.
 
     \sa organizationName, organizationDomain, applicationVersion, applicationFilePath()
 */
@@ -2840,18 +2853,26 @@ Qt::PermissionStatus QCoreApplication::checkPermission(const QPermission &permis
 
     Called by the various requestPermission overloads to perform the request.
 
-    Calls the functor encapsulated in the \a slotObj in the given \a context
+    Calls the functor encapsulated in the \a slotObjRaw in the given \a context
     (which may be \c nullptr).
 */
 void QCoreApplication::requestPermission(const QPermission &requestedPermission,
-    QtPrivate::QSlotObjectBase *slotObj, const QObject *context)
+    QtPrivate::QSlotObjectBase *slotObjRaw, const QObject *context)
 {
+    QtPrivate::SlotObjSharedPtr slotObj(QtPrivate::SlotObjUniquePtr{slotObjRaw}); // adopts
     if (QThread::currentThread() != QCoreApplicationPrivate::mainThread()) {
         qWarning(lcPermissions, "Permissions can only be requested from the GUI (main) thread");
         return;
     }
 
     Q_ASSERT(slotObj);
+
+    // Used as the signalID in the metacall event and only used to
+    // verify that we are not processing an unrelated event, not to
+    // emit the right signal. So using a value that can never clash
+    // with any signal index. Clang doesn't like this to be a static
+    // member of the PermissionReceiver.
+    static constexpr ushort PermissionReceivedID = 0xffff;
 
     // If we have a context object, then we dispatch the permission response
     // asynchronously through a received object that lives in the same thread
@@ -2860,19 +2881,19 @@ void QCoreApplication::requestPermission(const QPermission &requestedPermission,
     class PermissionReceiver : public QObject
     {
     public:
-        PermissionReceiver(QtPrivate::QSlotObjectBase *slotObject, const QObject *context)
+        explicit PermissionReceiver(const QtPrivate::SlotObjSharedPtr &slotObject, const QObject *context)
             : slotObject(slotObject), context(context)
         {}
+
     protected:
         bool event(QEvent *event) override {
             if (event->type() == QEvent::MetaCall) {
                 auto metaCallEvent = static_cast<QMetaCallEvent *>(event);
-                if (metaCallEvent->id() == ushort(-1)) {
+                if (metaCallEvent->id() == PermissionReceivedID) {
                     Q_ASSERT(slotObject);
                     // only execute if context object is still alive
                     if (context)
                         slotObject->call(const_cast<QObject*>(context.data()), metaCallEvent->args());
-                    slotObject->destroyIfLastRef();
                     deleteLater();
 
                     return true;
@@ -2881,7 +2902,7 @@ void QCoreApplication::requestPermission(const QPermission &requestedPermission,
             return QObject::event(event);
         }
     private:
-        QtPrivate::QSlotObjectBase *slotObject;
+        QtPrivate::SlotObjSharedPtr slotObject;
         QPointer<const QObject> context;
     };
     PermissionReceiver *receiver = nullptr;
@@ -2901,27 +2922,14 @@ void QCoreApplication::requestPermission(const QPermission &requestedPermission,
             permission.m_status = status;
 
             if (receiver) {
-                const int nargs = 2;
-                auto metaCallEvent = new QMetaCallEvent(slotObj, qApp, ushort(-1), nargs);
-                Q_CHECK_PTR(metaCallEvent);
-                void **args = metaCallEvent->args();
-                QMetaType *types = metaCallEvent->types();
-                const auto voidType = QMetaType::fromType<void>();
-                const auto permissionType = QMetaType::fromType<QPermission>();
-                types[0] = voidType;
-                types[1] = permissionType;
-                args[0] = nullptr;
-                args[1] = permissionType.create(&permission);
-                Q_CHECK_PTR(args[1]);
+                auto metaCallEvent = QMetaCallEvent::create(slotObj.get(), qApp,
+                                                            PermissionReceivedID, permission);
                 qApp->postEvent(receiver, metaCallEvent);
             } else {
                 void *argv[] = { nullptr, &permission };
                 slotObj->call(const_cast<QObject*>(context), argv);
             }
         }
-
-        if (!receiver)
-            slotObj->destroyIfLastRef();
     });
 }
 

@@ -5,53 +5,41 @@
 #define CONVERTER_H
 
 #include <QIODevice>
-#include <QPair>
-#include <QVariant>
-#include <QVariantMap>
 #include <QList>
+#include <QStringList>
+#include <QVariant>
 
-class VariantOrderedMap : public QList<QPair<QVariant, QVariant>>
-{
-public:
-    VariantOrderedMap() = default;
-    VariantOrderedMap(const QVariantMap &map)
-    {
-        reserve(map.size());
-        for (auto it = map.begin(); it != map.end(); ++it)
-            append({it.key(), it.value()});
-    }
-};
-using Map = VariantOrderedMap;
-Q_DECLARE_METATYPE(Map)
-
+//! [0]
 class Converter
 {
+    static QList<const Converter *> &converters();
 protected:
     Converter();
+    static bool isNull(const Converter *converter); // in nullconverter.cpp
 
 public:
-    static Converter *null;
+    static const QList<const Converter *> &allConverters();
 
-    enum Direction {
-        In = 1, Out = 2, InOut = 3
-    };
+    enum class Direction { In = 1, Out = 2, InOut = In | Out };
+    Q_DECLARE_FLAGS(Directions, Direction)
 
-    enum Option {
-        SupportsArbitraryMapKeys = 0x01
-    };
+    enum Option { SupportsArbitraryMapKeys = 0x01 };
     Q_DECLARE_FLAGS(Options, Option)
 
     virtual ~Converter() = 0;
 
-    virtual QString name() = 0;
-    virtual Direction directions() = 0;
-    virtual Options outputOptions() = 0;
-    virtual const char *optionsHelp() = 0;
-    virtual bool probeFile(QIODevice *f) = 0;
-    virtual QVariant loadFile(QIODevice *f, Converter *&outputConverter) = 0;
-    virtual void saveFile(QIODevice *f, const QVariant &contents, const QStringList &options) = 0;
+    virtual QString name() const = 0;
+    virtual Directions directions() const = 0;
+    virtual Options outputOptions() const;
+    virtual const char *optionsHelp() const;
+    virtual bool probeFile(QIODevice *f) const;
+    virtual QVariant loadFile(QIODevice *f, const Converter *&outputConverter) const;
+    virtual void saveFile(QIODevice *f, const QVariant &contents,
+                          const QStringList &options) const = 0;
 };
 
+Q_DECLARE_OPERATORS_FOR_FLAGS(Converter::Directions)
 Q_DECLARE_OPERATORS_FOR_FLAGS(Converter::Options)
+//! [0]
 
 #endif // CONVERTER_H

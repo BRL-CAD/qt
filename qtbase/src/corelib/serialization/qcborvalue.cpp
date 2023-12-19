@@ -192,7 +192,7 @@ Q_DECL_UNUSED static constexpr quint64 MaximumPreallocatedElementCount =
     aspects, its API is identical to QCborValue.
 
     \sa QCborArray, QCborMap, QCborStreamReader, QCborStreamWriter,
-        QJsonValue, QJsonDocument, {Convert Example}, {JSON Save Game Example}
+        QJsonValue, QJsonDocument, {Serialization Converter}, {Saving and Loading a Game}
         {Parsing and displaying CBOR data}
  */
 
@@ -404,7 +404,7 @@ Q_DECL_UNUSED static constexpr quint64 MaximumPreallocatedElementCount =
 /*!
     \fn QCborValue::QCborValue(QCborSimpleType st)
 
-    Creates a QCborValue of simple type \a st. The type can later later be retrieved
+    Creates a QCborValue of simple type \a st. The type can later be retrieved
     using toSimpleType() as well as isSimpleType(st).
 
     CBOR simple types are types that do not have any associated value, like
@@ -2247,12 +2247,6 @@ static void convertArrayToMap(QCborContainerPrivate *&array)
     }
     for (qsizetype i = 0; i < size; ++i)
         dst[i * 2] = { i, QCborValue::Integer };
-
-    // only do this last portion if we're not modifying in-place
-    for (qsizetype i = 0; src != dst && i < size; ++i) {
-        if (dst[i * 2 + 1].flags & QtCbor::Element::IsContainer)
-            dst[i * 2 + 1].container->ref.ref();
-    }
 
     // update reference counts
     assignContainer(array, map);

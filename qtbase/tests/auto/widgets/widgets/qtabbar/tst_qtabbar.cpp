@@ -50,6 +50,7 @@ private slots:
     void hideTab_data();
     void hideTab();
     void hideAllTabs();
+    void checkHiddenTab();
 
     void setElideMode_data();
     void setElideMode();
@@ -99,6 +100,7 @@ private slots:
     void resizeKeepsScroll_data();
     void resizeKeepsScroll();
     void changeTabTextKeepsScroll();
+    void settingCurrentTabBeforeShowDoesntScroll();
 
 private:
     void checkPositions(const TabBar &tabbar, const QList<int> &positions);
@@ -364,6 +366,25 @@ void tst_QTabBar::hideAllTabs()
     QCOMPARE(tabbar.currentIndex(), 0);
     sizeHint = tabbar.sizeHint();
     QVERIFY(sizeHint.width() < prevSizeHint.width());
+}
+
+void tst_QTabBar::checkHiddenTab()
+{
+    QTabBar tabbar;
+
+    tabbar.addTab("foo");
+    tabbar.addTab("bar");
+    tabbar.addTab("baz");
+    tabbar.setCurrentIndex(0);
+    tabbar.setTabVisible(1, false);
+
+    QKeyEvent keyRight(QKeyEvent::KeyPress, Qt::Key_Right, Qt::NoModifier);
+    QVERIFY(QApplication::sendEvent(&tabbar, &keyRight));
+    QCOMPARE(tabbar.currentIndex(), 2);
+
+    QKeyEvent keyLeft(QKeyEvent::KeyPress, Qt::Key_Left, Qt::NoModifier);
+    QVERIFY(QApplication::sendEvent(&tabbar, &keyLeft));
+    QCOMPARE(tabbar.currentIndex(), 0);
 }
 
 void tst_QTabBar::setElideMode_data()
@@ -1450,6 +1471,35 @@ void tst_QTabBar::changeTabTextKeepsScroll()
     const int scrollOffset = getScrollOffset();
     tabBar.setTabText(3, "New title");
     QCOMPARE(getScrollOffset(), scrollOffset);
+}
+
+void tst_QTabBar::settingCurrentTabBeforeShowDoesntScroll()
+{
+    QTabBar tabBar;
+    TabBarScrollingProxyStyle proxyStyle;
+    tabBar.setStyle(&proxyStyle);
+
+    for (int i = 0; i < 6; ++i)
+        tabBar.addTab(u"Tab Number %1"_s.arg(i));
+
+    const auto getScrollOffset = [&]() -> int {
+        return static_cast<QTabBarPrivate *>(QObjectPrivate::get(&tabBar))->scrollOffset;
+    };
+
+    tabBar.setCurrentIndex(5);
+
+    // changing the current index while the tab bar isn't visible shouldn't scroll yet
+    QCOMPARE(getScrollOffset(), 0);
+
+    // now show the tab bar with a size that's too small to fit the current index
+    const QSize fullSize = tabBar.sizeHint();
+    tabBar.resize(fullSize.width() / 2, fullSize.height());
+
+    tabBar.show();
+    QVERIFY(QTest::qWaitForWindowExposed(&tabBar));
+
+    // this should scroll
+    QCOMPARE_GT(getScrollOffset(), 0);
 }
 
 QTEST_MAIN(tst_QTabBar)

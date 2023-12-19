@@ -886,3 +886,10 @@
     from the set \a set. Returns the number of elements removed, if
     any.
 */
+
+/*! \fn template <class T> template <class Pred> qsizetype QSet<T>::removeIf(Pred pred)
+    \since 6.1
+
+    Removes, from this set, all elements for which the predicate \a pred
+    returns \c true. Returns the number of elements removed, if any.
+*/

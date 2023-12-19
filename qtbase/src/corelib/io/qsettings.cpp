@@ -44,7 +44,7 @@
 #  include <shlobj.h>
 #endif
 
-#if defined(Q_OS_UNIX) && !defined(Q_OS_MAC) && !defined(Q_OS_ANDROID)
+#if defined(Q_OS_UNIX) && !defined(Q_OS_DARWIN) && !defined(Q_OS_ANDROID)
 #define Q_XDG_PLATFORM
 #endif
 
@@ -212,9 +212,7 @@ namespace {
     }
     QChar *write(QChar *out, QLatin1StringView v)
     {
-        for (char ch : v)
-            *out++ = QLatin1Char(ch);
-        return out;
+        return QLatin1::convertToUnicode(out, v);
     }
     QChar *write(QChar *out, QStringView v)
     {
@@ -272,7 +270,7 @@ QString QSettingsPrivate::normalizedKey(QAnyStringView key)
 
 // see also qsettings_win.cpp and qsettings_mac.cpp
 
-#if !defined(Q_OS_WIN) && !defined(Q_OS_MAC) && !defined(Q_OS_WASM)
+#if !defined(Q_OS_WIN) && !defined(Q_OS_DARWIN) && !defined(Q_OS_WASM)
 QSettingsPrivate *QSettingsPrivate::create(QSettings::Format format, QSettings::Scope scope,
                                            const QString &organization, const QString &application)
 {
@@ -560,7 +558,7 @@ bool QSettingsPrivate::iniUnescapedKey(QByteArrayView key, QString &result)
         }
 
         int numDigits = 2;
-        int firstDigitPos = i + 1;
+        qsizetype firstDigitPos = i + 1;
 
         ch = decoded.at(i + 1).unicode();
         if (ch == 'U') {
@@ -753,8 +751,8 @@ StNormal:
                 ch = str.at(i);
                 if (isHexDigit(ch))
                     goto StHexEscape;
-            } else if (isOctalDigit(ch)) {
-                escapeVal = ch - '0';
+            } else if (const int o = fromOct(ch); o != -1) {
+                escapeVal = o;
                 goto StOctEscape;
             } else if (ch == '\n' || ch == '\r') {
                 if (i < str.size()) {
@@ -816,11 +814,9 @@ StHexEscape:
     }
 
     ch = str.at(i);
-    if (ch >= 'a')
-        ch -= 'a' - 'A';
-    if ((ch >= '0' && ch <= '9') || (ch >= 'A' && ch <= 'F')) {
+    if (const int h = fromHex(ch); h != -1) {
         escapeVal <<= 4;
-        escapeVal += QtMiscUtils::fromHex(ch);
+        escapeVal += h;
         ++i;
         goto StHexEscape;
     } else {
@@ -835,9 +831,9 @@ StOctEscape:
     }
 
     ch = str.at(i);
-    if (ch >= '0' && ch <= '7') {
+    if (const int o = fromOct(ch); o != -1) {
         escapeVal <<= 3;
-        escapeVal += ch - '0';
+        escapeVal += o;
         ++i;
         goto StOctEscape;
     } else {
@@ -885,7 +881,7 @@ void QConfFileSettingsPrivate::initFormat()
     extension = (format == QSettings::NativeFormat) ? ".conf"_L1 : ".ini"_L1;
     readFunc = nullptr;
     writeFunc = nullptr;
-#if defined(Q_OS_MAC)
+#if defined(Q_OS_DARWIN)
     caseSensitivity = (format == QSettings::NativeFormat) ? Qt::CaseSensitive : IniCaseSensitivity;
 #else
     caseSensitivity = IniCaseSensitivity;
@@ -1019,7 +1015,7 @@ static std::unique_lock<QBasicMutex> initDefaultPaths(std::unique_lock<QBasicMut
         const QString userPath = make_user_path();
         pathHash->insert(pathHashKey(QSettings::IniFormat, QSettings::UserScope), Path(userPath, false));
         pathHash->insert(pathHashKey(QSettings::IniFormat, QSettings::SystemScope), Path(systemPath, false));
-#ifndef Q_OS_MAC
+#ifndef Q_OS_DARWIN
         pathHash->insert(pathHashKey(QSettings::NativeFormat, QSettings::UserScope), Path(userPath, false));
         pathHash->insert(pathHashKey(QSettings::NativeFormat, QSettings::SystemScope), Path(systemPath, false));
 #endif
@@ -1248,17 +1244,17 @@ QStringList QConfFileSettingsPrivate::children(const QString &prefix, ChildSpec 
         else
             ensureSectionParsed(confFile, thePrefix);
 
-        auto j = const_cast<const ParsedSettingsMap *>(
-                &confFile->originalKeys)->lowerBound( thePrefix);
-        while (j != confFile->originalKeys.constEnd() && j.key().startsWith(thePrefix)) {
-            if (!confFile->removedKeys.contains(j.key()))
-                processChild(QStringView{j.key().originalCaseKey()}.sliced(startPos), spec, result);
-            ++j;
+        const auto &originalKeys = confFile->originalKeys;
+        auto i = originalKeys.lowerBound(thePrefix);
+        while (i != originalKeys.end() && i.key().startsWith(thePrefix)) {
+            if (!confFile->removedKeys.contains(i.key()))
+                processChild(QStringView{i.key().originalCaseKey()}.sliced(startPos), spec, result);
+            ++i;
         }
 
-        j = const_cast<const ParsedSettingsMap *>(
-                &confFile->addedKeys)->lowerBound(thePrefix);
-        while (j != confFile->addedKeys.constEnd() && j.key().startsWith(thePrefix)) {
+        const auto &addedKeys = confFile->addedKeys;
+        auto j = addedKeys.lowerBound(thePrefix);
+        while (j != addedKeys.end() && j.key().startsWith(thePrefix)) {
             processChild(QStringView{j.key().originalCaseKey()}.sliced(startPos), spec, result);
             ++j;
         }
@@ -1326,13 +1322,13 @@ void QConfFileSettingsPrivate::syncConfFile(QConfFile *confFile)
 {
     bool readOnly = confFile->addedKeys.isEmpty() && confFile->removedKeys.isEmpty();
 
+    QFileInfo fileInfo(confFile->name);
     /*
         We can often optimize the read-only case, if the file on disk
         hasn't changed.
     */
     if (readOnly && confFile->size > 0) {
-        QFileInfo fileInfo(confFile->name);
-        if (confFile->size == fileInfo.size() && confFile->timeStamp == fileInfo.lastModified())
+        if (confFile->size == fileInfo.size() && confFile->timeStamp == fileInfo.lastModified(QTimeZone::UTC))
             return;
     }
 
@@ -1368,13 +1364,13 @@ void QConfFileSettingsPrivate::syncConfFile(QConfFile *confFile)
         We hold the lock. Let's reread the file if it has changed
         since last time we read it.
     */
-    QFileInfo fileInfo(confFile->name);
+    fileInfo.refresh();
     bool mustReadFile = true;
     bool createFile = !fileInfo.exists();
 
     if (!readOnly)
         mustReadFile = (confFile->size != fileInfo.size()
-                        || (confFile->size != 0 && confFile->timeStamp != fileInfo.lastModified()));
+                        || (confFile->size != 0 && confFile->timeStamp != fileInfo.lastModified(QTimeZone::UTC)));
 
     if (mustReadFile) {
         confFile->unparsedIniSections.clear();
@@ -1392,7 +1388,7 @@ void QConfFileSettingsPrivate::syncConfFile(QConfFile *confFile)
         */
         if (file.isReadable() && file.size() != 0) {
             bool ok = false;
-#ifdef Q_OS_MAC
+#ifdef Q_OS_DARWIN
             if (format == QSettings::NativeFormat) {
                 QByteArray data = file.readAll();
                 ok = readPlistFile(data, &confFile->originalKeys);
@@ -1420,7 +1416,7 @@ void QConfFileSettingsPrivate::syncConfFile(QConfFile *confFile)
         }
 
         confFile->size = fileInfo.size();
-        confFile->timeStamp = fileInfo.lastModified();
+        confFile->timeStamp = fileInfo.lastModified(QTimeZone::UTC);
     }
 
     /*
@@ -1448,7 +1444,7 @@ void QConfFileSettingsPrivate::syncConfFile(QConfFile *confFile)
             return;
         }
 
-#ifdef Q_OS_MAC
+#ifdef Q_OS_DARWIN
         if (format == QSettings::NativeFormat) {
             ok = writePlistFile(sf, mergedKeys);
         } else
@@ -1477,9 +1473,9 @@ void QConfFileSettingsPrivate::syncConfFile(QConfFile *confFile)
             confFile->addedKeys.clear();
             confFile->removedKeys.clear();
 
-            QFileInfo fileInfo(confFile->name);
+            fileInfo.refresh();
             confFile->size = fileInfo.size();
-            confFile->timeStamp = fileInfo.lastModified();
+            confFile->timeStamp = fileInfo.lastModified(QTimeZone::UTC);
 
             // If we have created the file, apply the file perms
             if (createFile) {
@@ -2126,9 +2122,6 @@ void QConfFileSettingsPrivate::ensureSectionParsed(QConfFile *confFile,
     \codeline
     \snippet settings/settings.cpp 21
 
-    See the \l{mainwindows/application}{Application} example for a
-    self-contained example that uses QSettings.
-
     \section1 Accessing Settings from Multiple Threads or Processes Simultaneously
 
     QSettings is \l{reentrant}. This means that you can use
@@ -2170,8 +2163,8 @@ void QConfFileSettingsPrivate::ensureSectionParsed(QConfFile *confFile,
     following files are used by default:
 
     \list 1
-    \li \c{$HOME/.config/MySoft/Star Runner.conf} (Qt for Embedded Linux: \c{$HOME/Settings/MySoft/Star Runner.conf})
-    \li \c{$HOME/.config/MySoft.conf} (Qt for Embedded Linux: \c{$HOME/Settings/MySoft.conf})
+    \li \c{$HOME/.config/MySoft/Star Runner.conf}
+    \li \c{$HOME/.config/MySoft.conf}
     \li for each directory <dir> in $XDG_CONFIG_DIRS: \c{<dir>/MySoft/Star Runner.conf}
     \li for each directory <dir> in $XDG_CONFIG_DIRS: \c{<dir>/MySoft.conf}
     \endlist
@@ -2208,8 +2201,8 @@ void QConfFileSettingsPrivate::ensureSectionParsed(QConfFile *confFile,
     used on Unix, \macos, and iOS:
 
     \list 1
-    \li \c{$HOME/.config/MySoft/Star Runner.ini} (Qt for Embedded Linux: \c{$HOME/Settings/MySoft/Star Runner.ini})
-    \li \c{$HOME/.config/MySoft.ini} (Qt for Embedded Linux: \c{$HOME/Settings/MySoft.ini})
+    \li \c{$HOME/.config/MySoft/Star Runner.ini}
+    \li \c{$HOME/.config/MySoft.ini}
     \li for each directory <dir> in $XDG_CONFIG_DIRS: \c{<dir>/MySoft/Star Runner.ini}
     \li for each directory <dir> in $XDG_CONFIG_DIRS: \c{<dir>/MySoft.ini}
     \endlist
@@ -2344,7 +2337,7 @@ void QConfFileSettingsPrivate::ensureSectionParsed(QConfFile *confFile,
 
     \endlist
 
-    \sa QVariant, QSessionManager, {Settings Editor Example}, {Qt Widgets - Application Example}
+    \sa QVariant, QSessionManager, {Settings Editor Example}
 */
 
 /*! \enum QSettings::Status
@@ -3379,8 +3372,6 @@ QSettings::Format QSettings::defaultFormat()
     \row    \li{1,2} Windows     \li{1,2} IniFormat               \li UserScope   \li \c FOLDERID_RoamingAppData
     \row                                                        \li SystemScope \li \c FOLDERID_ProgramData
     \row    \li{1,2} Unix        \li{1,2} NativeFormat, IniFormat \li UserScope   \li \c $HOME/.config
-    \row                                                        \li SystemScope \li \c /etc/xdg
-    \row    \li{1,2} Qt for Embedded Linux \li{1,2} NativeFormat, IniFormat \li UserScope   \li \c $HOME/Settings
     \row                                                        \li SystemScope \li \c /etc/xdg
     \row    \li{1,2} \macos and iOS   \li{1,2} IniFormat               \li UserScope   \li \c $HOME/.config
     \row                                                        \li SystemScope \li \c /etc/xdg

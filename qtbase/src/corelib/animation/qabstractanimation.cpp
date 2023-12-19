@@ -901,13 +901,13 @@ QAbstractAnimationPrivate::~QAbstractAnimationPrivate() { }
 void QAbstractAnimationPrivate::setState(QAbstractAnimation::State newState)
 {
     Q_Q(QAbstractAnimation);
-    if (state == newState)
+    const QAbstractAnimation::State oldState = state.valueBypassingBindings();
+    if (oldState == newState)
         return;
 
     if (loopCount == 0)
         return;
 
-    QAbstractAnimation::State oldState = state;
     int oldCurrentTime = currentTime;
     int oldCurrentLoop = currentLoop;
     QAbstractAnimation::Direction oldDirection = direction;
@@ -941,13 +941,15 @@ void QAbstractAnimationPrivate::setState(QAbstractAnimation::State newState)
     }
 
     q->updateState(newState, oldState);
-    if (!guard || newState != state) //this is to be safe if updateState changes the state
+    //this is to be safe if updateState changes the state
+    if (!guard || newState != state.valueBypassingBindings())
         return;
 
     // Notify state change
     state.notify();
     emit q->stateChanged(newState, oldState);
-    if (!guard || newState != state) //this is to be safe if updateState changes the state
+    //this is to be safe if updateState changes the state
+    if (!guard || newState != state.valueBypassingBindings())
         return;
 
     switch (state) {
@@ -1121,7 +1123,7 @@ void QAbstractAnimation::setDirection(Direction direction)
         return;
     }
 
-    Qt::beginPropertyUpdateGroup();
+    const QScopedPropertyUpdateGroup guard;
     const int oldCurrentLoop = d->currentLoop;
     if (state() == Stopped) {
         if (direction == Backward) {
@@ -1148,7 +1150,6 @@ void QAbstractAnimation::setDirection(Direction direction)
     if (d->currentLoop != oldCurrentLoop)
         d->currentLoop.notify();
     d->direction.notify();
-    Qt::endPropertyUpdateGroup();
 }
 
 QBindable<QAbstractAnimation::Direction> QAbstractAnimation::bindableDirection()
@@ -1302,46 +1303,59 @@ void QAbstractAnimation::setCurrentTime(int msecs)
     msecs = qMax(msecs, 0);
 
     // Calculate new time and loop.
-    int dura = duration();
-    int totalDura = dura <= 0 ? dura : ((d->loopCount < 0) ? -1 : dura * d->loopCount);
+    const int dura = duration();
+    const int totalLoopCount = d->loopCount;
+    const int totalDura = dura <= 0 ? dura : ((totalLoopCount < 0) ? -1 : dura * totalLoopCount);
     if (totalDura != -1)
         msecs = qMin(totalDura, msecs);
 
-    const int oldCurrentTime = d->totalCurrentTime;
-    d->totalCurrentTime = msecs;
+    d->totalCurrentTime.removeBindingUnlessInWrapper();
+
+    const int oldCurrentTime = d->totalCurrentTime.valueBypassingBindings();
+    d->totalCurrentTime.setValueBypassingBindings(msecs);
+
+    QAbstractAnimation::Direction currentDirection = d->direction;
 
     // Update new values.
-    int oldLoop = d->currentLoop;
-    d->currentLoop = ((dura <= 0) ? 0 : (msecs / dura));
-    if (d->currentLoop == d->loopCount) {
+    const int oldLoop = d->currentLoop.valueBypassingBindings();
+    int newCurrentLoop = (dura <= 0) ? 0 : (msecs / dura);
+    if (newCurrentLoop == totalLoopCount) {
         //we're at the end
         d->currentTime = qMax(0, dura);
-        d->currentLoop = qMax(0, d->loopCount - 1);
+        newCurrentLoop = qMax(0, totalLoopCount - 1);
     } else {
-        if (d->direction == Forward) {
+        if (currentDirection == Forward) {
             d->currentTime = (dura <= 0) ? msecs : (msecs % dura);
         } else {
             d->currentTime = (dura <= 0) ? msecs : ((msecs - 1) % dura) + 1;
             if (d->currentTime == dura)
-                d->currentLoop = d->currentLoop - 1;
+                newCurrentLoop = newCurrentLoop - 1;
         }
     }
+    d->currentLoop.setValueBypassingBindings(newCurrentLoop);
 
+    // this is a virtual function, so it can update the properties as well
     updateCurrentTime(d->currentTime);
-    if (d->currentLoop != oldLoop)
+
+    // read the property values again
+    newCurrentLoop = d->currentLoop.valueBypassingBindings();
+    currentDirection = d->direction;
+    const int newTotalCurrentTime = d->totalCurrentTime.valueBypassingBindings();
+
+    if (newCurrentLoop != oldLoop)
         d->currentLoop.notify();
 
     /* Notify before calling stop: As seen in tst_QSequentialAnimationGroup::clear
      * we might delete the animation when stop is called. Thus after stop no member
      * of the object must be used anymore.
      */
-    if (oldCurrentTime != d->totalCurrentTime)
+    if (oldCurrentTime != newTotalCurrentTime)
         d->totalCurrentTime.notify();
     // All animations are responsible for stopping the animation when their
     // own end state is reached; in this case the animation is time driven,
     // and has reached the end.
-    if ((d->direction == Forward && d->totalCurrentTime == totalDura)
-        || (d->direction == Backward && d->totalCurrentTime == 0)) {
+    if ((currentDirection == Forward && newTotalCurrentTime == totalDura)
+        || (currentDirection == Backward && newTotalCurrentTime == 0)) {
         stop();
     }
 }
@@ -1365,7 +1379,7 @@ void QAbstractAnimation::setCurrentTime(int msecs)
 void QAbstractAnimation::start(DeletionPolicy policy)
 {
     Q_D(QAbstractAnimation);
-    if (d->state == Running)
+    if (d->state.valueBypassingBindings() == Running)
         return;
     d->deleteWhenStopped = policy;
     d->setState(Running);
@@ -1385,7 +1399,7 @@ void QAbstractAnimation::stop()
 {
     Q_D(QAbstractAnimation);
 
-    if (d->state == Stopped)
+    if (d->state.valueBypassingBindings() == Stopped)
         return;
 
     d->setState(Stopped);
@@ -1401,7 +1415,7 @@ void QAbstractAnimation::stop()
 void QAbstractAnimation::pause()
 {
     Q_D(QAbstractAnimation);
-    if (d->state == Stopped) {
+    if (d->state.valueBypassingBindings() == Stopped) {
         qWarning("QAbstractAnimation::pause: Cannot pause a stopped animation");
         return;
     }
@@ -1419,7 +1433,7 @@ void QAbstractAnimation::pause()
 void QAbstractAnimation::resume()
 {
     Q_D(QAbstractAnimation);
-    if (d->state != Paused) {
+    if (d->state.valueBypassingBindings() != Paused) {
         qWarning("QAbstractAnimation::resume: "
                  "Cannot resume an animation that is not paused");
         return;

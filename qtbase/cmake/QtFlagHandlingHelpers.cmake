@@ -1,6 +1,23 @@
 # Copyright (C) 2022 The Qt Company Ltd.
 # SPDX-License-Identifier: BSD-3-Clause
 
+# Sets '${var}' to a genex that extracts the target's property.
+# Sets 'have_${var}' to a genex that checks that the property has a
+# non-empty value.
+macro(qt_internal_genex_get_property var target property)
+    set(${var} "$<TARGET_PROPERTY:${target},${property}>")
+    set(have_${var} "$<BOOL:${${var}}>")
+endmacro()
+
+# Sets '${var}' to a genex that will join the given property values
+# using '${glue}' and will surround the entire output with '${prefix}'
+# and '${suffix}'.
+macro(qt_internal_genex_get_joined_property var target property prefix suffix glue)
+    qt_internal_genex_get_property("${var}" "${target}" "${property}")
+    set(${var}
+        "$<${have_${var}}:${prefix}$<JOIN:${${var}},${glue}>${suffix}>")
+endmacro()
+
 # This function generates LD version script for the target and uses it in the target linker line.
 # Function has two modes dependending on the specified arguments.
 # Arguments:
@@ -33,22 +50,27 @@ function(qt_internal_add_linker_version_script target)
         endif()
         string(APPEND contents "};\n")
         set(current "Qt_${PROJECT_VERSION_MAJOR}")
-        if (QT_NAMESPACE STREQUAL "")
-            set(tag_symbol "qt_version_tag")
-        else()
-            set(tag_symbol "qt_version_tag_${QT_NAMESPACE}")
-        endif()
-        string(APPEND contents "${current} { *; };\n")
+        string(APPEND contents "${current} {\n    *;")
 
-        foreach(minor_version RANGE ${PROJECT_VERSION_MINOR})
-            set(previous "${current}")
-            set(current "Qt_${PROJECT_VERSION_MAJOR}.${minor_version}")
-            if (minor_version EQUAL ${PROJECT_VERSION_MINOR})
-                string(APPEND contents "${current} { ${tag_symbol}; } ${previous};\n")
-            else()
-                string(APPEND contents "${current} {} ${previous};\n")
-            endif()
-        endforeach()
+        get_target_property(target_type ${target} TYPE)
+        if(NOT target_type STREQUAL "INTERFACE_LIBRARY")
+            set(genex_prefix "\n    ")
+            set(genex_glue "$<SEMICOLON>\n    ")
+            set(genex_suffix "$<SEMICOLON>")
+            qt_internal_genex_get_joined_property(
+                linker_exports "${target}" _qt_extra_linker_script_exports
+                "${genex_prefix}" "${genex_suffix}" "${genex_glue}"
+            )
+            string(APPEND contents "${linker_exports}")
+        endif()
+        string(APPEND contents "\n};\n")
+
+        if(NOT target_type STREQUAL "INTERFACE_LIBRARY")
+            set(property_genex "$<TARGET_PROPERTY:${target},_qt_extra_linker_script_content>")
+            set(check_genex "$<BOOL:${property_genex}>")
+            string(APPEND contents
+                "$<${check_genex}:${property_genex}>")
+        endif()
 
         set(infile "${CMAKE_CURRENT_BINARY_DIR}/${target}.version.in")
         set(outfile "${CMAKE_CURRENT_BINARY_DIR}/${target}.version")
@@ -85,6 +107,11 @@ endfunction()
 
 function(qt_internal_add_link_flags_no_undefined target)
     if (NOT QT_BUILD_SHARED_LIBS OR WASM)
+        return()
+    endif()
+    if(CMAKE_CXX_COMPILER_ID STREQUAL "AppleClang")
+        # ld64 defaults to -undefined,error, and in Xcode 15
+        # passing this option is deprecated, causing a warning.
         return()
     endif()
     if ((GCC OR CLANG) AND NOT MSVC)
@@ -146,8 +173,15 @@ function(qt_internal_apply_gc_binaries target visibility)
         elseif(LINUX OR BSD OR WIN32 OR ANDROID)
             set(gc_sections_flag "-Wl,--gc-sections")
         endif()
+
+        # Save the flag value with and without genex wrapping, so we can remove the wrapping
+        # when generating .pc pkgconfig files.
+        set_property(GLOBAL PROPERTY _qt_internal_gc_sections_without_genex "${gc_sections_flag}")
+
         set(gc_sections_flag
             "${clang_or_gcc_begin}${gc_sections_flag}${clang_or_gcc_end}")
+
+        set_property(GLOBAL PROPERTY _qt_internal_gc_sections_with_genex "${gc_sections_flag}")
     endif()
     if(gc_sections_flag)
         target_link_options("${target}" ${visibility} "${gc_sections_flag}")

@@ -4,7 +4,7 @@
 #include "qtableview.h"
 
 #include <qheaderview.h>
-#include <qitemdelegate.h>
+#include <qabstractitemdelegate.h>
 #include <qapplication.h>
 #include <qpainter.h>
 #include <qstyle.h>
@@ -1188,7 +1188,7 @@ int QTableViewPrivate::heightHintForIndex(const QModelIndex &index, int hint, QS
     operations between x-coordinates and column indexes.
 
     \sa QTableWidget, {View Classes}, QAbstractItemModel, QAbstractItemView,
-        {Chart Example}, {Pixelator Example}, {Table Model Example}
+        {Table Model Example}
 */
 
 /*!

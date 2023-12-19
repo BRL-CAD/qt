@@ -3,7 +3,6 @@
 
 #include "qwasmcursor.h"
 #include "qwasmscreen.h"
-#include "qwasmstring.h"
 #include "qwasmwindow.h"
 
 #include <QtCore/qdebug.h>
@@ -76,11 +75,10 @@ QByteArray cursorShapeToCss(Qt::CursorShape shape)
 
 void QWasmCursor::changeCursor(QCursor *windowCursor, QWindow *window)
 {
-    if (!window || !window->handle())
+    if (!window)
         return;
-
-    static_cast<QWasmWindow *>(window->handle())
-            ->setWindowCursor(cursorShapeToCss(windowCursor->shape()));
+    if (QWasmWindow *wasmWindow = static_cast<QWasmWindow *>(window->handle()))
+        wasmWindow->setWindowCursor(windowCursor ? cursorShapeToCss(windowCursor->shape()) : "default");
 }
 
 QT_END_NAMESPACE

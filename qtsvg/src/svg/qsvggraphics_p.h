@@ -171,6 +171,7 @@ public:
     QRectF bounds(QPainter *p, QSvgExtraStates &states) const override;
 
 private:
+    bool precheck(QPainter *p) const;
     void draw_helper(QPainter *p, QSvgExtraStates &states, QRectF *boundingRect = nullptr) const;
 
     static QSvgTspan * const LINEBREAK;
@@ -221,6 +222,7 @@ public:
     bool isResolved() const { return m_link != nullptr; }
     QString linkId() const { return m_linkId; }
     void setLink(QSvgNode *link) { m_link = link; }
+    QSvgNode *link() const { return m_link; }
 
 private:
     QSvgNode *m_link;

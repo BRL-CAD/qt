@@ -278,7 +278,7 @@ void tst_QPluginLoader::errorString()
     QVERIFY(!unloaded);
     }
 
-#if !defined(Q_OS_WIN) && !defined(Q_OS_MAC) && !defined(Q_OS_HPUX)
+#if !defined(Q_OS_WIN) && !defined(Q_OS_DARWIN) && !defined(Q_OS_HPUX)
     {
     QPluginLoader loader( sys_qualifiedLibraryName("almostplugin"));     //a plugin with unresolved symbols
     loader.setLoadHints(QLibrary::ResolveAllSymbolsHint);
@@ -856,8 +856,8 @@ void tst_QPluginLoader::loadMachO_data()
     QTest::newRow("machtest/good.fat.stub-i386.dylib") << false;
 
     QDir d(QFINDTESTDATA("machtest"));
-    QStringList badlist = d.entryList(QStringList() << "bad*.dylib");
-    foreach (const QString &bad, badlist)
+    const QStringList badlist = d.entryList(QStringList() << "bad*.dylib");
+    for (const QString &bad : badlist)
         QTest::newRow(qPrintable("machtest/" + bad)) << false;
 #endif
 }

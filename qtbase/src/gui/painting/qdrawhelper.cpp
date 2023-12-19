@@ -513,9 +513,8 @@ static DestFetchProcFP destFetchProcFP[QImage::NImageFormats] =
 */
 static inline QRgb findNearestColor(QRgb color, QRasterBuffer *rbuf)
 {
-    QRgb color_0 = qPremultiply(rbuf->destColor0);
-    QRgb color_1 = qPremultiply(rbuf->destColor1);
-    color = qPremultiply(color);
+    const QRgb color_0 = rbuf->destColor0;
+    const QRgb color_1 = rbuf->destColor1;
 
     int r = qRed(color);
     int g = qGreen(color);
@@ -3779,7 +3778,8 @@ static void spanfill_from_first(QRasterBuffer *rasterBuffer, QPixelLayout::BPP b
 #define QT_THREAD_PARALLEL_FILLS(function) \
     const int segments = (count + 32) / 64; \
     QThreadPool *threadPool = QThreadPoolPrivate::qtGuiInstance(); \
-    if (segments > 1 && threadPool && !threadPool->contains(QThread::currentThread())) { \
+    if (segments > 1 && qPixelLayouts[data->rasterBuffer->format].bpp >= QPixelLayout::BPP8 \
+             && threadPool && !threadPool->contains(QThread::currentThread())) { \
         QSemaphore semaphore; \
         int c = 0; \
         for (int i = 0; i < segments; ++i) { \
@@ -5100,7 +5100,7 @@ inline void qt_bitmapblit_template(QRasterBuffer *rasterBuffer,
     const int destStride = rasterBuffer->stride<DST>();
 
     if (mapWidth > 8) {
-        while (mapHeight--) {
+        while (--mapHeight >= 0) {
             int x0 = 0;
             int n = 0;
             for (int x = 0; x < mapWidth; x += 8) {
@@ -5130,7 +5130,7 @@ inline void qt_bitmapblit_template(QRasterBuffer *rasterBuffer,
             map += mapStride;
         }
     } else {
-        while (mapHeight--) {
+        while (--mapHeight >= 0) {
             int x0 = 0;
             int n = 0;
             for (uchar s = *map; s; s <<= 1) {
@@ -5438,7 +5438,7 @@ void qt_alphamapblit_quint16(QRasterBuffer *rasterBuffer,
     if (!clip) {
         quint16 *dest = reinterpret_cast<quint16*>(rasterBuffer->scanLine(y)) + x;
         const int destStride = rasterBuffer->stride<quint16>();
-        while (mapHeight--) {
+        while (--mapHeight >= 0) {
             for (int i = 0; i < mapWidth; ++i)
                 alphamapblend_quint16(map[i], dest, i, c);
             dest += destStride;
@@ -5492,7 +5492,7 @@ static void qt_alphamapblit_argb32(QRasterBuffer *rasterBuffer,
 
     if (!clip) {
         quint32 *dest = reinterpret_cast<quint32*>(rasterBuffer->scanLine(y)) + x;
-        while (mapHeight--) {
+        while (--mapHeight >= 0) {
             for (int i = 0; i < mapWidth; ++i) {
                 const int coverage = map[i];
                 alphamapblend_argb32(dest + i, coverage, srcColor, c, colorProfile);
@@ -5810,7 +5810,7 @@ static void qt_alphargbblit_argb32(QRasterBuffer *rasterBuffer,
     if (!clip) {
         quint32 *dst = reinterpret_cast<quint32*>(rasterBuffer->scanLine(y)) + x;
         const int destStride = rasterBuffer->stride<quint32>();
-        while (mapHeight--) {
+        while (--mapHeight >= 0) {
             for (int i = 0; i < mapWidth; ++i) {
                 const uint coverage = src[i];
                 alphargbblend_argb32(dst + i, coverage, srcColor, c, colorProfile);

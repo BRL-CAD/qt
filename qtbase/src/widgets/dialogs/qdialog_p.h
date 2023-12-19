@@ -88,7 +88,9 @@ public:
     virtual bool canBeNativeDialog() const;
 
     void close(int resultCode);
-    void finalize(int resultCode, int dialogCode);
+
+protected:
+    virtual int dialogCode() const { return rescode; }
 
 private:
     virtual void initHelper(QPlatformDialogHelper *) {}
@@ -103,7 +105,7 @@ template <typename T>
 class QAutoPointer {
     QPointer<T> o;
 public:
-    explicit QAutoPointer(T *t) noexcept : o(t) {}
+    Q_NODISCARD_CTOR explicit QAutoPointer(T *t) noexcept : o(t) {}
     ~QAutoPointer() { delete o; }
 
     T *operator->() const noexcept { return get(); }

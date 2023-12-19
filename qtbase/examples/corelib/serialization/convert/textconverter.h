@@ -8,16 +8,14 @@
 
 class TextConverter : public Converter
 {
-
     // Converter interface
 public:
-    QString name() override;
-    Direction directions() override;
-    Options outputOptions() override;
-    const char *optionsHelp() override;
-    bool probeFile(QIODevice *f) override;
-    QVariant loadFile(QIODevice *f, Converter *&outputConverter) override;
-    void saveFile(QIODevice *f, const QVariant &contents, const QStringList &options) override;
+    QString name() const override;
+    Directions directions() const override;
+    bool probeFile(QIODevice *f) const override;
+    QVariant loadFile(QIODevice *f, const Converter *&outputConverter) const override;
+    void saveFile(QIODevice *f, const QVariant &contents,
+                  const QStringList &options) const override;
 };
 
 #endif // TEXTCONVERTER_H

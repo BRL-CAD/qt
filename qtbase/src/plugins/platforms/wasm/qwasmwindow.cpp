@@ -5,6 +5,7 @@
 #include <private/qguiapplication_p.h>
 #include <QtCore/qfile.h>
 #include <QtGui/private/qwindow_p.h>
+#include <QtGui/private/qhighdpiscaling_p.h>
 #include <private/qpixmapcache_p.h>
 #include <QtGui/qopenglfunctions.h>
 #include <QBuffer>
@@ -20,7 +21,6 @@
 #include "qwasmcompositor.h"
 #include "qwasmevent.h"
 #include "qwasmeventdispatcher.h"
-#include "qwasmstring.h"
 #include "qwasmaccessibility.h"
 #include "qwasmclipboard.h"
 
@@ -94,6 +94,7 @@ QWasmWindow::QWasmWindow(QWindow *w, QWasmDeadKeySupport *deadKeySupport,
     emscripten::val::module_property("specialHTMLTargets").set(canvasSelector(), m_canvas);
 
     m_compositor->addWindow(this);
+    m_flags = window()->flags();
 
     const auto pointerCallback = std::function([this](emscripten::val event) {
         if (processPointer(*PointerEvent::fromWeb(event)))
@@ -139,6 +140,11 @@ QWasmWindow::~QWasmWindow()
 #endif
 }
 
+QSurfaceFormat QWasmWindow::format() const
+{
+    return window()->requestedFormat();
+}
+
 void QWasmWindow::onRestoreClicked()
 {
     window()->setWindowState(Qt::WindowNoState);
@@ -164,6 +170,7 @@ void QWasmWindow::onNonClientAreaInteraction()
 {
     if (!isActive())
         requestActivateWindow();
+    QGuiApplicationPrivate::instance()->closeAllPopups();
 }
 
 bool QWasmWindow::onNonClientEvent(const PointerEvent &event)
@@ -189,23 +196,27 @@ void QWasmWindow::initialize()
 {
     QRect rect = windowGeometry();
 
-    constexpr int minSizeBoundForDialogsAndRegularWindows = 100;
-    const int windowType = window()->flags() & Qt::WindowType_Mask;
-    const int systemMinSizeLowerBound = windowType == Qt::Window || windowType == Qt::Dialog
-            ? minSizeBoundForDialogsAndRegularWindows
-            : 0;
+    const auto windowFlags = window()->flags();
+    const bool shouldRestrictMinSize =
+            !windowFlags.testFlag(Qt::FramelessWindowHint) && !windowIsPopupType(windowFlags);
+    const bool isMinSizeUninitialized = window()->minimumSize() == QSize(0, 0);
 
-    const QSize minimumSize(std::max(windowMinimumSize().width(), systemMinSizeLowerBound),
-                            std::max(windowMinimumSize().height(), systemMinSizeLowerBound));
+    if (shouldRestrictMinSize && isMinSizeUninitialized)
+        window()->setMinimumSize(QSize(minSizeForRegularWindows, minSizeForRegularWindows));
+
+
+    const QSize minimumSize = windowMinimumSize();
     const QSize maximumSize = windowMaximumSize();
     const QSize targetSize = !rect.isEmpty() ? rect.size() : minimumSize;
 
     rect.setWidth(qBound(minimumSize.width(), targetSize.width(), maximumSize.width()));
-    rect.setHeight(qBound(minimumSize.width(), targetSize.height(), maximumSize.height()));
+    rect.setHeight(qBound(minimumSize.height(), targetSize.height(), maximumSize.height()));
 
     setWindowState(window()->windowStates());
     setWindowFlags(window()->flags());
     setWindowTitle(window()->title());
+    setMask(QHighDpi::toNativeLocalRegion(window()->mask(), window()));
+
     if (window()->isTopLevel())
         setWindowIcon(window()->icon());
     m_normalGeometry = rect;
@@ -258,8 +269,13 @@ void QWasmWindow::setGeometry(const QRect &rect)
         const auto screenGeometry = screen()->geometry();
 
         QRect result(rect);
-        result.moveTop(std::max(std::min(rect.y(), screenGeometry.bottom()),
+        if (!parent()) {
+            // Clamp top level windows top position to the screen bounds
+            result.moveTop(std::max(std::min(rect.y(), screenGeometry.bottom()),
                                 screenGeometry.y() + margins.top()));
+        }
+        result.setSize(
+                result.size().expandedTo(windowMinimumSize()).boundedTo(windowMaximumSize()));
         return result;
     })();
     m_nonClientArea->onClientAreaWidthChange(clientAreaRect.width());
@@ -351,6 +367,12 @@ void QWasmWindow::propagateSizeHints()
         rect.setSize(windowMinimumSize());
         setGeometry(rect);
     }
+    m_nonClientArea->propagateSizeHints();
+}
+
+void QWasmWindow::setOpacity(qreal level)
+{
+    m_qtWindow["style"].set("opacity", qBound(0.0, level, 1.0));
 }
 
 void QWasmWindow::invalidate()
@@ -365,10 +387,13 @@ void QWasmWindow::onActivationChanged(bool active)
 
 void QWasmWindow::setWindowFlags(Qt::WindowFlags flags)
 {
+    if (flags.testFlag(Qt::WindowStaysOnTopHint) != m_flags.testFlag(Qt::WindowStaysOnTopHint))
+        m_compositor->windowPositionPreferenceChanged(this, flags);
     m_flags = flags;
-    dom::syncCSSClassWith(m_qtWindow, "has-frame", hasFrame());
-    dom::syncCSSClassWith(m_qtWindow, "has-shadow", !flags.testFlag(Qt::NoDropShadowWindowHint));
-    dom::syncCSSClassWith(m_qtWindow, "has-title", flags.testFlag(Qt::WindowTitleHint));
+    dom::syncCSSClassWith(m_qtWindow, "frameless", !hasFrame());
+    dom::syncCSSClassWith(m_qtWindow, "has-border", hasBorder());
+    dom::syncCSSClassWith(m_qtWindow, "has-shadow", hasShadow());
+    dom::syncCSSClassWith(m_qtWindow, "has-title", hasTitleBar());
     dom::syncCSSClassWith(m_qtWindow, "transparent-for-input",
                           flags.testFlag(Qt::WindowTransparentForInput));
 
@@ -434,7 +459,7 @@ void QWasmWindow::applyWindowState()
     else
         newGeom = normalGeometry();
 
-    dom::syncCSSClassWith(m_qtWindow, "has-frame", hasFrame());
+    dom::syncCSSClassWith(m_qtWindow, "has-border", hasBorder());
     dom::syncCSSClassWith(m_qtWindow, "maximized", isMaximized);
 
     m_nonClientArea->titleBar()->setRestoreVisible(isMaximized);
@@ -553,8 +578,23 @@ void QWasmWindow::requestUpdate()
 
 bool QWasmWindow::hasFrame() const
 {
-    return !m_state.testFlag(Qt::WindowFullScreen) && !m_flags.testFlag(Qt::FramelessWindowHint)
-            && !windowIsPopupType(m_flags);
+    return !m_flags.testFlag(Qt::FramelessWindowHint);
+}
+
+bool QWasmWindow::hasBorder() const
+{
+    return hasFrame() && !m_state.testFlag(Qt::WindowFullScreen) && !m_flags.testFlag(Qt::SubWindow)
+            && !windowIsPopupType(m_flags) && !parent();
+}
+
+bool QWasmWindow::hasTitleBar() const
+{
+    return hasBorder() && m_flags.testFlag(Qt::WindowTitleHint);
+}
+
+bool QWasmWindow::hasShadow() const
+{
+    return hasBorder() && !m_flags.testFlag(Qt::NoDropShadowWindowHint);
 }
 
 bool QWasmWindow::hasMaximizeButton() const
@@ -578,8 +618,10 @@ void QWasmWindow::requestActivateWindow()
         return;
     }
 
-    if (window()->isTopLevel())
+    if (window()->isTopLevel()) {
         raise();
+        m_compositor->setActive(this);
+    }
 
     if (!QWasmIntegration::get()->inputContext())
         m_canvas.call<void>("focus");

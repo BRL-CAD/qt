@@ -525,6 +525,7 @@ void QDataStream::setByteOrder(ByteOrder bo)
     \value Qt_6_3 Same as Qt_6_0
     \value Qt_6_4 Same as Qt_6_0
     \value Qt_6_5 Same as Qt_6_0
+    \value Qt_6_6 Same as Qt_6_0
     \omitvalue Qt_DefaultCompiledVersion
 
     \sa setVersion(), version()
@@ -960,10 +961,11 @@ QDataStream &QDataStream::operator>>(double &f)
 /*!
     \overload
 
-    Reads the '\\0'-terminated string \a s from the stream and returns
-    a reference to the stream.
+    Reads string \a s from the stream and returns a reference to the stream.
 
-    The string is deserialized using \c{readBytes()}.
+    The string is deserialized using \c{readBytes()} where the serialization
+    format is a \c quint32 length specifier first, followed by that many bytes
+    of data. The resulting string is always '\\0'-terminated.
 
     Space for the string is allocated using \c{new []} -- the caller must
     destroy it with \c{delete []}.

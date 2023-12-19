@@ -65,6 +65,7 @@ class QUnifiedToolbarSurface;
 
 // implemented in qshortcut.cpp
 bool qWidgetShortcutContextMatcher(QObject *object, Qt::ShortcutContext context);
+void qSendWindowChangeToTextureChildrenRecursively(QWidget *widget, QEvent::Type eventType);
 
 class QUpdateLaterEvent : public QEvent
 {
@@ -81,6 +82,7 @@ public:
     inline const QRegion &region() const { return m_region; }
 
 protected:
+    friend class QApplication;
     QRegion m_region;
 };
 
@@ -578,7 +580,7 @@ public:
     inline QRect mapFromWS(const QRect &r) const
     { return r.translated(data.wrect.topLeft()); }
 
-    virtual QObject *focusObject() { return nullptr; }
+    virtual QObject *focusObject();
 
     virtual QPlatformBackingStoreRhiConfig rhiConfig() const { return {}; }
 

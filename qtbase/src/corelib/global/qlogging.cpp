@@ -14,6 +14,7 @@
 #include "qdebug.h"
 #include "qmutex.h"
 #include <QtCore/private/qlocking_p.h>
+#include <QtCore/private/qsimd_p.h>
 #include "qloggingcategory.h"
 #ifndef QT_BOOTSTRAPPED
 #include "qelapsedtimer.h"
@@ -23,7 +24,6 @@
 #include "qthread.h"
 #include "private/qloggingregistry_p.h"
 #include "private/qcoreapplication_p.h"
-#include "private/qsimd_p.h"
 #include <qtcore_tracepoints_p.h>
 #endif
 #ifdef Q_OS_WIN
@@ -163,10 +163,11 @@ Q_TRACE_POINT(qtcore, qt_message_print, int type, const char *category, const ch
     \snippet code/src_corelib_global_qglobal.cpp 4
 */
 
-#if !defined(Q_CC_MSVC)
+template <typename String>
+#if !defined(Q_CC_MSVC_ONLY)
 Q_NORETURN
 #endif
-static void qt_message_fatal(QtMsgType, const QMessageLogContext &context, const QString &message);
+static void qt_message_fatal(QtMsgType, const QMessageLogContext &context, String &&message);
 static void qt_message_print(QtMsgType, const QMessageLogContext &context, const QString &message);
 static void qt_message_print(const QString &message);
 
@@ -184,6 +185,17 @@ static int checked_var_value(const char *varname)
     return ok ? value : 1;
 }
 
+static bool is_fatal_count_down(QAtomicInt &n)
+{
+    // it's fatal if the current value is exactly 1,
+    // otherwise decrement if it's non-zero
+
+    int v = n.loadRelaxed();
+    while (v != 0 && !n.testAndSetRelaxed(v, v - 1, v))
+        qYieldCpu();
+    return v == 1; // we exited the loop, so either v == 0 or CAS succeeded to set n from v to v-1
+}
+
 static bool isFatal(QtMsgType msgType)
 {
     if (msgType == QtFatalMsg)
@@ -191,18 +203,12 @@ static bool isFatal(QtMsgType msgType)
 
     if (msgType == QtCriticalMsg) {
         static QAtomicInt fatalCriticals = checked_var_value("QT_FATAL_CRITICALS");
-
-        // it's fatal if the current value is exactly 1,
-        // otherwise decrement if it's non-zero
-        return fatalCriticals.loadRelaxed() && fatalCriticals.fetchAndAddRelaxed(-1) == 1;
+        return is_fatal_count_down(fatalCriticals);
     }
 
     if (msgType == QtWarningMsg || msgType == QtCriticalMsg) {
         static QAtomicInt fatalWarnings = checked_var_value("QT_FATAL_WARNINGS");
-
-        // it's fatal if the current value is exactly 1,
-        // otherwise decrement if it's non-zero
-        return fatalWarnings.loadRelaxed() && fatalWarnings.fetchAndAddRelaxed(-1) == 1;
+        return is_fatal_count_down(fatalWarnings);
     }
 
     return false;
@@ -342,7 +348,7 @@ using namespace QtPrivate;
     \sa QMessageLogContext, qDebug(), qInfo(), qWarning(), qCritical(), qFatal()
 */
 
-#if defined(Q_CC_MSVC) && defined(QT_DEBUG) && defined(_DEBUG) && defined(_CRT_ERROR)
+#if defined(Q_CC_MSVC_ONLY) && defined(QT_DEBUG) && defined(_DEBUG) && defined(_CRT_ERROR)
 static inline void convert_to_wchar_t_elided(wchar_t *d, size_t space, const char *s) noexcept
 {
     size_t len = qstrlen(s);
@@ -363,11 +369,13 @@ static inline void convert_to_wchar_t_elided(wchar_t *d, size_t space, const cha
     \internal
 */
 Q_NEVER_INLINE
-static QString qt_message(QtMsgType msgType, const QMessageLogContext &context, const char *msg, va_list ap)
+static void qt_message(QtMsgType msgType, const QMessageLogContext &context, const char *msg, va_list ap)
 {
     QString buf = QString::vasprintf(msg, ap);
     qt_message_print(msgType, context, buf);
-    return buf;
+
+    if (isFatal(msgType))
+        qt_message_fatal(msgType, context, buf);
 }
 
 #undef qDebug
@@ -381,11 +389,8 @@ void QMessageLogger::debug(const char *msg, ...) const
 {
     va_list ap;
     va_start(ap, msg); // use variable arg list
-    const QString message = qt_message(QtDebugMsg, context, msg, ap);
+    qt_message(QtDebugMsg, context, msg, ap);
     va_end(ap);
-
-    if (isFatal(QtDebugMsg))
-        qt_message_fatal(QtDebugMsg, context, message);
 }
 
 
@@ -401,11 +406,8 @@ void QMessageLogger::info(const char *msg, ...) const
 {
     va_list ap;
     va_start(ap, msg); // use variable arg list
-    const QString message = qt_message(QtInfoMsg, context, msg, ap);
+    qt_message(QtInfoMsg, context, msg, ap);
     va_end(ap);
-
-    if (isFatal(QtInfoMsg))
-        qt_message_fatal(QtInfoMsg, context, message);
 }
 
 /*!
@@ -440,11 +442,8 @@ void QMessageLogger::debug(const QLoggingCategory &cat, const char *msg, ...) co
 
     va_list ap;
     va_start(ap, msg); // use variable arg list
-    const QString message = qt_message(QtDebugMsg, ctxt, msg, ap);
+    qt_message(QtDebugMsg, ctxt, msg, ap);
     va_end(ap);
-
-    if (isFatal(QtDebugMsg))
-        qt_message_fatal(QtDebugMsg, ctxt, message);
 }
 
 /*!
@@ -467,11 +466,8 @@ void QMessageLogger::debug(QMessageLogger::CategoryFunction catFunc,
 
     va_list ap;
     va_start(ap, msg); // use variable arg list
-    const QString message = qt_message(QtDebugMsg, ctxt, msg, ap);
+    qt_message(QtDebugMsg, ctxt, msg, ap);
     va_end(ap);
-
-    if (isFatal(QtDebugMsg))
-        qt_message_fatal(QtDebugMsg, ctxt, message);
 }
 
 #ifndef QT_NO_DEBUG_STREAM
@@ -551,11 +547,8 @@ void QMessageLogger::info(const QLoggingCategory &cat, const char *msg, ...) con
 
     va_list ap;
     va_start(ap, msg); // use variable arg list
-    const QString message = qt_message(QtInfoMsg, ctxt, msg, ap);
+    qt_message(QtInfoMsg, ctxt, msg, ap);
     va_end(ap);
-
-    if (isFatal(QtInfoMsg))
-        qt_message_fatal(QtInfoMsg, ctxt, message);
 }
 
 /*!
@@ -578,11 +571,8 @@ void QMessageLogger::info(QMessageLogger::CategoryFunction catFunc,
 
     va_list ap;
     va_start(ap, msg); // use variable arg list
-    const QString message = qt_message(QtInfoMsg, ctxt, msg, ap);
+    qt_message(QtInfoMsg, ctxt, msg, ap);
     va_end(ap);
-
-    if (isFatal(QtInfoMsg))
-        qt_message_fatal(QtInfoMsg, ctxt, message);
 }
 
 #ifndef QT_NO_DEBUG_STREAM
@@ -644,11 +634,8 @@ void QMessageLogger::warning(const char *msg, ...) const
 {
     va_list ap;
     va_start(ap, msg); // use variable arg list
-    const QString message = qt_message(QtWarningMsg, context, msg, ap);
+    qt_message(QtWarningMsg, context, msg, ap);
     va_end(ap);
-
-    if (isFatal(QtWarningMsg))
-        qt_message_fatal(QtWarningMsg, context, message);
 }
 
 /*!
@@ -669,11 +656,8 @@ void QMessageLogger::warning(const QLoggingCategory &cat, const char *msg, ...) 
 
     va_list ap;
     va_start(ap, msg); // use variable arg list
-    const QString message = qt_message(QtWarningMsg, ctxt, msg, ap);
+    qt_message(QtWarningMsg, ctxt, msg, ap);
     va_end(ap);
-
-    if (isFatal(QtWarningMsg))
-        qt_message_fatal(QtWarningMsg, ctxt, message);
 }
 
 /*!
@@ -696,11 +680,8 @@ void QMessageLogger::warning(QMessageLogger::CategoryFunction catFunc,
 
     va_list ap;
     va_start(ap, msg); // use variable arg list
-    const QString message = qt_message(QtWarningMsg, ctxt, msg, ap);
+    qt_message(QtWarningMsg, ctxt, msg, ap);
     va_end(ap);
-
-    if (isFatal(QtWarningMsg))
-        qt_message_fatal(QtWarningMsg, ctxt, message);
 }
 
 #ifndef QT_NO_DEBUG_STREAM
@@ -760,11 +741,8 @@ void QMessageLogger::critical(const char *msg, ...) const
 {
     va_list ap;
     va_start(ap, msg); // use variable arg list
-    const QString message = qt_message(QtCriticalMsg, context, msg, ap);
+    qt_message(QtCriticalMsg, context, msg, ap);
     va_end(ap);
-
-    if (isFatal(QtCriticalMsg))
-        qt_message_fatal(QtCriticalMsg, context, message);
 }
 
 /*!
@@ -785,11 +763,8 @@ void QMessageLogger::critical(const QLoggingCategory &cat, const char *msg, ...)
 
     va_list ap;
     va_start(ap, msg); // use variable arg list
-    const QString message = qt_message(QtCriticalMsg, ctxt, msg, ap);
+    qt_message(QtCriticalMsg, ctxt, msg, ap);
     va_end(ap);
-
-    if (isFatal(QtCriticalMsg))
-        qt_message_fatal(QtCriticalMsg, ctxt, message);
 }
 
 /*!
@@ -812,11 +787,8 @@ void QMessageLogger::critical(QMessageLogger::CategoryFunction catFunc,
 
     va_list ap;
     va_start(ap, msg); // use variable arg list
-    const QString message = qt_message(QtCriticalMsg, ctxt, msg, ap);
+    qt_message(QtCriticalMsg, ctxt, msg, ap);
     va_end(ap);
-
-    if (isFatal(QtCriticalMsg))
-        qt_message_fatal(QtCriticalMsg, ctxt, message);
 }
 
 #ifndef QT_NO_DEBUG_STREAM
@@ -880,14 +852,14 @@ void QMessageLogger::fatal(const QLoggingCategory &cat, const char *msg, ...) co
     ctxt.copyContextFrom(context);
     ctxt.category = cat.categoryName();
 
-    QString message;
-
     va_list ap;
     va_start(ap, msg); // use variable arg list
-    QT_TERMINATE_ON_EXCEPTION(message = qt_message(QtFatalMsg, ctxt, msg, ap));
+    QT_TERMINATE_ON_EXCEPTION(qt_message(QtFatalMsg, ctxt, msg, ap));
     va_end(ap);
 
-    qt_message_fatal(QtCriticalMsg, ctxt, message);
+#ifndef Q_CC_MSVC_ONLY
+    Q_UNREACHABLE();
+#endif
 }
 
 /*!
@@ -906,14 +878,14 @@ void QMessageLogger::fatal(QMessageLogger::CategoryFunction catFunc,
     ctxt.copyContextFrom(context);
     ctxt.category = cat.categoryName();
 
-    QString message;
-
     va_list ap;
     va_start(ap, msg); // use variable arg list
-    QT_TERMINATE_ON_EXCEPTION(message = qt_message(QtFatalMsg, ctxt, msg, ap));
+    QT_TERMINATE_ON_EXCEPTION(qt_message(QtFatalMsg, ctxt, msg, ap));
     va_end(ap);
 
-    qt_message_fatal(QtFatalMsg, ctxt, message);
+#ifndef Q_CC_MSVC_ONLY
+    Q_UNREACHABLE();
+#endif
 }
 
 /*!
@@ -924,14 +896,14 @@ void QMessageLogger::fatal(QMessageLogger::CategoryFunction catFunc,
 */
 void QMessageLogger::fatal(const char *msg, ...) const noexcept
 {
-    QString message;
-
     va_list ap;
     va_start(ap, msg); // use variable arg list
-    QT_TERMINATE_ON_EXCEPTION(message = qt_message(QtFatalMsg, context, msg, ap));
+    QT_TERMINATE_ON_EXCEPTION(qt_message(QtFatalMsg, context, msg, ap));
     va_end(ap);
 
-    qt_message_fatal(QtFatalMsg, context, message);
+#ifndef Q_CC_MSVC_ONLY
+    Q_UNREACHABLE();
+#endif
 }
 
 #ifndef QT_NO_DEBUG_STREAM
@@ -998,8 +970,13 @@ Q_AUTOTEST_EXPORT QByteArray qCleanupFuncinfo(QByteArray info)
     pos = info.size() - 1;
     if (info.endsWith(']') && !(info.startsWith('+') || info.startsWith('-'))) {
         while (--pos) {
-            if (info.at(pos) == '[')
-                info.truncate(pos);
+          if (info.at(pos) == '[') {
+              info.truncate(pos);
+              break;
+          }
+        }
+        if (info.endsWith(' ')) {
+          info.chop(1);
         }
     }
 
@@ -1013,10 +990,11 @@ Q_AUTOTEST_EXPORT QByteArray qCleanupFuncinfo(QByteArray info)
     // canonize operator names
     info.replace("operator ", "operator");
 
+    pos = -1;
     // remove argument list
     forever {
         int parencount = 0;
-        pos = info.lastIndexOf(')');
+        pos = info.lastIndexOf(')', pos);
         if (pos == -1) {
             // Don't know how to parse this function name
             return info;
@@ -1024,8 +1002,8 @@ Q_AUTOTEST_EXPORT QByteArray qCleanupFuncinfo(QByteArray info)
         if (info.indexOf('>', pos) != -1
                 || info.indexOf(':', pos) != -1) {
             // that wasn't the function argument list.
-            pos = info.size();
-            break;
+            --pos;
+            continue;
         }
 
         // find the beginning of the argument list
@@ -1627,12 +1605,12 @@ QString qFormatLogMessage(QtMsgType type, const QMessageLogContext &context, con
             QString timeFormat = pattern->timeArgs.at(timeArgsIdx);
             timeArgsIdx++;
             if (timeFormat == "process"_L1) {
-                    quint64 ms = pattern->timer.elapsed();
-                    message.append(QString::asprintf("%6d.%03d", uint(ms / 1000), uint(ms % 1000)));
+                quint64 ms = pattern->timer.elapsed();
+                message.append(QString::asprintf("%6d.%03d", uint(ms / 1000), uint(ms % 1000)));
             } else if (timeFormat == "boot"_L1) {
                 // just print the milliseconds since the elapsed timer reference
                 // like the Linux kernel does
-                uint ms = QDeadlineTimer::current().deadline();
+                qint64 ms = QDeadlineTimer::current().deadline();
                 message.append(QString::asprintf("%6d.%03d", uint(ms / 1000), uint(ms % 1000)));
 #if QT_CONFIG(datestring)
             } else if (timeFormat.isEmpty()) {
@@ -2021,9 +1999,10 @@ static void qt_message_print(const QString &message)
     fflush(stderr);
 }
 
-static void qt_message_fatal(QtMsgType, const QMessageLogContext &context, const QString &message)
+template <typename String>
+static void qt_message_fatal(QtMsgType, const QMessageLogContext &context, String &&message)
 {
-#if defined(Q_CC_MSVC) && defined(QT_DEBUG) && defined(_DEBUG) && defined(_CRT_ERROR)
+#if defined(Q_CC_MSVC_ONLY) && defined(QT_DEBUG) && defined(_DEBUG) && defined(_CRT_ERROR)
     wchar_t contextFileL[256];
     // we probably should let the compiler do this for us, by declaring QMessageLogContext::file to
     // be const wchar_t * in the first place, but the #ifdefery above is very complex  and we
@@ -2042,12 +2021,14 @@ static void qt_message_fatal(QtMsgType, const QMessageLogContext &context, const
         _CrtDbgBreak();
 #else
     Q_UNUSED(context);
-    Q_UNUSED(message);
 #endif
 
+    if constexpr (std::is_class_v<String> && !std::is_const_v<String>)
+        message.clear();
+    else
+        Q_UNUSED(message);
     qAbort();
 }
-
 
 /*!
     \internal
@@ -2107,34 +2088,61 @@ void qErrnoWarning(int code, const char *msg, ...)
     \relates <QtLogging>
     \since 5.0
 
-    Installs a Qt message \a handler which has been defined
-    previously. Returns a pointer to the previous message handler.
+    Installs a Qt message \a handler.
+    Returns a pointer to the previously installed message handler.
 
-    The message handler is a function that prints out debug messages,
-    warnings, critical and fatal error messages. The Qt library (debug
-    mode) contains hundreds of warning messages that are printed
-    when internal errors (usually invalid function arguments)
-    occur. Qt built in release mode also contains such warnings unless
-    QT_NO_WARNING_OUTPUT and/or QT_NO_DEBUG_OUTPUT have been set during
-    compilation. If you implement your own message handler, you get total
-    control of these messages.
+    A message handler is a function that prints out debug, info,
+    warning, critical, and fatal messages from Qt's logging infrastructure.
+    By default, Qt uses a standard message handler that formats and
+    prints messages to different sinks specific to the operating system
+    and Qt configuration. Installing your own message handler allows you
+    to assume full control, and for instance log messages to the
+    file system.
 
-    The default message handler prints the message to the standard output
-    under X11 or to the debugger under Windows. If it is a fatal message, the
-    application aborts immediately after handling that message. Custom
-    message handlers should not attempt to exit an application on their own.
+    Note that Qt supports \l{QLoggingCategory}{logging categories} for
+    grouping related messages in semantic categories. You can use these
+    to enable or disable logging per category and \l{QtMsgType}{message type}.
+    As the filtering for logging categories is done even before a message
+    is created, messages for disabled types and categories will not reach
+    the message handler.
 
-    Only one message handler can be defined, since this is usually
-    done on an application-wide basis to control debug output.
+    A message handler needs to be
+    \l{Reentrancy and Thread-Safety}{reentrant}. That is, it might be called
+    from different threads, in parallel. Therefore, writes to common sinks
+    (like a database, or a file) often need to be synchronized.
 
-    To restore the message handler, call \c qInstallMessageHandler(0).
+    Qt allows to enrich logging messages with further meta-information
+    by calling \l qSetMessagePattern(), or setting the \c QT_MESSAGE_PATTERN
+    environment variable. To keep this formatting, a custom message handler
+    can use \l qFormatLogMessage().
 
-    Example:
+    Try to keep the code in the message handler itself minimal, as expensive
+    operations might block the application. Also, to avoid recursion, any
+    logging messages generated in the message handler itself will be ignored.
+
+    The message handler should always return. For
+    \l{QtFatalMsg}{fatal messages}, the application aborts immediately after
+    handling that message.
+
+    Only one message handler can be installed at a time, for the whole application.
+    If there was a previous custom message handler installed,
+    the function will return a pointer to it. This handler can then
+    be later reinstalled by another call to the method. Also, calling
+    \c qInstallMessageHandler(nullptr) will restore the default
+    message handler.
+
+    Here is an example of a message handler that logs to a local file
+    before calling the default handler:
 
     \snippet code/src_corelib_global_qglobal.cpp 23
 
+    Note that the C++ standard guarantees that \c{static FILE *f} is
+    initialized in a thread-safe way. We can also expect \c{fprintf()}
+    and \c{fflush()} to be thread-safe, so no further synchronization
+    is necessary.
+
     \sa QtMessageHandler, QtMsgType, qDebug(), qInfo(), qWarning(), qCritical(), qFatal(),
-    {Debugging Techniques}
+    {Debugging Techniques}, qFormatLogMessage()
 */
 
 /*!
@@ -2373,13 +2381,7 @@ QMessageLogContext &QMessageLogContext::copyContextFrom(const QMessageLogContext
     Calls the message handler with the warning message \a message. If no
     message handler has been installed, the message is printed to
     stderr. Under Windows, the message is sent to the debugger.
-    On QNX the message is sent to slogger2. This
-    function does nothing if \c QT_NO_WARNING_OUTPUT was defined
-    during compilation; it exits if at the nth warning corresponding to the
-    counter in environment variable \c QT_FATAL_WARNINGS. That is, if the
-    environment variable contains the value 1, it will exit on the 1st message;
-    if it contains the value 10, it will exit on the 10th message. Any
-    non-numeric value is equivalent to 1.
+    On QNX the message is sent to slogger2.
 
     This function takes a format string and a list of arguments,
     similar to the C printf() function. The format should be a Latin-1
@@ -2396,8 +2398,20 @@ QMessageLogContext &QMessageLogContext::copyContextFrom(const QMessageLogContext
     This syntax inserts a space between each item, and
     appends a newline at the end.
 
-    To suppress the output at runtime, install your own message handler
-    with qInstallMessageHandler().
+    This function does nothing if \c QT_NO_WARNING_OUTPUT was defined
+    during compilation.
+    To suppress the output at runtime, you can set
+    \l{QLoggingCategory}{logging rules} or register a custom
+    \l{QLoggingCategory::installFilter()}{filter}.
+
+    For debugging purposes, it is sometimes convenient to let the
+    program abort for warning messages. This allows you then
+    to inspect the core dump, or attach a debugger - see also \l{qFatal()}.
+    To enable this, set the environment variable \c{QT_FATAL_WARNINGS}
+    to a number \c n. The program terminates then for the n-th warning.
+    That is, if the environment variable is set to 1, it will terminate
+    on the first call; if it contains the value 10, it will exit on the 10th
+    call. Any non-numeric value in the environment variable is equivalent to 1.
 
     \sa qDebug(), qInfo(), qCritical(), qFatal(), qInstallMessageHandler(),
         {Debugging Techniques}
@@ -2412,8 +2426,6 @@ QMessageLogContext &QMessageLogContext::copyContextFrom(const QMessageLogContext
     message handler has been installed, the message is printed to
     stderr. Under Windows, the message is sent to the debugger.
     On QNX the message is sent to slogger2.
-
-    It exits if the environment variable QT_FATAL_CRITICALS is not empty.
 
     This function takes a format string and a list of arguments,
     similar to the C printf() function. The format should be a Latin-1
@@ -2430,8 +2442,19 @@ QMessageLogContext &QMessageLogContext::copyContextFrom(const QMessageLogContext
     A space is inserted between the items, and a newline is
     appended at the end.
 
-    To suppress the output at runtime, install your own message handler
-    with qInstallMessageHandler().
+    To suppress the output at runtime, you can define
+    \l{QLoggingCategory}{logging rules} or register a custom
+    \l{QLoggingCategory::installFilter()}{filter}.
+
+    For debugging purposes, it is sometimes convenient to let the
+    program abort for critical messages. This allows you then
+    to inspect the core dump, or attach a debugger - see also \l{qFatal()}.
+    To enable this, set the environment variable \c{QT_FATAL_CRITICALS}
+    to a number \c n. The program terminates then for the n-th critical
+    message.
+    That is, if the environment variable is set to 1, it will terminate
+    on the first call; if it contains the value 10, it will exit on the 10th
+    call. Any non-numeric value in the environment variable is equivalent to 1.
 
     \sa qDebug(), qInfo(), qWarning(), qFatal(), qInstallMessageHandler(),
         {Debugging Techniques}

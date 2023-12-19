@@ -23,8 +23,7 @@
 #include <QtWidgets/private/qwidget_p.h>
 #include <QtWidgets/private/qwidgetrepaintmanager_p.h>
 
-#include <QtGui/private/qrhi_p.h>
-#include <QtGui/private/qrhigles2_p.h>
+#include <rhi/qrhi.h>
 
 QT_BEGIN_NAMESPACE
 
@@ -1609,15 +1608,9 @@ int QOpenGLWidget::metric(QPaintDevice::PaintDeviceMetric metric) const
         else
             return qRound(dpmy * 0.0254);
     case PdmDevicePixelRatio:
-        if (window)
-            return int(window->devicePixelRatio());
-        else
-            return 1.0;
+        return QWidget::metric(metric);
     case PdmDevicePixelRatioScaled:
-        if (window)
-            return int(window->devicePixelRatio() * devicePixelRatioFScale());
-        else
-            return int(devicePixelRatioFScale());
+        return QWidget::metric(metric);
     default:
         qWarning("QOpenGLWidget::metric(): unknown metric %d", metric);
         return 0;
@@ -1706,7 +1699,7 @@ bool QOpenGLWidget::event(QEvent *e)
             }
         }
         break;
-    case QEvent::ScreenChangeInternal:
+    case QEvent::DevicePixelRatioChange:
         if (d->initialized && d->paintDevice->devicePixelRatio() != devicePixelRatio())
             d->recreateFbos();
         break;

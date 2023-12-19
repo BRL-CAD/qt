@@ -463,8 +463,7 @@ inline bool QStorageIterator::next()
     r = qstrntoll(ptr, stop - ptr, 10);
     if (!r.ok())
         return false;
-    int parent_id = r.result;
-    Q_UNUSED(parent_id);
+    // parent_id = r.result; // member currently not in use
 
     ptr += r.used;
     r = qstrntoll(ptr, stop - ptr, 10);
@@ -743,9 +742,7 @@ static QString decodeFsEncString(const QString &str)
             if (QStringView{str}.sliced(i).startsWith("\\x"_L1)) {
                 bool bOk;
                 const int code = QStringView{str}.mid(i+2, 2).toInt(&bOk, 16);
-                // only decode characters between 0x20 and 0x7f but not
-                // the backslash to prevent collisions
-                if (bOk && code >= 0x20 && code < 0x80 && code != '\\') {
+                if (bOk && code >= 0x20 && code < 0x80) {
                     decoded += QChar(code);
                     i += 4;
                     continue;

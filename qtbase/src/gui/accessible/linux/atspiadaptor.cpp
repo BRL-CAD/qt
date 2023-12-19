@@ -16,6 +16,7 @@
 #if QT_CONFIG(accessibility)
 #include "socket_interface.h"
 #include "qspi_constant_mappings_p.h"
+#include <QtCore/private/qstringiterator_p.h>
 #include <QtGui/private/qaccessiblebridgeutils_p.h>
 
 #include "qspiapplicationadaptor_p.h"
@@ -1741,15 +1742,14 @@ bool AtSpiAdaptor::inheritsQAction(QObject *object)
 // Component
 static QAccessibleInterface * getWindow(QAccessibleInterface * interface)
 {
-    if (interface->role() == QAccessible::Dialog || interface->role() == QAccessible::Window)
-        return interface;
+    // find top-level window in a11y hierarchy (either has a
+    // corresponding role or is a direct child of the application object)
+    QAccessibleInterface* app = QAccessible::queryAccessibleInterface(qApp);
+    while (interface && interface->role() != QAccessible::Dialog
+           && interface->role() != QAccessible::Window && interface->parent() != app)
+        interface = interface->parent();
 
-    QAccessibleInterface * parent = interface->parent();
-    while (parent && parent->role() != QAccessible::Dialog
-            && parent->role() != QAccessible::Window)
-        parent = parent->parent();
-
-    return parent;
+    return interface;
 }
 
 bool AtSpiAdaptor::componentInterface(QAccessibleInterface *interface, const QString &function, const QDBusMessage &message, const QDBusConnection &connection)
@@ -1980,8 +1980,13 @@ bool AtSpiAdaptor::textInterface(QAccessibleInterface *interface, const QString 
         int offset = message.arguments().at(0).toInt();
         int start;
         int end;
-        QString result = interface->textInterface()->textAtOffset(offset, QAccessible::CharBoundary, &start, &end);
-        sendReply(connection, message, (int) *(qPrintable (result)));
+        const QString charString = interface->textInterface()
+                ->textAtOffset(offset, QAccessible::CharBoundary, &start, &end);
+        int codePoint = 0;
+        QStringIterator stringIt(charString);
+        if (stringIt.hasNext())
+            codePoint = static_cast<int>(stringIt.peekNext());
+        sendReply(connection, message, codePoint);
     } else if (function == "GetCharacterExtents"_L1) {
         int offset = message.arguments().at(0).toInt();
         int coordType = message.arguments().at(1).toUInt();
@@ -2161,9 +2166,9 @@ namespace
         QString name = ia2Name;
         QString value = ia2Value;
 
-        // IAccessible2: http://www.linuxfoundation.org/collaborate/workgroups/accessibility/iaccessible2/textattributes
-        // ATK attribute names: https://git.gnome.org/browse/orca/tree/src/orca/text_attribute_names.py
-        // ATK attribute values: https://developer.gnome.org/atk/unstable/AtkText.html#AtkTextAttribute
+        // IAccessible2: https://wiki.linuxfoundation.org/accessibility/iaccessible2/textattributes
+        // ATK attribute names: https://gitlab.gnome.org/GNOME/orca/-/blob/master/src/orca/text_attribute_names.py
+        // ATK attribute values: https://gnome.pages.gitlab.gnome.org/atk/AtkText.html#AtkTextAttribute
 
         // https://bugzilla.gnome.org/show_bug.cgi?id=744553 "ATK docs provide no guidance for allowed values of some text attributes"
         // specifically for "weight", "invalid", "language" and value range for colors

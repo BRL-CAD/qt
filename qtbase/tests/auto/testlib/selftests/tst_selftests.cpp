@@ -765,27 +765,28 @@ void checkErrorOutput(const QString &test, const QByteArray &errorOutput)
         return;
 
 #ifdef Q_CC_MINGW
-    if (test == "blacklisted" // calls qFatal()
-        || test == "silent") // calls qFatal()
-#endif
+    if (test == "silent") // calls qFatal()
         return;
+#endif
 
 #ifdef Q_OS_WIN
     if (test == "crashes")
         return; // Complains about uncaught exception
 #endif
 
+#ifdef Q_OS_UNIX
+    if (test == "assert"
+        || test == "crashes"
+        || test == "failfetchtype"
+        || test == "faildatatype")
+    return; // Outputs "Received signal 6 (SIGABRT)"
+#endif
+
 #ifdef Q_OS_LINUX
-    // QEMU outputs to stderr about uncaught signals
-    if (QTestPrivate::isRunningArmOnX86() &&
-        (test == "assert"
-         || test == "blacklisted"
-         || test == "crashes"
-         || test == "faildatatype"
-         || test == "failfetchtype"
-         || test == "silent"
-        ))
-        return;
+    if (test == "silent") {
+        if (QTestPrivate::isRunningArmOnX86())
+            return;         // QEMU outputs to stderr about uncaught signals
+    }
 #endif
 
     INFO(errorOutput.toStdString());
@@ -928,6 +929,7 @@ static QProcessEnvironment testEnvironment()
         const bool preserveLibPath = qEnvironmentVariableIsSet("QT_PRESERVE_TESTLIB_PATH");
         foreach (const QString &key, systemEnvironment.keys()) {
             const bool useVariable = key == "PATH" || key == "QT_QPA_PLATFORM"
+                || key == "ASAN_OPTIONS"
 #if defined(Q_OS_QNX)
                 || key == "GRAPHICS_ROOT" || key == "TZ"
 #elif defined(Q_OS_UNIX)
@@ -972,8 +974,7 @@ TestProcessResult runTestProcess(const QString &test, const QStringList &argumen
     const bool expectedCrash = test == "assert" || test == "exceptionthrow"
         || test == "fetchbogus" || test == "crashedterminate"
         || test == "faildatatype" || test == "failfetchtype"
-        || test == "crashes" || test == "silent"
-        || test == "blacklisted" || test == "watchdog";
+        || test == "crashes" || test == "silent" || test == "watchdog";
 
     if (expectedCrash) {
         environment.insert("QTEST_DISABLE_CORE_DUMP", "1");

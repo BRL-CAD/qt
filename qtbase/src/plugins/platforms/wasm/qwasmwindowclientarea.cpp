@@ -19,8 +19,9 @@ ClientArea::ClientArea(QWasmWindow *window, QWasmScreen *screen, emscripten::val
     : m_screen(screen), m_window(window), m_element(element)
 {
     const auto callback = std::function([this](emscripten::val event) {
-        if (processPointer(*PointerEvent::fromWeb(event)))
-            event.call<void>("preventDefault");
+        processPointer(*PointerEvent::fromWeb(event));
+        event.call<void>("preventDefault");
+        event.call<void>("stopPropagation");
     });
 
     m_pointerDownCallback =
@@ -105,7 +106,10 @@ bool ClientArea::deliverEvent(const PointerEvent &event)
                               .insert(event.pointerId, QWindowSystemInterface::TouchPoint())
                               .value();
 
-        touchPoint->id = event.pointerId;
+        // Assign touch point id. TouchPoint::id is int, but QGuiApplicationPrivate::processTouchEvent()
+        // will not synthesize mouse events for touch points with negative id; use the absolute value for
+        // the touch point id.
+        touchPoint->id = qAbs(event.pointerId);
 
         touchPoint->state = QEventPoint::State::Pressed;
     }

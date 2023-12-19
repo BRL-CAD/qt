@@ -5,6 +5,7 @@
 #define PARSER_H
 
 #include "symbols.h"
+#include <QtCore/qbytearrayview.h>
 
 #include <stack>
 
@@ -15,7 +16,7 @@ class Parser
 public:
     Parser():index(0), displayWarnings(true), displayNotes(true) {}
     Symbols symbols;
-    int index;
+    qsizetype index;
     bool displayWarnings;
     bool displayNotes;
 
@@ -48,6 +49,8 @@ public:
     Q_NORETURN void error(const char *msg = nullptr);
     void warning(const char * = nullptr);
     void note(const char * = nullptr);
+    void defaultErrorMsg(const Symbol &sym);
+    void printMsg(QByteArrayView formatStringSuffix, QByteArrayView msg, const Symbol &sym);
 
 };
 
@@ -62,7 +65,7 @@ inline bool Parser::test(Token token)
 
 inline Token Parser::lookup(int k)
 {
-    const int l = index - 1 + k;
+    const qsizetype l = index - 1 + k;
     return l < symbols.size() ? symbols.at(l).token : NOTOKEN;
 }
 

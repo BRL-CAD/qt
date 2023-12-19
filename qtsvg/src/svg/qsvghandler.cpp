@@ -2015,15 +2015,23 @@ void QSvgHandler::parseCSStoXMLAttrs(const QString &css, QList<QSvgCssAttribute>
 
 static void cssStyleLookup(QSvgNode *node,
                            QSvgHandler *handler,
-                           QSvgStyleSelector *selector)
+                           QSvgStyleSelector *selector,
+                           QXmlStreamAttributes &attributes)
 {
     QCss::StyleSelector::NodePtr cssNode;
     cssNode.ptr = node;
     QList<QCss::Declaration> decls = selector->declarationsForNode(cssNode);
 
-    QXmlStreamAttributes attributes;
     parseCSStoXMLAttrs(decls, attributes);
     parseStyle(node, attributes, handler);
+}
+
+static void cssStyleLookup(QSvgNode *node,
+                           QSvgHandler *handler,
+                           QSvgStyleSelector *selector)
+{
+    QXmlStreamAttributes attributes;
+    cssStyleLookup(node, handler, selector, attributes);
 }
 
 #endif // QT_NO_CSSPARSER
@@ -3136,27 +3144,9 @@ static bool parseStopNode(QSvgStyleProperty *parent,
     QXmlStreamAttributes xmlAttr = attributes;
 
 #ifndef QT_NO_CSSPARSER
-    QCss::StyleSelector::NodePtr cssNode;
-    cssNode.ptr = &anim;
-    QList<QCss::Declaration> decls = handler->selector()->declarationsForNode(cssNode);
-
-    for (int i = 0; i < decls.size(); ++i) {
-        const QCss::Declaration &decl = decls.at(i);
-
-        if (decl.d->property.isEmpty())
-            continue;
-        if (decl.d->values.size() != 1)
-            continue;
-        QCss::Value val = decl.d->values.first();
-        QString valueStr = val.toString();
-        if (val.type == QCss::Value::Uri) {
-            valueStr.prepend(QLatin1String("url("));
-            valueStr.append(QLatin1Char(')'));
-        }
-        xmlAttr.append(QString(), decl.d->property, valueStr);
-    }
-
+    cssStyleLookup(&anim, handler, handler->selector(), xmlAttr);
 #endif
+    parseStyle(&anim, xmlAttr, handler);
 
     QSvgAttributes attrs(xmlAttr, handler);
 
@@ -3614,6 +3604,41 @@ void QSvgHandler::init()
     parse();
 }
 
+static bool detectCycles(const QSvgNode *node, QList<const QSvgUse *> active = {})
+{
+    if (Q_UNLIKELY(!node))
+        return false;
+    switch (node->type()) {
+    case QSvgNode::DOC:
+    case QSvgNode::G:
+    {
+        auto *g = static_cast<const QSvgStructureNode*>(node);
+        for (auto *r : g->renderers()) {
+            if (detectCycles(r, active))
+                return true;
+        }
+    }
+    break;
+    case QSvgNode::USE:
+    {
+        if (active.contains(node))
+            return true;
+
+        auto *u = static_cast<const QSvgUse*>(node);
+        auto *target = u->link();
+        if (target) {
+            active.append(u);
+            if (detectCycles(target, active))
+                return true;
+        }
+    }
+    break;
+    default:
+        break;
+    }
+    return false;
+}
+
 // Having too many unfinished elements will cause a stack overflow
 // in the dtor of QSvgTinyDocument, see oss-fuzz issue 24000.
 static const int unfinishedElementsLimit = 2048;
@@ -3664,6 +3689,11 @@ void QSvgHandler::parse()
     }
     resolveGradients(m_doc);
     resolveNodes();
+    if (detectCycles(m_doc)) {
+        qCWarning(lcSvgHandler, "Cycles detected in SVG, document discarded.");
+        delete m_doc;
+        m_doc = nullptr;
+    }
 }
 
 bool QSvgHandler::startElement(const QString &localName,

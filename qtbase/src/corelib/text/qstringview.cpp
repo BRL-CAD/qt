@@ -471,7 +471,7 @@ QT_BEGIN_NAMESPACE
 /*!
     \fn qsizetype QStringView::size() const
 
-    Returns the size of this string view, in UTF-16 code points (that is,
+    Returns the size of this string view, in UTF-16 code units (that is,
     surrogate pairs count as two for the purposes of this function, the same
     as in QString).
 
@@ -1369,17 +1369,6 @@ or the character \a ch
     \since 6.0
 */
 
-/*!
-    \fn int QLatin1StringView::compare(QUtf8StringView str, Qt::CaseSensitivity cs) const
-    \since 6.5
-
-    Returns an integer that compares to zero as this string view compares to the
-    string view \a str.
-
-    \include qstring.qdocinc {search-comparison-case-sensitivity} {comparison}
-
-    \sa operator==(), operator<(), operator>()
-*/
 
 /*!
     \fn template <typename Needle, typename...Flags> auto QStringView::tokenize(Needle &&sep, Flags...flags) const

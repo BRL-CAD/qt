@@ -8,6 +8,7 @@
 #include "androidjnimain.h"
 #include "qandroidplatformintegration.h"
 
+#include <qpa/qplatformwindow.h>
 #include <qpa/qwindowsysteminterface.h>
 #include <QTouchEvent>
 #include <QPointer>
@@ -16,6 +17,8 @@
 #include <QtMath>
 
 QT_BEGIN_NAMESPACE
+
+Q_LOGGING_CATEGORY(lcQpaInputMethods, "qt.qpa.input.methods");
 
 using namespace QtAndroid;
 
@@ -30,9 +33,7 @@ namespace QtAndroidInput
 
     void updateSelection(int selStart, int selEnd, int candidatesStart, int candidatesEnd)
     {
-#ifdef QT_DEBUG_ANDROID_IM_PROTOCOL
-        qDebug() << ">>> UPDATESELECTION" << selStart << selEnd << candidatesStart << candidatesEnd;
-#endif
+        qCDebug(lcQpaInputMethods) << ">>> UPDATESELECTION" << selStart << selEnd << candidatesStart << candidatesEnd;
         QJniObject::callStaticMethod<void>(applicationClass(),
                                            "updateSelection",
                                            "(IIII)V",
@@ -53,25 +54,19 @@ namespace QtAndroidInput
                                            height,
                                            inputHints,
                                            enterKeyType);
-#ifdef QT_DEBUG_ANDROID_IM_PROTOCOL
-        qDebug() << "@@@ SHOWSOFTWAREKEYBOARD" << left << top << width << height << inputHints << enterKeyType;
-#endif
+        qCDebug(lcQpaInputMethods) << "@@@ SHOWSOFTWAREKEYBOARD" << left << top << width << height << inputHints << enterKeyType;
     }
 
     void resetSoftwareKeyboard()
     {
         QJniObject::callStaticMethod<void>(applicationClass(), "resetSoftwareKeyboard");
-#ifdef QT_DEBUG_ANDROID_IM_PROTOCOL
-        qDebug("@@@ RESETSOFTWAREKEYBOARD");
-#endif
+        qCDebug(lcQpaInputMethods) << "@@@ RESETSOFTWAREKEYBOARD";
     }
 
     void hideSoftwareKeyboard()
     {
         QJniObject::callStaticMethod<void>(applicationClass(), "hideSoftwareKeyboard");
-#ifdef QT_DEBUG_ANDROID_IM_PROTOCOL
-        qDebug("@@@ HIDESOFTWAREKEYBOARD");
-#endif
+        qCDebug(lcQpaInputMethods) << "@@@ HIDESOFTWAREKEYBOARD";
     }
 
     bool isSoftwareKeyboardVisible()
@@ -105,7 +100,7 @@ namespace QtAndroidInput
         QPoint globalPos(x,y);
         QWindow *tlw = topLevelWindowAt(globalPos);
         m_mouseGrabber = tlw;
-        QPoint localPos = tlw ? (globalPos - tlw->position()) : globalPos;
+        QPoint localPos = tlw && tlw->handle() ? tlw->handle()->mapFromGlobal(globalPos) : globalPos;
         QWindowSystemInterface::handleMouseEvent(tlw, localPos, globalPos,
                                                  Qt::MouseButtons(Qt::LeftButton),
                                                  Qt::LeftButton, QEvent::MouseButtonPress);
@@ -117,7 +112,8 @@ namespace QtAndroidInput
         QWindow *tlw = m_mouseGrabber.data();
         if (!tlw)
             tlw = topLevelWindowAt(globalPos);
-        QPoint localPos = tlw ? (globalPos -tlw->position()) : globalPos;
+
+        QPoint localPos = tlw && tlw->handle() ? tlw->handle()->mapFromGlobal(globalPos) : globalPos;
         QWindowSystemInterface::handleMouseEvent(tlw, localPos, globalPos,
                                                  Qt::MouseButtons(Qt::NoButton),
                                                  Qt::LeftButton, QEvent::MouseButtonRelease);
@@ -135,7 +131,7 @@ namespace QtAndroidInput
         QWindow *tlw = m_mouseGrabber.data();
         if (!tlw)
             tlw = topLevelWindowAt(globalPos);
-        QPoint localPos = tlw ? (globalPos-tlw->position()) : globalPos;
+        QPoint localPos = tlw && tlw->handle() ? tlw->handle()->mapFromGlobal(globalPos) : globalPos;
         QWindowSystemInterface::handleMouseEvent(tlw, localPos, globalPos,
                                                  Qt::MouseButtons(m_mouseGrabber ? Qt::LeftButton : Qt::NoButton),
                                                  Qt::NoButton, QEvent::MouseMove);
@@ -150,7 +146,7 @@ namespace QtAndroidInput
         QWindow *tlw = m_mouseGrabber.data();
         if (!tlw)
             tlw = topLevelWindowAt(globalPos);
-        QPoint localPos = tlw ? (globalPos-tlw->position()) : globalPos;
+        QPoint localPos = tlw && tlw->handle() ? tlw->handle()->mapFromGlobal(globalPos) : globalPos;
         QPoint angleDelta(hdelta * 120, vdelta * 120);
 
         QWindowSystemInterface::handleWheelEvent(tlw,
@@ -173,7 +169,7 @@ namespace QtAndroidInput
         m_ignoreMouseEvents = true;
         QPoint globalPos(x,y);
         QWindow *tlw = topLevelWindowAt(globalPos);
-        QPoint localPos = tlw ? (globalPos-tlw->position()) : globalPos;
+        QPoint localPos = tlw && tlw->handle() ? tlw->handle()->mapFromGlobal(globalPos) : globalPos;
 
         // Click right button if no other button is already pressed.
         if (!m_mouseGrabber) {
@@ -298,7 +294,7 @@ namespace QtAndroidInput
         QPointF globalPosF(x, y);
         QPoint globalPos((int)x, (int)y);
         QWindow *tlw = topLevelWindowAt(globalPos);
-        QPointF localPos = tlw ? (globalPosF - tlw->position()) : globalPosF;
+        QPointF localPos = tlw && tlw->handle() ? tlw->handle()->mapFromGlobalF(globalPosF) : globalPosF;
 
         // Galaxy Note with plain Android:
         // 0 1 0    stylus press
@@ -318,6 +314,7 @@ namespace QtAndroidInput
         Qt::MouseButtons buttons = Qt::NoButton;
         switch (action) {
         case 1:     // ACTION_UP
+        case 6:     // ACTION_POINTER_UP, happens if stylus is not the primary pointer
         case 212:   // stylus release while side-button held on Galaxy Note 4
             buttons = Qt::NoButton;
             break;
@@ -329,9 +326,7 @@ namespace QtAndroidInput
             break;
         }
 
-#ifdef QT_DEBUG_ANDROID_STYLUS
-        qDebug() << action << pointerType << buttonState << '@' << x << y << "pressure" << pressure << ": buttons" << buttons;
-#endif
+        qCDebug(lcQpaInputMethods) << action << pointerType << buttonState << '@' << x << y << "pressure" << pressure << ": buttons" << buttons;
 
         QWindowSystemInterface::handleTabletEvent(tlw, ulong(time),
             localPos, globalPosF, int(QInputDevice::DeviceType::Stylus), pointerType,
@@ -797,9 +792,7 @@ namespace QtAndroidInput
                 QMetaObject::invokeMethod(inputContext, "hideSelectionHandles", Qt::QueuedConnection);
             }
         }
-#ifdef QT_DEBUG_ANDROID_IM_PROTOCOL
-        qDebug() << "@@@ KEYBOARDVISIBILITYCHANGED" << inputContext;
-#endif
+        qCDebug(lcQpaInputMethods) << "@@@ KEYBOARDVISIBILITYCHANGED" << inputContext;
     }
 
     static void keyboardGeometryChanged(JNIEnv */*env*/, jobject /*thiz*/, jint x, jint y, jint w, jint h)
@@ -812,16 +805,12 @@ namespace QtAndroidInput
         if (inputContext && qGuiApp)
             inputContext->emitKeyboardRectChanged();
 
-#ifdef QT_DEBUG_ANDROID_IM_PROTOCOL
-        qDebug() << "@@@ KEYBOARDRECTCHANGED" << m_softwareKeyboardRect;
-#endif
+        qCDebug(lcQpaInputMethods) << "@@@ KEYBOARDRECTCHANGED" << m_softwareKeyboardRect;
     }
 
     static void handleLocationChanged(JNIEnv */*env*/, jobject /*thiz*/, int id, int x, int y)
     {
-#ifdef QT_DEBUG_ANDROID_IM_PROTOCOL
-        qDebug() << "@@@ handleLocationChanged" << id << x << y;
-#endif
+        qCDebug(lcQpaInputMethods) << "@@@ handleLocationChanged" << id << x << y;
         QAndroidInputContext *inputContext = QAndroidInputContext::androidInputContext();
         if (inputContext && qGuiApp)
             QMetaObject::invokeMethod(inputContext, "handleLocationChanged", Qt::BlockingQueuedConnection,

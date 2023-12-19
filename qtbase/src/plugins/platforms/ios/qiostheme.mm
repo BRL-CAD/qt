@@ -23,6 +23,7 @@
 #include "qiosmessagedialog.h"
 #include "qioscolordialog.h"
 #include "qiosfontdialog.h"
+#include "qiosscreen.h"
 #endif
 
 QT_BEGIN_NAMESPACE
@@ -68,6 +69,9 @@ void QIOSTheme::initializeSystemPalette()
 
     s_systemPalette.setBrush(QPalette::Highlight, QColor(11, 70, 150, 60));
     s_systemPalette.setBrush(QPalette::HighlightedText, qt_mac_toQBrush(UIColor.labelColor.CGColor));
+
+    if (@available(ios 15.0, *))
+        s_systemPalette.setBrush(QPalette::Accent, qt_mac_toQBrush(UIColor.tintColor.CGColor));
 }
 
 const QPalette *QIOSTheme::palette(QPlatformTheme::Palette type) const
@@ -144,14 +148,17 @@ QVariant QIOSTheme::themeHint(ThemeHint hint) const
 
 Qt::ColorScheme QIOSTheme::colorScheme() const
 {
-    UIUserInterfaceStyle appearance = UIUserInterfaceStyleUnspecified;
-    // Set the appearance based on the UIWindow
+    // Set the appearance based on the QUIWindow
     // Fallback to the UIScreen if no window is created yet
-    if (UIWindow *window = qt_apple_sharedApplication().windows.lastObject) {
-        appearance = window.traitCollection.userInterfaceStyle;
-    } else {
-        appearance = UIScreen.mainScreen.traitCollection.userInterfaceStyle;
+    UIUserInterfaceStyle appearance = UIScreen.mainScreen.traitCollection.userInterfaceStyle;
+    NSArray<UIWindow *> *windows = qt_apple_sharedApplication().windows;
+    for (UIWindow *window in windows) {
+        if ([window isKindOfClass:[QUIWindow class]]) {
+            appearance = static_cast<QUIWindow*>(window).traitCollection.userInterfaceStyle;
+            break;
+        }
     }
+
     return appearance == UIUserInterfaceStyleDark
                        ? Qt::ColorScheme::Dark
                        : Qt::ColorScheme::Light;

@@ -13,9 +13,7 @@
 
 #include <QtCore/qstringconverter_base.h>
 #include <QtCore/qstring.h>
-#if defined(QT_USE_FAST_OPERATOR_PLUS) || defined(QT_USE_QSTRINGBUILDER)
 #include <QtCore/qstringbuilder.h>
-#endif
 
 QT_BEGIN_NAMESPACE
 
@@ -36,12 +34,6 @@ public:
         : QStringConverter(name, flags)
     {}
 
-#if defined(Q_QDOC)
-    QByteArray operator()(const QString &in);
-    QByteArray operator()(QStringView in);
-    QByteArray encode(const QString &in);
-    QByteArray encode(QStringView in);
-#else
     template<typename T>
     struct DecodedData
     {
@@ -59,7 +51,6 @@ public:
     { return DecodedData<const QString &>{this, str}; }
     DecodedData<QStringView> encode(QStringView in)
     { return DecodedData<QStringView>{this, in}; }
-#endif
 
     qsizetype requiredSpace(qsizetype inputLength) const
     { return iface ? iface->fromUtf16Len(inputLength) : 0; }
@@ -105,12 +96,6 @@ public:
         : QStringConverter(name, f)
     {}
 
-#if defined(Q_QDOC)
-    QString operator()(const QByteArray &ba);
-    QString operator()(QByteArrayView ba);
-    QString decode(const QByteArray &ba);
-    QString decode(QByteArrayView ba);
-#else
     template<typename T>
     struct EncodedData
     {
@@ -128,7 +113,6 @@ public:
     { return EncodedData<const QByteArray &>{this, ba}; }
     EncodedData<QByteArrayView> decode(QByteArrayView ba)
     { return EncodedData<QByteArrayView>{this, ba}; }
-#endif
 
     qsizetype requiredSpace(qsizetype inputLength) const
     { return iface ? iface->toUtf16Len(inputLength) : 0; }
@@ -140,6 +124,8 @@ public:
         }
         return iface->toUtf16(out, ba, &state);
     }
+    char16_t *appendToBuffer(char16_t *out, QByteArrayView ba)
+    { return reinterpret_cast<char16_t *>(appendToBuffer(reinterpret_cast<QChar *>(out), ba)); }
 
     Q_CORE_EXPORT static QStringDecoder decoderForHtml(QByteArrayView data);
 

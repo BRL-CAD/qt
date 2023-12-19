@@ -1,6 +1,8 @@
 // Copyright (C) 2020 The Qt Company Ltd.
 // SPDX-License-Identifier: LicenseRef-Qt-Commercial OR LGPL-3.0-only OR GPL-2.0-only OR GPL-3.0-only
 
+#include <QtCore/qstring.h>
+
 #ifndef QSTRINGBUILDER_H
 #define QSTRINGBUILDER_H
 
@@ -11,7 +13,6 @@
 #pragma qt_sync_stop_processing
 #endif
 
-#include <QtCore/qstring.h>
 #include <QtCore/qbytearray.h>
 
 #include <string.h>
@@ -100,6 +101,9 @@ public:
     const B &b;
 };
 
+// This specialization is here for backwards compatibility: appending
+// two null strings must give back a null string, so we're special
+// casing this one out.
 template <>
 class QStringBuilder <QString, QString> : public QStringBuilderBase<QStringBuilder<QString, QString>, QString>
 {
@@ -117,6 +121,7 @@ class QStringBuilder <QString, QString> : public QStringBuilderBase<QStringBuild
         QStringBuilder &operator=(const QStringBuilder &) = delete;
 };
 
+// Ditto, but see QTBUG-114238
 template <>
 class QStringBuilder <QByteArray, QByteArray> : public QStringBuilderBase<QStringBuilder<QByteArray, QByteArray>, QByteArray>
 {

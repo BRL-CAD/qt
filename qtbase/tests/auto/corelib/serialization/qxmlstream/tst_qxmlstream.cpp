@@ -12,7 +12,7 @@
 #include <QXmlStreamReader>
 #include <QBuffer>
 #include <QStack>
-#include <QtGui/private/qzipreader_p.h>
+#include <private/qzipreader_p.h>
 
 #include "qc14n.h"
 
@@ -542,6 +542,7 @@ public:
 private slots:
     void initTestCase();
     void cleanupTestCase();
+    void runTestSuite();
     void reportFailures() const;
     void reportFailures_data();
     void checkBaseline() const;
@@ -590,6 +591,9 @@ private slots:
 
     void entityExpansionLimit() const;
 
+    void tokenErrorHandling_data() const;
+    void tokenErrorHandling() const;
+
 private:
     static QByteArray readFile(const QString &filename);
 
@@ -626,16 +630,19 @@ void tst_QXmlStream::initTestCase()
         QFile::remove(destinationPath); // copy will fail if file exists
         QVERIFY(QFile::copy(fileInfo.filePath(), destinationPath));
     }
+}
 
+void tst_QXmlStream::cleanupTestCase()
+{
+}
+
+void tst_QXmlStream::runTestSuite()
+{
     QFile file(m_tempDir.filePath(catalogFile));
     QVERIFY2(file.open(QIODevice::ReadOnly),
              qPrintable(QString::fromLatin1("Failed to open the test suite catalog; %1").arg(file.fileName())));
 
     QVERIFY(m_handler.runTests(&file));
-}
-
-void tst_QXmlStream::cleanupTestCase()
-{
 }
 
 void tst_QXmlStream::reportFailures() const
@@ -1140,6 +1147,10 @@ void tst_QXmlStream::readNextStartElement() const
     }
 
     QCOMPARE(amountOfB, 2);
+
+    // well-formed document end follows
+    QVERIFY(!reader.readNextStartElement());
+    QCOMPARE(reader.error(), QXmlStreamReader::NoError);
 }
 
 void tst_QXmlStream::readElementText() const
@@ -1284,6 +1295,14 @@ void tst_QXmlStream::hasAttribute() const
     QVERIFY(atts.hasAttribute(QLatin1String("attr\xE4""bute")));
     // α is not representable in L1...
     QVERIFY(!atts.hasAttribute(QLatin1String("DOESNOTEXIST")));
+
+    /* string literals (UTF-8/16) */
+    QVERIFY(atts.hasAttribute(u8"atträbute"));
+    QVERIFY(atts.hasAttribute( u"atträbute"));
+    QVERIFY(atts.hasAttribute(u8"α"));
+    QVERIFY(atts.hasAttribute( u"α"));
+    QVERIFY(!atts.hasAttribute(u8"β"));
+    QVERIFY(!atts.hasAttribute( u"β"));
 
     /* Test with an empty & null namespaces. */
     QVERIFY(atts.hasAttribute(QString(), QLatin1String("attr2"))); /* A null string. */
@@ -1759,6 +1778,22 @@ void tst_QXmlStream::roundTrip_data() const
                 "<child xmlns:unknown=\"http://mydomain\">Text</child>"
             "</father>"
         "</root>\n";
+
+    // When a namespace is introduced by an attribute of an element,
+    // that element can exercise the namespace in its tag.
+    // This used (QTBUG-75456) to lead to the namespace definition
+    // being wrongly duplicated, with a new name.
+    QTest::newRow("QTBUG-75456") <<
+        "<?xml version=\"1.0\"?>"
+        "<abc:root xmlns:xsd=\"http://www.w3.org/2001/XMLSchema\" xmlns:abc=\"ns1\">"
+            "<abc:parent>"
+                "<abc:child xmlns:unknown=\"http://mydomain\">Text</abc:child>"
+            "</abc:parent>"
+            "<def:parent xmlns:def=\"ns2\" id=\"test\">"
+                "<def:child id=\"Timmy\">More text</def:child>"
+                "<def:child id=\"Jimmy\">Even more text</def:child>"
+            "</def:parent>"
+        "</abc:root>\n";
 }
 
 void tst_QXmlStream::entityExpansionLimit() const
@@ -1825,19 +1860,19 @@ void tst_QXmlStream::test_fastScanName_data() const
 
     // 4096 is the limit in QXmlStreamReaderPrivate::fastScanName()
 
-    QByteArray arr = "<a"_ba + ":" + QByteArray("b").repeated(4096 - 1);
+    QByteArray arr = "<a:" + QByteArray("b").repeated(4096 - 1);
     QTest::newRow("data1") << arr << QXmlStreamReader::PrematureEndOfDocumentError;
 
-    arr = "<a"_ba + ":" + QByteArray("b").repeated(4096);
+    arr = "<a:" + QByteArray("b").repeated(4096);
     QTest::newRow("data2") << arr << QXmlStreamReader::NotWellFormedError;
 
-    arr = "<"_ba + QByteArray("a").repeated(4000) + ":" + QByteArray("b").repeated(96);
+    arr = "<" + QByteArray("a").repeated(4000) + ":" + QByteArray("b").repeated(96);
     QTest::newRow("data3") << arr << QXmlStreamReader::PrematureEndOfDocumentError;
 
-    arr = "<"_ba + QByteArray("a").repeated(4000) + ":" + QByteArray("b").repeated(96 + 1);
+    arr = "<" + QByteArray("a").repeated(4000) + ":" + QByteArray("b").repeated(96 + 1);
     QTest::newRow("data4") << arr << QXmlStreamReader::NotWellFormedError;
 
-    arr = "<"_ba + QByteArray("a").repeated(4000 + 1) + ":" + QByteArray("b").repeated(96);
+    arr = "<" + QByteArray("a").repeated(4000 + 1) + ":" + QByteArray("b").repeated(96);
     QTest::newRow("data5") << arr << QXmlStreamReader::NotWellFormedError;
 }
 
@@ -1855,5 +1890,41 @@ void tst_QXmlStream::test_fastScanName() const
     QCOMPARE(reader.error(), errorType);
 }
 
+void tst_QXmlStream::tokenErrorHandling_data() const
+{
+    QTest::addColumn<QString>("fileName");
+    QTest::addColumn<QXmlStreamReader::Error>("expectedError");
+    QTest::addColumn<QString>("errorKeyWord");
+
+    constexpr auto invalid = QXmlStreamReader::Error::UnexpectedElementError;
+    constexpr auto valid = QXmlStreamReader::Error::NoError;
+    QTest::newRow("DtdInBody") << "dtdInBody.xml" << invalid << "DTD";
+    QTest::newRow("multipleDTD") << "multipleDtd.xml" << invalid << "second DTD";
+    QTest::newRow("wellFormed") << "wellFormed.xml" << valid << "";
+}
+
+void tst_QXmlStream::tokenErrorHandling() const
+{
+    QFETCH(const QString, fileName);
+    QFETCH(const QXmlStreamReader::Error, expectedError);
+    QFETCH(const QString, errorKeyWord);
+
+    const QDir dir(QFINDTESTDATA("tokenError"));
+    QFile file(dir.absoluteFilePath(fileName));
+
+    // Cross-compiling: Files may not be found when running test standalone
+    // QSKIP in that case, because the tested functionality is platform independent.
+    if (!file.exists())
+        QSKIP(QObject::tr("Testfile %1 not found.").arg(fileName).toUtf8().constData());
+
+    file.open(QIODevice::ReadOnly);
+    QXmlStreamReader reader(&file);
+    while (!reader.atEnd())
+        reader.readNext();
+
+    QCOMPARE(reader.error(), expectedError);
+    if (expectedError != QXmlStreamReader::Error::NoError)
+        QVERIFY(reader.errorString().contains(errorKeyWord));
+}
+
 #include "tst_qxmlstream.moc"
-// vim: et:ts=4:sw=4:sts=4

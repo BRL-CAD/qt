@@ -73,7 +73,8 @@ struct PermissionRequest
         return Qt::PermissionStatus::Denied;
     }
 
-    switch ([self authorizationStatus]) {
+    auto status = [self authorizationStatus];
+    switch (status) {
     case kCLAuthorizationStatusRestricted:
     case kCLAuthorizationStatusDenied:
         return Qt::PermissionStatus::Denied;
@@ -89,7 +90,8 @@ struct PermissionRequest
 #endif
     }
 
-    Q_UNREACHABLE();
+    qCWarning(lcPermissions) << "Unknown permission status" << status << "detected in" << self;
+    return Qt::PermissionStatus::Denied;
 }
 
 - (CLAuthorizationStatus)authorizationStatus
@@ -99,7 +101,7 @@ struct PermissionRequest
             return self.manager.authorizationStatus;
     }
 
-    return CLLocationManager.authorizationStatus;
+    return QT_IGNORE_DEPRECATIONS(CLLocationManager.authorizationStatus);
 }
 
 - (Qt::PermissionStatus)accuracyAuthorization:(QLocationPermission)permission
@@ -118,7 +120,8 @@ struct PermissionRequest
             return Qt::PermissionStatus::Denied;
     }
 
-    Q_UNREACHABLE();
+    qCWarning(lcPermissions) << "Unknown accuracy status" << status << "detected in" << self;
+    return Qt::PermissionStatus::Denied;
 }
 
 - (QStringList)usageDescriptionsFor:(QPermission)permission

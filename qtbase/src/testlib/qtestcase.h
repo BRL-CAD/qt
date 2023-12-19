@@ -75,12 +75,12 @@ do { \
     } \
 } while (false)
 
-#define QCOMPARE_EQ(lhs, rhs) QCOMPARE_OP_IMPL(lhs, rhs, ==, Equal)
-#define QCOMPARE_NE(lhs, rhs) QCOMPARE_OP_IMPL(lhs, rhs, !=, NotEqual)
-#define QCOMPARE_LT(lhs, rhs) QCOMPARE_OP_IMPL(lhs, rhs, <, LessThan)
-#define QCOMPARE_LE(lhs, rhs) QCOMPARE_OP_IMPL(lhs, rhs, <=, LessThanOrEqual)
-#define QCOMPARE_GT(lhs, rhs) QCOMPARE_OP_IMPL(lhs, rhs, >, GreaterThan)
-#define QCOMPARE_GE(lhs, rhs) QCOMPARE_OP_IMPL(lhs, rhs, >=, GreaterThanOrEqual)
+#define QCOMPARE_EQ(computed, baseline) QCOMPARE_OP_IMPL(computed, baseline, ==, Equal)
+#define QCOMPARE_NE(computed, baseline) QCOMPARE_OP_IMPL(computed, baseline, !=, NotEqual)
+#define QCOMPARE_LT(computed, baseline) QCOMPARE_OP_IMPL(computed, baseline, <, LessThan)
+#define QCOMPARE_LE(computed, baseline) QCOMPARE_OP_IMPL(computed, baseline, <=, LessThanOrEqual)
+#define QCOMPARE_GT(computed, baseline) QCOMPARE_OP_IMPL(computed, baseline, >, GreaterThan)
+#define QCOMPARE_GE(computed, baseline) QCOMPARE_OP_IMPL(computed, baseline, >=, GreaterThanOrEqual)
 
 #ifndef QT_NO_EXCEPTIONS
 
@@ -209,41 +209,41 @@ do { \
 
 #define QTRY_COMPARE(expr, expected) QTRY_COMPARE_WITH_TIMEOUT(expr, expected, 5000)
 
-#define QTRY_COMPARE_OP_WITH_TIMEOUT_IMPL(left, right, op, opId, timeout) \
+#define QTRY_COMPARE_OP_WITH_TIMEOUT_IMPL(computed, baseline, op, opId, timeout) \
 do { \
-    QTRY_IMPL(((left) op (right)), timeout) \
-    QCOMPARE_OP_IMPL(left, right, op, opId); \
+    QTRY_IMPL(((computed) op (baseline)), timeout) \
+    QCOMPARE_OP_IMPL(computed, baseline, op, opId); \
 } while (false)
 
-#define QTRY_COMPARE_EQ_WITH_TIMEOUT(left, right, timeout) \
-    QTRY_COMPARE_OP_WITH_TIMEOUT_IMPL(left, right, ==, Equal, timeout)
+#define QTRY_COMPARE_EQ_WITH_TIMEOUT(computed, baseline, timeout) \
+    QTRY_COMPARE_OP_WITH_TIMEOUT_IMPL(computed, baseline, ==, Equal, timeout)
 
-#define QTRY_COMPARE_EQ(left, right) QTRY_COMPARE_EQ_WITH_TIMEOUT(left, right, 5000)
+#define QTRY_COMPARE_EQ(computed, baseline) QTRY_COMPARE_EQ_WITH_TIMEOUT(computed, baseline, 5000)
 
-#define QTRY_COMPARE_NE_WITH_TIMEOUT(left, right, timeout) \
-    QTRY_COMPARE_OP_WITH_TIMEOUT_IMPL(left, right, !=, NotEqual, timeout)
+#define QTRY_COMPARE_NE_WITH_TIMEOUT(computed, baseline, timeout) \
+    QTRY_COMPARE_OP_WITH_TIMEOUT_IMPL(computed, baseline, !=, NotEqual, timeout)
 
-#define QTRY_COMPARE_NE(left, right) QTRY_COMPARE_NE_WITH_TIMEOUT(left, right, 5000)
+#define QTRY_COMPARE_NE(computed, baseline) QTRY_COMPARE_NE_WITH_TIMEOUT(computed, baseline, 5000)
 
-#define QTRY_COMPARE_LT_WITH_TIMEOUT(left, right, timeout) \
-    QTRY_COMPARE_OP_WITH_TIMEOUT_IMPL(left, right, <, LessThan, timeout)
+#define QTRY_COMPARE_LT_WITH_TIMEOUT(computed, baseline, timeout) \
+    QTRY_COMPARE_OP_WITH_TIMEOUT_IMPL(computed, baseline, <, LessThan, timeout)
 
-#define QTRY_COMPARE_LT(left, right) QTRY_COMPARE_LT_WITH_TIMEOUT(left, right, 5000)
+#define QTRY_COMPARE_LT(computed, baseline) QTRY_COMPARE_LT_WITH_TIMEOUT(computed, baseline, 5000)
 
-#define QTRY_COMPARE_LE_WITH_TIMEOUT(left, right, timeout) \
-    QTRY_COMPARE_OP_WITH_TIMEOUT_IMPL(left, right, <=, LessThanOrEqual, timeout)
+#define QTRY_COMPARE_LE_WITH_TIMEOUT(computed, baseline, timeout) \
+    QTRY_COMPARE_OP_WITH_TIMEOUT_IMPL(computed, baseline, <=, LessThanOrEqual, timeout)
 
-#define QTRY_COMPARE_LE(left, right) QTRY_COMPARE_LE_WITH_TIMEOUT(left, right, 5000)
+#define QTRY_COMPARE_LE(computed, baseline) QTRY_COMPARE_LE_WITH_TIMEOUT(computed, baseline, 5000)
 
-#define QTRY_COMPARE_GT_WITH_TIMEOUT(left, right, timeout) \
-    QTRY_COMPARE_OP_WITH_TIMEOUT_IMPL(left, right, >, GreaterThan, timeout)
+#define QTRY_COMPARE_GT_WITH_TIMEOUT(computed, baseline, timeout) \
+    QTRY_COMPARE_OP_WITH_TIMEOUT_IMPL(computed, baseline, >, GreaterThan, timeout)
 
-#define QTRY_COMPARE_GT(left, right) QTRY_COMPARE_GT_WITH_TIMEOUT(left, right, 5000)
+#define QTRY_COMPARE_GT(computed, baseline) QTRY_COMPARE_GT_WITH_TIMEOUT(computed, baseline, 5000)
 
-#define QTRY_COMPARE_GE_WITH_TIMEOUT(left, right, timeout) \
-    QTRY_COMPARE_OP_WITH_TIMEOUT_IMPL(left, right, >=, GreaterThanOrEqual, timeout)
+#define QTRY_COMPARE_GE_WITH_TIMEOUT(computed, baseline, timeout) \
+    QTRY_COMPARE_OP_WITH_TIMEOUT_IMPL(computed, baseline, >=, GreaterThanOrEqual, timeout)
 
-#define QTRY_COMPARE_GE(left, right) QTRY_COMPARE_GE_WITH_TIMEOUT(left, right, 5000)
+#define QTRY_COMPARE_GE(computed, baseline) QTRY_COMPARE_GE_WITH_TIMEOUT(computed, baseline, 5000)
 
 #define QSKIP_INTERNAL(statement) \
 do {\
@@ -315,16 +315,17 @@ namespace QTest
     template <typename T> // Fallback; for built-in types debug streaming must be possible
     inline typename std::enable_if<!QtPrivate::IsQEnumHelper<T>::Value && !std::is_enum_v<T>, char *>::type toString(const T &t)
     {
+        char *result = nullptr;
 #ifndef QT_NO_DEBUG_STREAM
         if constexpr (QTypeTraits::has_ostream_operator_v<QDebug, T>) {
-            return qstrdup(QDebug::toString(t).toUtf8().constData());
+            result = qstrdup(QDebug::toString(t).toUtf8().constData());
         } else {
             static_assert(!QMetaTypeId2<T>::IsBuiltIn,
                         "Built-in type must implement debug streaming operator "
                         "or provide QTest::toString specialization");
         }
 #endif
-        return nullptr;
+        return result;
     }
 
     template<typename F> // Output QFlags of registered enumerations
@@ -359,6 +360,9 @@ namespace QTest
 
     template <class... Types>
     inline char *toString(const std::tuple<Types...> &tuple);
+
+    template <typename Rep, typename Period>
+    inline char *toString(std::chrono::duration<Rep, Period> duration);
 
     Q_TESTLIB_EXPORT char *toHexRepresentation(const char *ba, qsizetype length);
     Q_TESTLIB_EXPORT char *toPrettyCString(const char *unicode, qsizetype length);
@@ -578,7 +582,7 @@ namespace QTest
     QTEST_COMPARE_DECL(bool)
 #endif
 
-    template <typename T1, typename T2>
+    template <typename T1, typename T2 = T1>
     inline bool qCompare(const T1 &t1, const T2 &t2, const char *actual, const char *expected,
                          const char *file, int line)
     {

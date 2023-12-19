@@ -507,7 +507,7 @@ void tst_QTimeZone::asBackendZone()
 void tst_QTimeZone::systemZone()
 {
     const QTimeZone zone = QTimeZone::systemTimeZone();
-    QVERIFY(zone.isValid());
+    QVERIFY2(zone.isValid(), "Invalid system zone setting, tests are doomed.");
     QCOMPARE(zone.id(), QTimeZone::systemTimeZoneId());
     QCOMPARE(zone, QTimeZone(QTimeZone::systemTimeZoneId()));
     // Check it behaves the same as local-time:
@@ -533,6 +533,12 @@ void tst_QTimeZone::isTimeZoneIdAvailable()
 {
     const QList<QByteArray> available = QTimeZone::availableTimeZoneIds();
     for (const QByteArray &id : available) {
+        QVERIFY2(QTimeZone::isTimeZoneIdAvailable(id), id);
+        QVERIFY2(QTimeZone(id).isValid(), id);
+    }
+    for (qint32 offset = QTimeZone::MinUtcOffsetSecs;
+         offset <= QTimeZone::MinUtcOffsetSecs; ++offset) {
+        const QByteArray id = QTimeZone(offset).id();
         QVERIFY2(QTimeZone::isTimeZoneIdAvailable(id), id);
         QVERIFY2(QTimeZone(id).isValid(), id);
     }
@@ -777,17 +783,29 @@ void tst_QTimeZone::transitionEachZone()
 
 void tst_QTimeZone::checkOffset_data()
 {
-    QTest::addColumn<QByteArray>("zoneName");
+    QTest::addColumn<QTimeZone>("zone");
     QTest::addColumn<QDateTime>("when");
     QTest::addColumn<int>("netOffset");
     QTest::addColumn<int>("stdOffset");
     QTest::addColumn<int>("dstOffset");
+
+    const QTimeZone UTC = QTimeZone::UTC;
+    QTest::addRow("UTC")
+        << UTC << QDate(1970, 1, 1).startOfDay(UTC) << 0 << 0 << 0;
+    const auto east = QTimeZone::fromSecondsAheadOfUtc(28'800); // 8 hours
+    QTest::addRow("UTC+8")
+        << east << QDate(2000, 2, 29).startOfDay(east) << 28'800 << 28'800 << 0;
+    const auto west = QTimeZone::fromDurationAheadOfUtc(std::chrono::hours{-8});
+    QTest::addRow("UTC-8")
+        << west << QDate(2100, 2, 28).startOfDay(west) << -28'800 << -28'800 << 0;
 
     struct {
         const char *zone, *nick;
         int year, month, day, hour, min, sec;
         int std, dst;
     } table[] = {
+        // Exercise the UTC-backend:
+        { "UTC", "epoch", 1970, 1, 1, 0, 0, 0, 0, 0 },
         // Zone with no transitions (QTBUG-74614, QTBUG-74666, when TZ backend uses minimal data)
         { "Etc/UTC", "epoch", 1970, 1, 1, 0, 0, 0, 0, 0 },
         { "Etc/UTC", "pre_int32", 1901, 12, 13, 20, 45, 51, 0, 0 },
@@ -795,42 +813,44 @@ void tst_QTimeZone::checkOffset_data()
         { "Etc/UTC", "post_uint32", 2106, 2, 7, 6, 28, 17, 0, 0 },
         { "Etc/UTC", "initial", -292275056, 5, 16, 16, 47, 5, 0, 0 },
         { "Etc/UTC", "final", 292278994, 8, 17, 7, 12, 55, 0, 0 },
-        // Kiev: regression test for QTBUG-64122 (on MS):
-        { "Europe/Kiev", "summer", 2017, 10, 27, 12, 0, 0, 2 * 3600, 3600 },
-        { "Europe/Kiev", "winter", 2017, 10, 29, 12, 0, 0, 2 * 3600, 0 }
+        // Kyiv: regression test for QTBUG-64122 (on MS):
+        { "Europe/Kyiv", "summer", 2017, 10, 27, 12, 0, 0, 2 * 3600, 3600 },
+        { "Europe/Kyiv", "winter", 2017, 10, 29, 12, 0, 0, 2 * 3600, 0 }
     };
-    bool lacksRows = true;
     for (const auto &entry : table) {
         QTimeZone zone(entry.zone);
         if (zone.isValid()) {
             QTest::addRow("%s@%s", entry.zone, entry.nick)
-                << QByteArray(entry.zone)
+                << zone
                 << QDateTime(QDate(entry.year, entry.month, entry.day),
                              QTime(entry.hour, entry.min, entry.sec), zone)
                 << entry.dst + entry.std << entry.std << entry.dst;
-            lacksRows = false;
         } else {
             qWarning("Skipping %s@%s test as zone is invalid", entry.zone, entry.nick);
         }
     }
-    if (lacksRows)
-        QSKIP("No valid zone info found, skipping test");
 }
 
 void tst_QTimeZone::checkOffset()
 {
-    QFETCH(QByteArray, zoneName);
+    QFETCH(QTimeZone, zone);
     QFETCH(QDateTime, when);
     QFETCH(int, netOffset);
     QFETCH(int, stdOffset);
     QFETCH(int, dstOffset);
 
-    QTimeZone zone(zoneName);
     QVERIFY(zone.isValid()); // It was when _data() added the row !
     QCOMPARE(zone.offsetFromUtc(when), netOffset);
     QCOMPARE(zone.standardTimeOffset(when), stdOffset);
     QCOMPARE(zone.daylightTimeOffset(when), dstOffset);
     QCOMPARE(zone.isDaylightTime(when), dstOffset != 0);
+
+    // Also test offsetData(), which gets all this data in one go:
+    const auto data = zone.offsetData(when);
+    QCOMPARE(data.atUtc, when);
+    QCOMPARE(data.offsetFromUtc, netOffset);
+    QCOMPARE(data.standardTimeOffset, stdOffset);
+    QCOMPARE(data.daylightTimeOffset, dstOffset);
 }
 
 void tst_QTimeZone::availableTimeZoneIds()
@@ -940,8 +960,8 @@ void tst_QTimeZone::windowsId()
     list << "America/Chicago" << "America/Indiana/Knox" << "America/Indiana/Tell_City"
          << "America/Matamoros" << "America/Menominee" << "America/North_Dakota/Beulah"
          << "America/North_Dakota/Center" << "America/North_Dakota/New_Salem"
-         << "America/Rainy_River" << "America/Rankin_Inlet" << "America/Resolute"
-         << "America/Winnipeg" << "CST6CDT";
+         << "America/Ojinaga" << "America/Rainy_River" << "America/Rankin_Inlet"
+         << "America/Resolute" << "America/Winnipeg" << "CST6CDT";
     QCOMPARE(QTimeZone::windowsIdToIanaIds("Central Standard Time"), list);
 
     // Check country with no match returns empty list
@@ -956,7 +976,7 @@ void tst_QTimeZone::windowsId()
     QCOMPARE(QTimeZone::windowsIdToIanaIds("Central Standard Time", QLocale::Canada), list);
 
     list.clear();
-    list << "America/Matamoros";
+    list << "America/Matamoros" << "America/Ojinaga";
     QCOMPARE(QTimeZone::windowsIdToIanaIds("Central Standard Time", QLocale::Mexico), list);
 
     list.clear();
@@ -1162,9 +1182,9 @@ void tst_QTimeZone::utcTest()
     QCOMPARE(tz.standardTimeOffset(now), 36000);
     QCOMPARE(tz.daylightTimeOffset(now), 0);
 
-    // Test invalid UTC offset, must be in range -14 to +14 hours
-    int min = -14*60*60;
-    int max = 14*60*60;
+    // Test validity range of UTC offsets:
+    int min = QTimeZone::MinUtcOffsetSecs;
+    int max = QTimeZone::MaxUtcOffsetSecs;
     QCOMPARE(QTimeZone(min - 1).isValid(), false);
     QCOMPARE(QTimeZone(min).isValid(), true);
     QCOMPARE(QTimeZone(min + 1).isValid(), true);
@@ -1260,7 +1280,7 @@ void tst_QTimeZone::tzTest()
 
     // Test invalid constructor
     QTzTimeZonePrivate tzpi("Gondwana/Erewhon");
-    QCOMPARE(tzpi.isValid(), false);
+    QVERIFY(!tzpi.isValid());
 
     // Test named constructor
     QTzTimeZonePrivate tzp("Europe/Berlin");
@@ -1427,9 +1447,12 @@ void tst_QTimeZone::tzTest()
     QCOMPARE(datatz1.offsetFromUtc, datautc1.offsetFromUtc);
 
     // Test TZ timezone vs UTC timezone for non-whole-hour positive offset:
-    QTzTimeZonePrivate  tztz2("Asia/Calcutta");
+    QTzTimeZonePrivate tztz2k("Asia/Kolkata"); // New name
+    QTzTimeZonePrivate tztz2c("Asia/Calcutta"); // Legacy name
+    // Can't assign QtzTZP, so use a reference; prefer new name.
+    QTzTimeZonePrivate &tztz2 = tztz2k.isValid() ? tztz2k : tztz2c;
     QUtcTimeZonePrivate tzutc2("UTC+05:30");
-    QVERIFY(tztz2.isValid());
+    QVERIFY2(tztz2.isValid(), tztz2.id().constData());
     QVERIFY(tzutc2.isValid());
     QTzTimeZonePrivate::Data datatz2 = tztz2.data(std);
     QTzTimeZonePrivate::Data datautc2 = tzutc2.data(std);

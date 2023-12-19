@@ -581,7 +581,7 @@ public class QtNative
         if (event.getToolType(0) == MotionEvent.TOOL_TYPE_MOUSE) {
             sendMouseEvent(event, id);
         } else if (m_tabletEventSupported && pointerType != 0) {
-            tabletEvent(id, event.getDeviceId(), event.getEventTime(), event.getAction(), pointerType,
+            tabletEvent(id, event.getDeviceId(), event.getEventTime(), event.getActionMasked(), pointerType,
                 event.getButtonState(), event.getX(), event.getY(), event.getPressure());
         } else {
             touchBegin(id);
@@ -895,7 +895,7 @@ public class QtNative
 
     public static boolean hasClipboardText()
     {
-       return hasClipboardMimeType("text/plain");
+       return hasClipboardMimeType("text/(.*)");
     }
 
     private static String getClipboardText()
@@ -953,7 +953,7 @@ public class QtNative
 
         for (int i = 0; i < description.getMimeTypeCount(); ++i) {
             String itemMimeType = description.getMimeType(i);
-            if (itemMimeType.equals(mimeType))
+            if (itemMimeType.matches(mimeType))
                 return true;
         }
         return false;

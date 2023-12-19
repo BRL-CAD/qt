@@ -107,7 +107,7 @@ function(qt6_android_generate_deployment_settings target)
         set(config_suffix "$<$<NOT:$<CONFIG:${first_config_type}>>:-$<CONFIG>>")
     endif()
     set(deploy_file
-      "${target_binary_dir}/android-${target_output_name}-deployment-settings${config_suffix}.json")
+      "${target_binary_dir}/android-${target}-deployment-settings${config_suffix}.json")
 
     set(file_contents "{\n")
     # content begin
@@ -367,7 +367,11 @@ function(qt6_android_add_apk_target target)
     endif()
     # Use genex to get path to the deployment settings, the above check only to confirm that
     # qt6_android_add_apk_target is called on an android executable target.
-    set(deployment_file "$<TARGET_PROPERTY:${target},QT_ANDROID_DEPLOYMENT_SETTINGS_FILE>")
+    string(JOIN "" deployment_file
+        "$<GENEX_EVAL:"
+            "$<TARGET_PROPERTY:${target},QT_ANDROID_DEPLOYMENT_SETTINGS_FILE>"
+        ">"
+    )
 
     # Make global apk and aab targets depend on the current apk target.
     if(TARGET aab)
@@ -894,7 +898,39 @@ endfunction()
 # It doesn't overwrite public properties, but instead writes formatted values to internal
 # properties.
 function(_qt_internal_android_format_deployment_paths target)
-    if(QT_BUILD_STANDALONE_TESTS OR QT_BUILDING_QT)
+    if(QT_BUILD_STANDALONE_TESTS OR QT_BUILDING_QT OR QT_INTERNAL_IS_STANDALONE_TEST)
+        set(android_deployment_paths_policy NEW)
+    else()
+        set(policy_path_properties
+            QT_QML_IMPORT_PATH
+            QT_QML_ROOT_PATH
+            QT_ANDROID_PACKAGE_SOURCE_DIR
+            QT_ANDROID_EXTRA_PLUGINS
+            QT_ANDROID_EXTRA_LIBS
+        )
+
+        # Check if any of paths contains the value and stop the evaluation if all properties are
+        # empty or -NOTFOUND
+        set(has_android_paths FALSE)
+        foreach(prop_name IN LISTS policy_path_properties)
+            get_target_property(prop_value ${target} ${prop_name})
+            if(prop_value)
+                set(has_android_paths TRUE)
+                break()
+            endif()
+        endforeach()
+        if(NOT has_android_paths)
+            return()
+        endif()
+
+        __qt_internal_setup_policy(QTP0002 "6.6.0"
+            "Target properties that specify android-specific paths may contain generator\
+            expressions but they must evaluate to valid JSON strings.\
+            Check https://doc.qt.io/qt-6/qt-cmake-policy-qtp0002.html for policy details."
+        )
+        qt6_policy(GET QTP0002 android_deployment_paths_policy)
+    endif()
+    if(android_deployment_paths_policy STREQUAL "NEW")
         # When building standalone tests or Qt itself we obligate developers to not use
         # windows paths when setting QT_* properties below, so their values are used as is when
         # generating deployment settings.
@@ -994,7 +1030,7 @@ function(_qt_internal_get_android_abi_cmake_dir_path out_path abi)
     else()
         _qt_internal_get_android_abi_prefix_path(prefix_path ${abi})
         if((PROJECT_NAME STREQUAL "QtBase" OR QT_SUPERBUILD) AND QT_BUILDING_QT AND
-            NOT QT_BUILD_STANDALONE_TESTS)
+            NOT QT_BUILD_STANDALONE_TESTS AND NOT QT_INTERNAL_IS_STANDALONE_TEST)
             set(cmake_dir "${QT_CONFIG_BUILD_DIR}")
         else()
             set(cmake_dir "${prefix_path}/${QT6_INSTALL_LIBS}/cmake")

@@ -2,19 +2,23 @@
 // SPDX-License-Identifier: LicenseRef-Qt-Commercial OR BSD-3-Clause
 
 #include "cborconverter.h"
+#include "variantorderedmap.h"
 
+#include <QCborArray>
+#include <QCborMap>
 #include <QCborStreamReader>
 #include <QCborStreamWriter>
-#include <QCborMap>
-#include <QCborArray>
 #include <QCborValue>
 #include <QDataStream>
-#include <QFloat16>
+#include <QDebug>
 #include <QFile>
+#include <QFloat16>
 #include <QMetaType>
 #include <QTextStream>
 
 #include <stdio.h>
+
+using namespace Qt::StringLiterals;
 
 static CborConverter cborConverter;
 static CborDiagnosticDumper cborDiagnosticDumper;
@@ -55,9 +59,9 @@ QT_END_NAMESPACE
 // non-string keys in CBOR maps (QVariantMap can't handle those). Instead, we
 // have our own set of converter functions so we can keep the keys properly.
 
+//! [0]
 static QVariant convertCborValue(const QCborValue &value);
 
-//! [0]
 static QVariant convertCborMap(const QCborMap &map)
 {
     VariantOrderedMap result;
@@ -85,8 +89,9 @@ static QVariant convertCborValue(const QCborValue &value)
     return value.toVariant();
 }
 //! [0]
-enum TrimFloatingPoint { Double, Float, Float16 };
+
 //! [1]
+enum TrimFloatingPoint { Double, Float, Float16 };
 static QCborValue convertFromVariant(const QVariant &v, TrimFloatingPoint fpTrimming)
 {
     if (v.userType() == QMetaType::QVariantList) {
@@ -118,41 +123,28 @@ static QCborValue convertFromVariant(const QVariant &v, TrimFloatingPoint fpTrim
 }
 //! [1]
 
-QString CborDiagnosticDumper::name()
+QString CborDiagnosticDumper::name() const
 {
-    return QStringLiteral("cbor-dump");
+    return "cbor-dump"_L1;
 }
 
-Converter::Direction CborDiagnosticDumper::directions()
+Converter::Directions CborDiagnosticDumper::directions() const
 {
-    return Out;
+    return Direction::Out;
 }
 
-Converter::Options CborDiagnosticDumper::outputOptions()
+Converter::Options CborDiagnosticDumper::outputOptions() const
 {
     return SupportsArbitraryMapKeys;
 }
 
-const char *CborDiagnosticDumper::optionsHelp()
+const char *CborDiagnosticDumper::optionsHelp() const
 {
     return diagnosticHelp;
 }
 
-bool CborDiagnosticDumper::probeFile(QIODevice *f)
-{
-    Q_UNUSED(f);
-    return false;
-}
-
-QVariant CborDiagnosticDumper::loadFile(QIODevice *f, Converter *&outputConverter)
-{
-    Q_UNREACHABLE();
-    Q_UNUSED(f);
-    Q_UNUSED(outputConverter);
-    return QVariant();
-}
-
-void CborDiagnosticDumper::saveFile(QIODevice *f, const QVariant &contents, const QStringList &options)
+void CborDiagnosticDumper::saveFile(QIODevice *f, const QVariant &contents,
+                                    const QStringList &options) const
 {
     QCborValue::DiagnosticNotationOptions opts = QCborValue::LineWrapped;
     for (const QString &s : options) {
@@ -175,14 +167,12 @@ void CborDiagnosticDumper::saveFile(QIODevice *f, const QVariant &contents, cons
             }
         }
 
-        fprintf(stderr, "Unknown CBOR diagnostic option '%s'. Available options are:\n%s",
-                qPrintable(s), diagnosticHelp);
-        exit(EXIT_FAILURE);
+        qFatal("Unknown CBOR diagnostic option '%s'. Available options are:\n%s",
+               qPrintable(s), diagnosticHelp);
     }
 
     QTextStream out(f);
-    out << convertFromVariant(contents, Double).toDiagnosticNotation(opts)
-        << Qt::endl;
+    out << convertFromVariant(contents, Double).toDiagnosticNotation(opts) << Qt::endl;
 }
 
 CborConverter::CborConverter()
@@ -190,37 +180,36 @@ CborConverter::CborConverter()
     qRegisterMetaType<QCborTag>();
 }
 
-QString CborConverter::name()
+QString CborConverter::name() const
 {
     return "cbor";
 }
 
-Converter::Direction CborConverter::directions()
+Converter::Directions CborConverter::directions() const
 {
-    return InOut;
+    return Direction::InOut;
 }
 
-Converter::Options CborConverter::outputOptions()
+Converter::Options CborConverter::outputOptions() const
 {
     return SupportsArbitraryMapKeys;
 }
 
-const char *CborConverter::optionsHelp()
+const char *CborConverter::optionsHelp() const
 {
     return cborOptionHelp;
 }
 
-bool CborConverter::probeFile(QIODevice *f)
+bool CborConverter::probeFile(QIODevice *f) const
 {
     if (QFile *file = qobject_cast<QFile *>(f)) {
-        if (file->fileName().endsWith(QLatin1String(".cbor")))
+        if (file->fileName().endsWith(".cbor"_L1))
             return true;
     }
     return f->isReadable() && f->peek(3) == QByteArray("\xd9\xd9\xf7", 3);
 }
 
-//! [2]
-QVariant CborConverter::loadFile(QIODevice *f, Converter *&outputConverter)
+QVariant CborConverter::loadFile(QIODevice *f, const Converter *&outputConverter) const
 {
     const char *ptr = nullptr;
     if (auto file = qobject_cast<QFile *>(f))
@@ -237,28 +226,25 @@ QVariant CborConverter::loadFile(QIODevice *f, Converter *&outputConverter)
     QCborValue contents = QCborValue::fromCbor(reader);
     qint64 offset = reader.currentOffset();
     if (reader.lastError()) {
-        fprintf(stderr, "Error loading CBOR contents (byte %lld): %s\n", offset,
-                qPrintable(reader.lastError().toString()));
-        fprintf(stderr, " bytes: %s\n",
-                (ptr ? mapped.mid(offset, 9) : f->read(9)).toHex(' ').constData());
-        exit(EXIT_FAILURE);
+        qFatal().nospace()
+            << "Error loading CBOR contents (byte " << offset
+            << "): " << reader.lastError().toString()
+            << "\n bytes: " << (ptr ? mapped.mid(offset, 9) : f->read(9));
     } else if (offset < mapped.size() || (!ptr && f->bytesAvailable())) {
-        fprintf(stderr, "Warning: bytes remaining at the end of the CBOR stream\n");
+        qWarning("Warning: bytes remaining at the end of the CBOR stream");
     }
 
     if (outputConverter == nullptr)
         outputConverter = &cborDiagnosticDumper;
-    else if (outputConverter == null)
+    else if (isNull(outputConverter))
         return QVariant();
     else if (!outputConverter->outputOptions().testFlag(SupportsArbitraryMapKeys))
         return contents.toVariant();
     return convertCborValue(contents);
 }
-//! [2]
-//! [3]
-void CborConverter::saveFile(QIODevice *f, const QVariant &contents, const QStringList &options)
+
+void CborConverter::saveFile(QIODevice *f, const QVariant &contents, const QStringList &options) const
 {
-    //! [3]
     bool useSignature = true;
     bool useIntegers = true;
     enum { Yes, No, Always } useFloat16 = Yes, useFloat = Yes;
@@ -313,13 +299,13 @@ void CborConverter::saveFile(QIODevice *f, const QVariant &contents, const QStri
             }
         }
 
-        fprintf(stderr, "Unknown CBOR format option '%s'. Valid options are:\n%s",
-                qPrintable(s), cborOptionHelp);
-        exit(EXIT_FAILURE);
+        qFatal("Unknown CBOR format option '%s'. Valid options are:\n%s",
+               qPrintable(s), cborOptionHelp);
     }
-    //! [4]
-    QCborValue v = convertFromVariant(contents,
-                                      useFloat16 == Always ? Float16 : useFloat == Always ? Float : Double);
+
+    QCborValue v =
+        convertFromVariant(contents,
+                           useFloat16 == Always ? Float16 : useFloat == Always ? Float : Double);
     QCborStreamWriter writer(f);
     if (useSignature)
         writer.append(QCborKnownTags::Signature);
@@ -333,4 +319,3 @@ void CborConverter::saveFile(QIODevice *f, const QVariant &contents, const QStri
         opts |= QCborValue::UseFloat16;
     v.toCbor(writer, opts);
 }
-//! [4]

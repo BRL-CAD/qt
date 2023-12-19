@@ -303,8 +303,9 @@ not ok 38 - compareQListDouble()
   file: qtbase/tests/auto/testlib/selftests/cmptest/tst_cmptest.cpp
   line: 0
   ...
-ok 39 - compareQColor(Qt::yellow vs "yellow")
-not ok 40 - compareQColor(Qt::yellow vs Qt::green)
+ok 39 - compareContainerToInitializerList()
+ok 40 - compareQColor(Qt::yellow vs "yellow")
+not ok 41 - compareQColor(Qt::yellow vs Qt::green)
   ---
   type: QCOMPARE
   message: Compared values are not the same
@@ -316,7 +317,7 @@ not ok 40 - compareQColor(Qt::yellow vs Qt::green)
   file: qtbase/tests/auto/testlib/selftests/cmptest/tst_cmptest.cpp
   line: 0
   ...
-not ok 41 - compareQColor(0x88ff0000 vs 0xffff0000)
+not ok 42 - compareQColor(0x88ff0000 vs 0xffff0000)
   ---
   type: QCOMPARE
   message: Compared values are not the same
@@ -328,8 +329,8 @@ not ok 41 - compareQColor(0x88ff0000 vs 0xffff0000)
   file: qtbase/tests/auto/testlib/selftests/cmptest/tst_cmptest.cpp
   line: 0
   ...
-ok 42 - compareQPixmaps(both null)
-not ok 43 - compareQPixmaps(one null)
+ok 43 - compareQPixmaps(both null)
+not ok 44 - compareQPixmaps(one null)
   ---
   type: QCOMPARE
   message: Compared QPixmaps differ.
@@ -341,7 +342,7 @@ not ok 43 - compareQPixmaps(one null)
   file: qtbase/tests/auto/testlib/selftests/cmptest/tst_cmptest.cpp
   line: 0
   ...
-not ok 44 - compareQPixmaps(other null)
+not ok 45 - compareQPixmaps(other null)
   ---
   type: QCOMPARE
   message: Compared QPixmaps differ.
@@ -353,8 +354,8 @@ not ok 44 - compareQPixmaps(other null)
   file: qtbase/tests/auto/testlib/selftests/cmptest/tst_cmptest.cpp
   line: 0
   ...
-ok 45 - compareQPixmaps(equal)
-not ok 46 - compareQPixmaps(different size)
+ok 46 - compareQPixmaps(equal)
+not ok 47 - compareQPixmaps(different size)
   ---
   type: QCOMPARE
   message: Compared QPixmaps differ in size.
@@ -366,14 +367,14 @@ not ok 46 - compareQPixmaps(different size)
   file: qtbase/tests/auto/testlib/selftests/cmptest/tst_cmptest.cpp
   line: 0
   ...
-not ok 47 - compareQPixmaps(different pixels)
+not ok 48 - compareQPixmaps(different pixels)
   ---
   # Compared values are not the same
   at: tst_Cmptest::compareQPixmaps() (qtbase/tests/auto/testlib/selftests/cmptest/tst_cmptest.cpp:0)
   file: qtbase/tests/auto/testlib/selftests/cmptest/tst_cmptest.cpp
   line: 0
   ...
-not ok 48 - compareQPixmaps(different dpr)
+not ok 49 - compareQPixmaps(different dpr)
   ---
   type: QCOMPARE
   message: Compared QPixmaps differ in device pixel ratio.
@@ -385,8 +386,8 @@ not ok 48 - compareQPixmaps(different dpr)
   file: qtbase/tests/auto/testlib/selftests/cmptest/tst_cmptest.cpp
   line: 0
   ...
-ok 49 - compareQImages(both null)
-not ok 50 - compareQImages(one null)
+ok 50 - compareQImages(both null)
+not ok 51 - compareQImages(one null)
   ---
   type: QCOMPARE
   message: Compared QImages differ.
@@ -398,7 +399,7 @@ not ok 50 - compareQImages(one null)
   file: qtbase/tests/auto/testlib/selftests/cmptest/tst_cmptest.cpp
   line: 0
   ...
-not ok 51 - compareQImages(other null)
+not ok 52 - compareQImages(other null)
   ---
   type: QCOMPARE
   message: Compared QImages differ.
@@ -410,8 +411,8 @@ not ok 51 - compareQImages(other null)
   file: qtbase/tests/auto/testlib/selftests/cmptest/tst_cmptest.cpp
   line: 0
   ...
-ok 52 - compareQImages(equal)
-not ok 53 - compareQImages(different size)
+ok 53 - compareQImages(equal)
+not ok 54 - compareQImages(different size)
   ---
   type: QCOMPARE
   message: Compared QImages differ in size.
@@ -423,7 +424,7 @@ not ok 53 - compareQImages(different size)
   file: qtbase/tests/auto/testlib/selftests/cmptest/tst_cmptest.cpp
   line: 0
   ...
-not ok 54 - compareQImages(different format)
+not ok 55 - compareQImages(different format)
   ---
   type: QCOMPARE
   message: Compared QImages differ in format.
@@ -435,14 +436,14 @@ not ok 54 - compareQImages(different format)
   file: qtbase/tests/auto/testlib/selftests/cmptest/tst_cmptest.cpp
   line: 0
   ...
-not ok 55 - compareQImages(different pixels)
+not ok 56 - compareQImages(different pixels)
   ---
   # Compared values are not the same
   at: tst_Cmptest::compareQImages() (qtbase/tests/auto/testlib/selftests/cmptest/tst_cmptest.cpp:0)
   file: qtbase/tests/auto/testlib/selftests/cmptest/tst_cmptest.cpp
   line: 0
   ...
-not ok 56 - compareQImages(different dpr)
+not ok 57 - compareQImages(different dpr)
   ---
   type: QCOMPARE
   message: Compared QImages differ in device pixel ratio.
@@ -454,8 +455,8 @@ not ok 56 - compareQImages(different dpr)
   file: qtbase/tests/auto/testlib/selftests/cmptest/tst_cmptest.cpp
   line: 0
   ...
-ok 57 - compareQRegion(equal-empty)
-not ok 58 - compareQRegion(1-empty)
+ok 58 - compareQRegion(equal-empty)
+not ok 59 - compareQRegion(1-empty)
   ---
   type: QCOMPARE
   message: Compared values are not the same
@@ -467,8 +468,8 @@ not ok 58 - compareQRegion(1-empty)
   file: qtbase/tests/auto/testlib/selftests/cmptest/tst_cmptest.cpp
   line: 0
   ...
-ok 59 - compareQRegion(equal)
-not ok 60 - compareQRegion(different lists)
+ok 60 - compareQRegion(equal)
+not ok 61 - compareQRegion(different lists)
   ---
   type: QCOMPARE
   message: Compared values are not the same
@@ -480,7 +481,7 @@ not ok 60 - compareQRegion(different lists)
   file: qtbase/tests/auto/testlib/selftests/cmptest/tst_cmptest.cpp
   line: 0
   ...
-not ok 61 - compareQVector2D()
+not ok 62 - compareQVector2D()
   ---
   type: QCOMPARE
   message: Compared values are not the same
@@ -492,7 +493,7 @@ not ok 61 - compareQVector2D()
   file: qtbase/tests/auto/testlib/selftests/cmptest/tst_cmptest.cpp
   line: 0
   ...
-not ok 62 - compareQVector3D()
+not ok 63 - compareQVector3D()
   ---
   type: QCOMPARE
   message: Compared values are not the same
@@ -504,7 +505,7 @@ not ok 62 - compareQVector3D()
   file: qtbase/tests/auto/testlib/selftests/cmptest/tst_cmptest.cpp
   line: 0
   ...
-not ok 63 - compareQVector4D()
+not ok 64 - compareQVector4D()
   ---
   type: QCOMPARE
   message: Compared values are not the same
@@ -516,7 +517,32 @@ not ok 63 - compareQVector4D()
   file: qtbase/tests/auto/testlib/selftests/cmptest/tst_cmptest.cpp
   line: 0
   ...
-not ok 64 - tryCompare()
+not ok 65 - compareQPalettes(all roles are different)
+  ---
+  type: QCOMPARE
+  message: Compared values are not the same
+  wanted: QPalette(resolve=0x7fffffffffffffff,"WindowText:[Active:#ff000000,Disabled:#ff000000,Inactive:#ff000000],Button:[Active:#ff000000,Disabled:#ff000000,Inactive:#ff000000],Light:[Active:#ff000000,Disabled:#ff000000,Inactive:#ff000000],Midlight:[Active:#ff000000,Disabled:#ff000000,Inactive:#ff000000],Dark:[Active:#ff000000,Disabled:#ff000000,Inactive:#ff000000],Mid:[Active:#ff000000,Disabled:#ff000000,Inactive:#ff000000],Text:[Active:#ff000000,Disabled:#ff000000,Inactive:#ff000000],BrightText:[Active:#ff000000,Disabled:#ff000000,Inactive:#ff000000],ButtonText:[Active:#ff000000,Disabled:#ff000000,Inactive:#ff000000],Base:[Active:#ff000000,Disabled:#ff000000,Inactive:#ff000000],Window:[Active:#ff000000,Disabled:#ff000000,Inactive:#ff000000],Shadow:[Active:#ff000000,Disabled:#ff000000,Inactive:#ff000000],Highlight:[Active:#ff000000,Disabled:#ff000000,Inactive:#ff000000],HighlightedText:[Active:#ff000000,Disabled:#ff000000,Inactive:#ff000000],Link:[Active:#ff000000,Disabled:#ff000000,Inactive:#ff000000],LinkVisited:[Active:#ff000000,Disabled:#ff000000,Inactive:#ff000000],AlternateBase:[Active:#ff000000,Disabled:#ff000000,Inactive:#ff000000],ToolTipBase:[Active:#ff000000,Disabled:#ff000000,Inactive:#ff000000],ToolTipText:[Active:#ff000000,Disabled:#ff000000,Inactive:#ff000000],PlaceholderText:[Active:#ff000000,Disabled:#ff000000,Inactive:#ff000000],Accent:[Active:#ff000000,Disabled:#ff000000,Inactive:#ff000000]") (expectedPalette)
+  found: QPalette(resolve=0x7fffffffffffffff,"WindowText:[Active:#ff000000,Disabled:#ff000000,Inactive:#ff000000],Button:[Active:#ff000001,Disabled:#ff000001,Inactive:#ff000001],Light:[Active:#ff000002,Disabled:#ff000002,Inactive:#ff000002],Midlight:[Active:#ff000003,Disabled:#ff000003,Inactive:#ff000003],Dark:[Active:#ff000004,Disabled:#ff000004,Inactive:#ff000004],Mid:[Active:#ff000005,Disabled:#ff000005,Inactive:#ff000005],Text:[Active:#ff000006,Disabled:#ff000006,Inactive:#ff000006],BrightText:[Active:#ff000007,Disabled:#ff000007,Inactive:#ff000007],ButtonText:[Active:#ff000008,Disabled:#ff000008,Inactive:#ff000008],Base:[Active:#ff000009,Disabled:#ff000009,Inactive:#ff000009],Window:[Active:#ff00000a,Disabled:#ff00000a,Inactive:#ff00000a],Shadow:[Active:#ff00000b,Disabled:#ff00000b,Inactive:#ff00000b],Highlight:[Active:#ff00000c,Disabled:#ff00000c,Inactive:#ff00000c],HighlightedText:[Active:#ff00000d,Disabled:#ff00000d,Inactive:#ff00000d],Link:[Active:#ff00000e,Disabled:#ff00000e,Inactive:#ff00000e],LinkVisited:[Active:#ff00000f,Disabled:#ff00000f,Inactive:#ff00000f],AlternateBase:[Active:#ff000010,Disabled:#ff000010,Inactive:#ff000010],ToolTipBase:[Active:#ff000012,Disabled:#ff000012,Inactive:#ff000012],ToolTipText:[Active:#ff000013,Disabled:#ff000013,Inactive:#ff000013],PlaceholderText:[Active:#ff000014,Disabled:#ff000014,Inactive:#ff000014],Accent:[Active:#ff000015,Disabled:#ff000015,Inactive:#ff000015]") (actualPalette)
+  expected: QPalette(resolve=0x7fffffffffffffff,"WindowText:[Active:#ff000000,Disabled:#ff000000,Inactive:#ff000000],Button:[Active:#ff000000,Disabled:#ff000000,Inactive:#ff000000],Light:[Active:#ff000000,Disabled:#ff000000,Inactive:#ff000000],Midlight:[Active:#ff000000,Disabled:#ff000000,Inactive:#ff000000],Dark:[Active:#ff000000,Disabled:#ff000000,Inactive:#ff000000],Mid:[Active:#ff000000,Disabled:#ff000000,Inactive:#ff000000],Text:[Active:#ff000000,Disabled:#ff000000,Inactive:#ff000000],BrightText:[Active:#ff000000,Disabled:#ff000000,Inactive:#ff000000],ButtonText:[Active:#ff000000,Disabled:#ff000000,Inactive:#ff000000],Base:[Active:#ff000000,Disabled:#ff000000,Inactive:#ff000000],Window:[Active:#ff000000,Disabled:#ff000000,Inactive:#ff000000],Shadow:[Active:#ff000000,Disabled:#ff000000,Inactive:#ff000000],Highlight:[Active:#ff000000,Disabled:#ff000000,Inactive:#ff000000],HighlightedText:[Active:#ff000000,Disabled:#ff000000,Inactive:#ff000000],Link:[Active:#ff000000,Disabled:#ff000000,Inactive:#ff000000],LinkVisited:[Active:#ff000000,Disabled:#ff000000,Inactive:#ff000000],AlternateBase:[Active:#ff000000,Disabled:#ff000000,Inactive:#ff000000],ToolTipBase:[Active:#ff000000,Disabled:#ff000000,Inactive:#ff000000],ToolTipText:[Active:#ff000000,Disabled:#ff000000,Inactive:#ff000000],PlaceholderText:[Active:#ff000000,Disabled:#ff000000,Inactive:#ff000000],Accent:[Active:#ff000000,Disabled:#ff000000,Inactive:#ff000000]") (expectedPalette)
+  actual: QPalette(resolve=0x7fffffffffffffff,"WindowText:[Active:#ff000000,Disabled:#ff000000,Inactive:#ff000000],Button:[Active:#ff000001,Disabled:#ff000001,Inactive:#ff000001],Light:[Active:#ff000002,Disabled:#ff000002,Inactive:#ff000002],Midlight:[Active:#ff000003,Disabled:#ff000003,Inactive:#ff000003],Dark:[Active:#ff000004,Disabled:#ff000004,Inactive:#ff000004],Mid:[Active:#ff000005,Disabled:#ff000005,Inactive:#ff000005],Text:[Active:#ff000006,Disabled:#ff000006,Inactive:#ff000006],BrightText:[Active:#ff000007,Disabled:#ff000007,Inactive:#ff000007],ButtonText:[Active:#ff000008,Disabled:#ff000008,Inactive:#ff000008],Base:[Active:#ff000009,Disabled:#ff000009,Inactive:#ff000009],Window:[Active:#ff00000a,Disabled:#ff00000a,Inactive:#ff00000a],Shadow:[Active:#ff00000b,Disabled:#ff00000b,Inactive:#ff00000b],Highlight:[Active:#ff00000c,Disabled:#ff00000c,Inactive:#ff00000c],HighlightedText:[Active:#ff00000d,Disabled:#ff00000d,Inactive:#ff00000d],Link:[Active:#ff00000e,Disabled:#ff00000e,Inactive:#ff00000e],LinkVisited:[Active:#ff00000f,Disabled:#ff00000f,Inactive:#ff00000f],AlternateBase:[Active:#ff000010,Disabled:#ff000010,Inactive:#ff000010],ToolTipBase:[Active:#ff000012,Disabled:#ff000012,Inactive:#ff000012],ToolTipText:[Active:#ff000013,Disabled:#ff000013,Inactive:#ff000013],PlaceholderText:[Active:#ff000014,Disabled:#ff000014,Inactive:#ff000014],Accent:[Active:#ff000015,Disabled:#ff000015,Inactive:#ff000015]") (actualPalette)
+  at: tst_Cmptest::compareQPalettes() (qtbase/tests/auto/testlib/selftests/cmptest/tst_cmptest.cpp:0)
+  file: qtbase/tests/auto/testlib/selftests/cmptest/tst_cmptest.cpp
+  line: 0
+  ...
+not ok 66 - compareQPalettes(one role is different)
+  ---
+  type: QCOMPARE
+  message: Compared values are not the same
+  wanted: QPalette(resolve=0x7fffffffffffffff,"WindowText:[Active:#ff000000,Disabled:#ff000000,Inactive:#ff000000],Button:[Active:#ff000001,Disabled:#ff000001,Inactive:#ff000001],Light:[Active:#ff000002,Disabled:#ff000002,Inactive:#ff000002],Midlight:[Active:#ff000003,Disabled:#ff000003,Inactive:#ff000003],Dark:[Active:#ff000004,Disabled:#ff000004,Inactive:#ff000004],Mid:[Active:#ff000005,Disabled:#ff000005,Inactive:#ff000005],Text:[Active:#ff000006,Disabled:#ff000006,Inactive:#ff000006],BrightText:[Active:#ff000007,Disabled:#ff000007,Inactive:#ff000007],ButtonText:[Active:#ff000008,Disabled:#ff000008,Inactive:#ff000008],Base:[Active:#ff000009,Disabled:#ff000009,Inactive:#ff000009],Window:[Active:#ff00000a,Disabled:#ff00000a,Inactive:#ff00000a],Shadow:[Active:#ff00000b,Disabled:#ff00000b,Inactive:#ff00000b],Highlight:[Active:#ff00000c,Disabled:#ff00000c,Inactive:#ff00000c],HighlightedText:[Active:#ff00000d,Disabled:#ff00000d,Inactive:#ff00000d],Link:[Active:#ff00000e,Disabled:#ff00000e,Inactive:#ff00000e],LinkVisited:[Active:#ff00000f,Disabled:#ff00000f,Inactive:#ff00000f],AlternateBase:[Active:#ff000010,Disabled:#ff000010,Inactive:#ff000010],ToolTipBase:[Active:#ff000012,Disabled:#ff000012,Inactive:#ff000012],ToolTipText:[Active:#ff000013,Disabled:#ff000013,Inactive:#ff000013],PlaceholderText:[Active:#ff000014,Disabled:#ff000014,Inactive:#ff000014],Accent:[Active:#ff000000,Disabled:#ff000000,Inactive:#ff000000]") (expectedPalette)
+  found: QPalette(resolve=0x7fffffffffffffff,"WindowText:[Active:#ff000000,Disabled:#ff000000,Inactive:#ff000000],Button:[Active:#ff000001,Disabled:#ff000001,Inactive:#ff000001],Light:[Active:#ff000002,Disabled:#ff000002,Inactive:#ff000002],Midlight:[Active:#ff000003,Disabled:#ff000003,Inactive:#ff000003],Dark:[Active:#ff000004,Disabled:#ff000004,Inactive:#ff000004],Mid:[Active:#ff000005,Disabled:#ff000005,Inactive:#ff000005],Text:[Active:#ff000006,Disabled:#ff000006,Inactive:#ff000006],BrightText:[Active:#ff000007,Disabled:#ff000007,Inactive:#ff000007],ButtonText:[Active:#ff000008,Disabled:#ff000008,Inactive:#ff000008],Base:[Active:#ff000009,Disabled:#ff000009,Inactive:#ff000009],Window:[Active:#ff00000a,Disabled:#ff00000a,Inactive:#ff00000a],Shadow:[Active:#ff00000b,Disabled:#ff00000b,Inactive:#ff00000b],Highlight:[Active:#ff00000c,Disabled:#ff00000c,Inactive:#ff00000c],HighlightedText:[Active:#ff00000d,Disabled:#ff00000d,Inactive:#ff00000d],Link:[Active:#ff00000e,Disabled:#ff00000e,Inactive:#ff00000e],LinkVisited:[Active:#ff00000f,Disabled:#ff00000f,Inactive:#ff00000f],AlternateBase:[Active:#ff000010,Disabled:#ff000010,Inactive:#ff000010],ToolTipBase:[Active:#ff000012,Disabled:#ff000012,Inactive:#ff000012],ToolTipText:[Active:#ff000013,Disabled:#ff000013,Inactive:#ff000013],PlaceholderText:[Active:#ff000014,Disabled:#ff000014,Inactive:#ff000014],Accent:[Active:#ff000015,Disabled:#ff000015,Inactive:#ff000015]") (actualPalette)
+  expected: QPalette(resolve=0x7fffffffffffffff,"WindowText:[Active:#ff000000,Disabled:#ff000000,Inactive:#ff000000],Button:[Active:#ff000001,Disabled:#ff000001,Inactive:#ff000001],Light:[Active:#ff000002,Disabled:#ff000002,Inactive:#ff000002],Midlight:[Active:#ff000003,Disabled:#ff000003,Inactive:#ff000003],Dark:[Active:#ff000004,Disabled:#ff000004,Inactive:#ff000004],Mid:[Active:#ff000005,Disabled:#ff000005,Inactive:#ff000005],Text:[Active:#ff000006,Disabled:#ff000006,Inactive:#ff000006],BrightText:[Active:#ff000007,Disabled:#ff000007,Inactive:#ff000007],ButtonText:[Active:#ff000008,Disabled:#ff000008,Inactive:#ff000008],Base:[Active:#ff000009,Disabled:#ff000009,Inactive:#ff000009],Window:[Active:#ff00000a,Disabled:#ff00000a,Inactive:#ff00000a],Shadow:[Active:#ff00000b,Disabled:#ff00000b,Inactive:#ff00000b],Highlight:[Active:#ff00000c,Disabled:#ff00000c,Inactive:#ff00000c],HighlightedText:[Active:#ff00000d,Disabled:#ff00000d,Inactive:#ff00000d],Link:[Active:#ff00000e,Disabled:#ff00000e,Inactive:#ff00000e],LinkVisited:[Active:#ff00000f,Disabled:#ff00000f,Inactive:#ff00000f],AlternateBase:[Active:#ff000010,Disabled:#ff000010,Inactive:#ff000010],ToolTipBase:[Active:#ff000012,Disabled:#ff000012,Inactive:#ff000012],ToolTipText:[Active:#ff000013,Disabled:#ff000013,Inactive:#ff000013],PlaceholderText:[Active:#ff000014,Disabled:#ff000014,Inactive:#ff000014],Accent:[Active:#ff000000,Disabled:#ff000000,Inactive:#ff000000]") (expectedPalette)
+  actual: QPalette(resolve=0x7fffffffffffffff,"WindowText:[Active:#ff000000,Disabled:#ff000000,Inactive:#ff000000],Button:[Active:#ff000001,Disabled:#ff000001,Inactive:#ff000001],Light:[Active:#ff000002,Disabled:#ff000002,Inactive:#ff000002],Midlight:[Active:#ff000003,Disabled:#ff000003,Inactive:#ff000003],Dark:[Active:#ff000004,Disabled:#ff000004,Inactive:#ff000004],Mid:[Active:#ff000005,Disabled:#ff000005,Inactive:#ff000005],Text:[Active:#ff000006,Disabled:#ff000006,Inactive:#ff000006],BrightText:[Active:#ff000007,Disabled:#ff000007,Inactive:#ff000007],ButtonText:[Active:#ff000008,Disabled:#ff000008,Inactive:#ff000008],Base:[Active:#ff000009,Disabled:#ff000009,Inactive:#ff000009],Window:[Active:#ff00000a,Disabled:#ff00000a,Inactive:#ff00000a],Shadow:[Active:#ff00000b,Disabled:#ff00000b,Inactive:#ff00000b],Highlight:[Active:#ff00000c,Disabled:#ff00000c,Inactive:#ff00000c],HighlightedText:[Active:#ff00000d,Disabled:#ff00000d,Inactive:#ff00000d],Link:[Active:#ff00000e,Disabled:#ff00000e,Inactive:#ff00000e],LinkVisited:[Active:#ff00000f,Disabled:#ff00000f,Inactive:#ff00000f],AlternateBase:[Active:#ff000010,Disabled:#ff000010,Inactive:#ff000010],ToolTipBase:[Active:#ff000012,Disabled:#ff000012,Inactive:#ff000012],ToolTipText:[Active:#ff000013,Disabled:#ff000013,Inactive:#ff000013],PlaceholderText:[Active:#ff000014,Disabled:#ff000014,Inactive:#ff000014],Accent:[Active:#ff000015,Disabled:#ff000015,Inactive:#ff000015]") (actualPalette)
+  at: tst_Cmptest::compareQPalettes() (qtbase/tests/auto/testlib/selftests/cmptest/tst_cmptest.cpp:0)
+  file: qtbase/tests/auto/testlib/selftests/cmptest/tst_cmptest.cpp
+  line: 0
+  ...
+ok 67 - compareQPalettes(all roles are the same)
+not ok 68 - tryCompare()
   ---
   type: QCOMPARE
   message: Compared values are not the same
@@ -532,7 +558,7 @@ not ok 64 - tryCompare()
     - severity: info
       message: Should now time out and fail
   ...
-not ok 65 - verify()
+not ok 69 - verify()
   ---
   type: QVERIFY
   message: Verification failed
@@ -544,7 +570,7 @@ not ok 65 - verify()
   file: qtbase/tests/auto/testlib/selftests/cmptest/tst_cmptest.cpp
   line: 0
   ...
-not ok 66 - verify2()
+not ok 70 - verify2()
   ---
   type: QVERIFY
   message: 42 >= 2 (as expected, in fact)
@@ -556,7 +582,7 @@ not ok 66 - verify2()
   file: qtbase/tests/auto/testlib/selftests/cmptest/tst_cmptest.cpp
   line: 0
   ...
-not ok 67 - tryVerify()
+not ok 71 - tryVerify()
   ---
   type: QVERIFY
   message: Verification failed
@@ -572,7 +598,7 @@ not ok 67 - tryVerify()
     - severity: info
       message: Should now time out and fail
   ...
-not ok 68 - tryVerify2()
+not ok 72 - tryVerify2()
   ---
   type: QVERIFY
   message: Should time out and fail
@@ -584,9 +610,9 @@ not ok 68 - tryVerify2()
   file: qtbase/tests/auto/testlib/selftests/cmptest/tst_cmptest.cpp
   line: 0
   ...
-ok 69 - verifyExplicitOperatorBool()
-ok 70 - cleanupTestCase()
-1..70
-# tests 70
-# pass 21
-# fail 49
+ok 73 - verifyExplicitOperatorBool()
+ok 74 - cleanupTestCase()
+1..74
+# tests 74
+# pass 23
+# fail 51

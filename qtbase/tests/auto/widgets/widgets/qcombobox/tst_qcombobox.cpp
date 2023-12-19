@@ -42,11 +42,13 @@
 #include <qstandarditemmodel.h>
 #include <qproxystyle.h>
 #include <qfont.h>
+#include <qstylehints.h>
 
 #include "../../../shared/platforminputcontext.h"
 #include <private/qinputmethod_p.h>
 
 #include <QtTest/private/qtesthelpers_p.h>
+#include <QtTest/private/qemulationdetector_p.h>
 
 #include <QtWidgets/private/qapplication_p.h>
 
@@ -109,6 +111,7 @@ private slots:
 #ifndef QT_NO_STYLE_FUSION
     void task190351_layout();
     void task191329_size();
+    void popupPositionAfterStyleChange();
 #endif
     void task166349_setEditableOnReturn();
     void task190205_setModelAdjustToContents();
@@ -1503,42 +1506,70 @@ void tst_QComboBox::currentTextChanged()
     testWidget->addItems(QStringList() << "foo" << "bar");
     QCOMPARE(testWidget->count(), 2);
 
-    QSignalSpy spy(testWidget, SIGNAL(currentTextChanged(QString)));
+    QSignalSpy textChangedSpy(testWidget, &QComboBox::currentTextChanged);
 
     testWidget->setEditable(editable);
 
     // set text in list
     testWidget->setCurrentIndex(0);
     QCOMPARE(testWidget->currentIndex(), 0);
-    spy.clear();
+    textChangedSpy.clear();
     testWidget->setCurrentText(QString("bar"));
-    QCOMPARE(spy.size(), 1);
-    QCOMPARE(qvariant_cast<QString>(spy.at(0).at(0)), QString("bar"));
+    QCOMPARE(textChangedSpy.size(), 1);
+    QCOMPARE(qvariant_cast<QString>(textChangedSpy.at(0).at(0)), QString("bar"));
 
     // set text not in list
     testWidget->setCurrentIndex(0);
     QCOMPARE(testWidget->currentIndex(), 0);
-    spy.clear();
+    textChangedSpy.clear();
     testWidget->setCurrentText(QString("qt"));
     if (editable) {
-        QCOMPARE(spy.size(), 1);
-        QCOMPARE(qvariant_cast<QString>(spy.at(0).at(0)), QString("qt"));
+        QCOMPARE(textChangedSpy.size(), 1);
+        QCOMPARE(qvariant_cast<QString>(textChangedSpy.at(0).at(0)), QString("qt"));
     } else {
-        QCOMPARE(spy.size(), 0);
+        QCOMPARE(textChangedSpy.size(), 0);
     }
 
     // item changed
     testWidget->setCurrentIndex(0);
     QCOMPARE(testWidget->currentIndex(), 0);
-    spy.clear();
+    textChangedSpy.clear();
     testWidget->setItemText(0, QString("ape"));
-    QCOMPARE(spy.size(), 1);
-    QCOMPARE(qvariant_cast<QString>(spy.at(0).at(0)), QString("ape"));
+    QCOMPARE(textChangedSpy.size(), 1);
+    QCOMPARE(qvariant_cast<QString>(textChangedSpy.at(0).at(0)), QString("ape"));
+
     // change it back
-    spy.clear();
+    textChangedSpy.clear();
     testWidget->setItemText(0, QString("foo"));
-    QCOMPARE(spy.size(), 1);
-    QCOMPARE(qvariant_cast<QString>(spy.at(0).at(0)), QString("foo"));
+    QCOMPARE(textChangedSpy.size(), 1);
+    QCOMPARE(qvariant_cast<QString>(textChangedSpy.at(0).at(0)), QString("foo"));
+
+    // currentIndexChanged vs. currentTextChanged
+    testWidget->clear();
+    testWidget->addItems(QStringList() << "first" << "second" << "third" << "fourth" << "fourth");
+    testWidget->setCurrentIndex(4);
+    textChangedSpy.clear();
+    QSignalSpy indexChangedSpy(testWidget, &QComboBox::currentIndexChanged);
+
+    // Index change w/o text change
+    testWidget->removeItem(3);
+    QCOMPARE(textChangedSpy.count(), 0);
+    QCOMPARE(indexChangedSpy.count(), 1);
+
+    // Index and text change
+    testWidget->setCurrentIndex(0);
+    QCOMPARE(textChangedSpy.count(), 1);
+    QCOMPARE(indexChangedSpy.count(), 2);
+
+    // remove item above current index
+    testWidget->removeItem(2);
+    QCOMPARE(textChangedSpy.count(), 1);
+    QCOMPARE(indexChangedSpy.count(), 2);
+
+    // Text change w/o index change
+    testWidget->setItemText(0, "first class");
+    QCOMPARE(textChangedSpy.count(), 2);
+    QCOMPARE(indexChangedSpy.count(), 2);
 }
 
 void tst_QComboBox::editTextChanged()
@@ -2002,8 +2033,8 @@ void tst_QComboBox::flaggedItems()
         QSKIP("Wayland: This fails. Figure out why.");
 
     QFETCH(QStringList, itemList);
-    QFETCH(IntList, deselectFlagList);
-    QFETCH(IntList, disableFlagList);
+    QFETCH(const IntList, deselectFlagList);
+    QFETCH(const IntList, disableFlagList);
     QFETCH(KeyList, keyMovementList);
     QFETCH(bool, editable);
     QFETCH(int, expectedIndex);
@@ -2014,10 +2045,10 @@ void tst_QComboBox::flaggedItems()
     listWidget.addItems(itemList);
 
     comboBox.setEditable(editable);
-    foreach (int index, deselectFlagList)
+    for (int index : deselectFlagList)
         listWidget.item(index)->setFlags(listWidget.item(index)->flags() & ~Qt::ItemIsSelectable);
 
-    foreach (int index, disableFlagList)
+    for (int index : disableFlagList)
         listWidget.item(index)->setFlags(listWidget.item(index)->flags() & ~Qt::ItemIsEnabled);
 
     comboBox.setModel(listWidget.model());
@@ -2100,7 +2131,7 @@ void tst_QComboBox::mouseWheel_data()
 
 void tst_QComboBox::mouseWheel()
 {
-    QFETCH(IntList, disabledItems);
+    QFETCH(const IntList, disabledItems);
     QFETCH(int, startIndex);
     QFETCH(int, wheelDirection);
     QFETCH(int, expectedIndex);
@@ -2115,7 +2146,7 @@ void tst_QComboBox::mouseWheel()
     QListWidget listWidget;
     listWidget.addItems(list);
 
-    foreach (int index, disabledItems)
+    for (int index : disabledItems)
         listWidget.item(index)->setFlags(listWidget.item(index)->flags() & ~Qt::ItemIsEnabled);
 
     box.setModel(listWidget.model());
@@ -2249,11 +2280,11 @@ void tst_QComboBox::separatorItem_data()
 void tst_QComboBox::separatorItem()
 {
     QFETCH(QStringList, items);
-    QFETCH(IntList, separators);
+    QFETCH(const IntList, separators);
 
     QComboBox box;
     box.addItems(items);
-    foreach(int index, separators)
+    for (int index : separators)
         box.insertSeparator(index);
     QCOMPARE(box.count(), (items.size() + separators.size()));
     for (int i = 0, s = 0; i < box.count(); ++i) {
@@ -2374,7 +2405,8 @@ void tst_QComboBox::task191329_size()
     QFrame *container = tableCombo.findChild<QComboBoxPrivateContainer *>();
     QVERIFY(container);
     QCOMPARE(static_cast<QAbstractItemView *>(table), container->findChild<QAbstractItemView *>());
-    foreach (QWidget *button, container->findChildren<QComboBoxPrivateScroller *>()) {
+    const auto buttons = container->findChildren<QComboBoxPrivateScroller *>();
+    for (QWidget *button : buttons) {
         //the popup should be large enough to contains everithing so the top and left button are hidden
         QVERIFY(!button->isVisible());
     }
@@ -3274,10 +3306,10 @@ void tst_QComboBox::task_QTBUG_49831_scrollerNotActivated()
     QVERIFY(container);
     QVERIFY(QTest::qWaitForWindowExposed(container));
 
-    QList<QComboBoxPrivateScroller *> scrollers = container->findChildren<QComboBoxPrivateScroller *>();
+    const QList<QComboBoxPrivateScroller *> scrollers = container->findChildren<QComboBoxPrivateScroller *>();
     // Not all styles support scrollers. We rely only on those platforms that do to catch any regression.
     if (!scrollers.isEmpty()) {
-        Q_FOREACH (QComboBoxPrivateScroller *scroller, scrollers) {
+        for (QComboBoxPrivateScroller *scroller : scrollers) {
             if (scroller->isVisible()) {
                 QSignalSpy doScrollSpy(scroller, SIGNAL(doScroll(int)));
                 QTest::mouseMove(scroller, QPoint(5, 5), 500);
@@ -3357,6 +3389,60 @@ void tst_QComboBox::task_QTBUG_56693_itemFontFromModel()
     QCOMPARE(proxyStyle->italicItemsNo, 5);
 
     box.hidePopup();
+}
+
+void tst_QComboBox::popupPositionAfterStyleChange()
+{
+    // Check that the popup opens up centered on top of the current
+    // index if the style has changed since the last time it was
+    // opened (QTBUG-113765).
+    QComboBox box;
+    QStyleOptionComboBox opt;
+    const bool usePopup = qApp->style()->styleHint(QStyle::SH_ComboBox_Popup, &opt, &box);
+    if (!usePopup)
+        QSKIP("This test is only relevant for styles that centers the popup on top of the combo!");
+    if (QTestPrivate::isRunningArmOnX86())
+        QSKIP("Flaky on QEMU, QTBUG-114760");
+
+    box.addItems({"first", "middle", "last"});
+    box.show();
+    QVERIFY(QTest::qWaitForWindowExposed(&box));
+    box.showPopup();
+
+    QFrame *container = box.findChild<QComboBoxPrivateContainer *>();
+    QVERIFY(container);
+    QVERIFY(QTest::qWaitForWindowExposed(container));
+
+    // Select the last menu item, which will close the popup. This item is then expected
+    // to be centered on top of the combobox the next time the popup opens.
+    const QRect lastItemRect = box.view()->visualRect(box.view()->model()->index(2, 0));
+    QTest::mouseClick(box.view(), Qt::LeftButton, Qt::NoModifier, lastItemRect.center());
+
+    // Change style. This can make the popup smaller, which will result in up-and-down
+    // scroll widgets showing in the menu, directly underneath the mouse before the popup
+    // ends up hidden. This again will trigger the item view to scroll, which seems to be
+    // the root cause of QTBUG-113765.
+    qApp->setStyle(QStringLiteral("Fusion"));
+
+    // Click on the combobox again to reopen it. But since both QComboBox
+    // (QComboBoxPrivateScroller) is using its own internal timer to do scrolling, we
+    // need to wait a bit until the scrolling is done before we can reopen it (since
+    // the scrolling is the sore spot that we want to test).
+    // But note, we expect, but don't require, the popup to scroll. And for that
+    // reason, we don't see it as a failure if the scrolling doesn't happen.
+    (void) QTest::qWaitFor([&box]{ return box.view()->verticalScrollBar()->value() > 0; }, 1000);
+
+    // Verify that the popup is hidden before we click the button
+    QTRY_VERIFY(!container->isVisible());
+    QTest::mouseClick(&box, Qt::LeftButton);
+
+    // Click on item under mouse. But wait a bit, to avoid a double click
+    QTest::qWait(qApp->styleHints()->mouseDoubleClickInterval());
+    QTest::mouseClick(&box, Qt::LeftButton);
+
+    // Ensure that the item that was centered on top of the combobox, and which
+    // we therefore clicked, was the same item we clicked on the first time.
+    QCOMPARE(box.currentText(), QStringLiteral("last"));
 }
 
 void tst_QComboBox::inputMethodUpdate()

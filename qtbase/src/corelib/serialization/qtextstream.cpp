@@ -1752,13 +1752,10 @@ QTextStreamPrivate::NumberParsingStatus QTextStreamPrivate::getNumber(qulonglong
         // Parse digits
         int ndigits = 0;
         while (getChar(&dig)) {
-            int n = dig.toLower().unicode();
-            if (n >= '0' && n <= '9') {
+            const int h = fromHex(dig.unicode());
+            if (h != -1) {
                 val <<= 4;
-                val += n - '0';
-            } else if (n >= 'a' && n <= 'f') {
-                val <<= 4;
-                val += 10 + (n - 'a');
+                val += h;
             } else {
                 ungetChar(dig);
                 break;
@@ -1952,7 +1949,7 @@ QTextStream &QTextStream::operator>>(QChar &c)
     \overload
 
     Reads a character from the stream and stores it in \a c. The
-    character from the stream is converted to ISO-5589-1 before it is
+    character from the stream is converted to ISO-8859-1 before it is
     stored.
 
     \sa QChar::toLatin1()

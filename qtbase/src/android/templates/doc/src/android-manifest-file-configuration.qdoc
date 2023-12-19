@@ -82,13 +82,6 @@ Qt sets the following manifest configuration by default:
     \li android:requestLegacyExternalStorage
     \li Whether to use Android scoped storage. The default value is \c true.
 \row
-    \li android:allowNativeHeapPointerTagging
-    \li Whether or not the app has the Heap pointer tagging feature enabled.
-        This has to be set to \c false when targeting Arm64 hardware with Android 11+
-        because it can break QML's NaN-tagging scheme.
-        For more information, see \l {Android: Tagged Pointers}{Tagged Pointers}.
-        The default value is \c false.
-\row
     \li android:allowBackup
     \li Whether to allow the application to participate in the backup and restore
         infrastructure. If this is set to \c false, no backup or restore of the
@@ -148,8 +141,7 @@ The following is a list of such meta-data defined by Qt:
     \li Meta-data Name
     \li Description
 \row
-    \target android.app.lib_name
-    \li android.app.lib_name
+    \li android.app.lib_name \target android.app.lib_name
     \li The filename of the native C++ library that is used by the activity.
         \note This attribute is mandatory and shouldn't be removed.
         Default value is the Qt project's target name.
@@ -159,8 +151,7 @@ The following is a list of such meta-data defined by Qt:
         For more information, see \l {Style Extraction}.
         The default value is \c minimal.
 \row
-    \target android.app.background_running
-    \li android.app.background_running
+    \li android.app.background_running \target android.app.background_running
     \li Sets whether the app keeps running tasks in the background.
         Setting this to \c true is the equivalent of setting the environment
         variable \c QT_BLOCK_EVENT_LOOPS_WHEN_SUSPENDED to \c 0.
@@ -170,8 +161,7 @@ The following is a list of such meta-data defined by Qt:
         application tries to draw after \l {QGuiApplication::applicationStateChanged()}
         signal is sent with a \l {Qt::ApplicationSuspended} state.
 \row
-    \target android.app.arguments
-    \li android.app.arguments
+    \li android.app.arguments \target android.app.arguments
     \li Sets a list of arguments to pass to the app \c {"arg1 arg2"}.
         Populated from \c ANDROID_APPLICATION_ARGUMENTS (qmake) and
         \c QT_ANDROID_APPLICATION_ARGUMENTS (CMake).
@@ -218,8 +208,7 @@ the \c <application> section:
     \li Meta-data Name
     \li Description
 \row
-    \target android.app.system_libs_prefix
-    \li android.app.system_libs_prefix
+    \li android.app.system_libs_prefix \target android.app.system_libs_prefix
     \li Specifies a custom system library path to use for library loading lookup.
         This is necessary when using Qt libraries installed outside an app's
         default native (JNI) library directory.

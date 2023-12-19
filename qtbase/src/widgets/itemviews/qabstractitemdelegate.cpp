@@ -81,7 +81,7 @@ QT_BEGIN_NAMESPACE
     The second approach is to handle user events directly by reimplementing
     editorEvent().
 
-    \sa {model-view-programming}{Model/View Programming}, {Pixelator Example},
+    \sa {model-view-programming}{Model/View Programming},
         QStyledItemDelegate, QStyle
 */
 
@@ -513,6 +513,14 @@ bool QAbstractItemDelegatePrivate::tryFixup(QWidget *editor)
 #endif
             return e->hasAcceptableInput();
         }
+    }
+#endif
+#if QT_CONFIG(spinbox)
+    // Give a chance to the spinbox to interpret the text and emit
+    // the appropriate signals before committing data.
+    if (QAbstractSpinBox *sb = qobject_cast<QAbstractSpinBox *>(editor)) {
+        if (!sb->keyboardTracking())
+            sb->interpretText();
     }
 #else
     Q_UNUSED(editor);

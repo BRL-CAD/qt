@@ -448,7 +448,7 @@ void QVulkanWindow::setPreferredColorFormats(const QList<VkFormat> &formats)
 static struct {
     VkSampleCountFlagBits mask;
     int count;
-} qvk_sampleCounts[] = {
+} q_vk_sampleCounts[] = {
     // keep this sorted by 'count'
     { VK_SAMPLE_COUNT_1_BIT, 1 },
     { VK_SAMPLE_COUNT_2_BIT, 2 },
@@ -488,7 +488,7 @@ QList<int> QVulkanWindow::supportedSampleCounts()
     VkSampleCountFlags depth = limits->framebufferDepthSampleCounts;
     VkSampleCountFlags stencil = limits->framebufferStencilSampleCounts;
 
-    for (const auto &qvk_sampleCount : qvk_sampleCounts) {
+    for (const auto &qvk_sampleCount : q_vk_sampleCounts) {
         if ((color & qvk_sampleCount.mask)
                 && (depth & qvk_sampleCount.mask)
                 && (stencil & qvk_sampleCount.mask))
@@ -537,7 +537,7 @@ void QVulkanWindow::setSampleCount(int sampleCount)
         return;
     }
 
-    for (const auto &qvk_sampleCount : qvk_sampleCounts) {
+    for (const auto &qvk_sampleCount : q_vk_sampleCounts) {
         if (qvk_sampleCount.count == sampleCount) {
             d->sampleCount = qvk_sampleCount.mask;
             return;
@@ -1927,7 +1927,7 @@ void QVulkanWindowPrivate::beginFrame()
     }
 
     if (frameGrabbing)
-        frameGrabTargetImage = QImage(swapChainImageSize, QImage::Format_RGBA8888);
+        frameGrabTargetImage = QImage(swapChainImageSize, QImage::Format_RGBA8888); // the format is as documented
 
     if (renderer) {
         framePending = true;
@@ -2714,6 +2714,12 @@ bool QVulkanWindow::supportsGrab() const
     incomplete image, that has the correct size but not the content yet. The
     content will be delivered via the frameGrabbed() signal in the latter case.
 
+    The returned QImage always has a format of QImage::Format_RGBA8888. If the
+    colorFormat() is \c VK_FORMAT_B8G8R8A8_UNORM, the red and blue channels are
+    swapped automatically since this format is commonly used as the default
+    choice for swapchain color buffers. With any other color buffer format,
+    there is no conversion performed by this function.
+
     \note This function should not be called when a frame is in progress
     (that is, frameReady() has not yet been called back by the application).
 
@@ -2741,6 +2747,9 @@ QImage QVulkanWindow::grab()
 
     d->frameGrabbing = true;
     d->beginFrame();
+
+    if (d->colorFormat == VK_FORMAT_B8G8R8A8_UNORM)
+        d->frameGrabTargetImage = std::move(d->frameGrabTargetImage).rgbSwapped();
 
     return d->frameGrabTargetImage;
 }
