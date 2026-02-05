@@ -15,7 +15,6 @@
 #if QT_CONFIG(accessibility)
 
 #include <QtCore/qcoreapplication.h>
-#include <QtCore/qdebug.h>
 #include <QtCore/qglobal.h>
 #include <QtCore/qlist.h>
 #include <QtCore/qobject.h>
@@ -28,6 +27,7 @@
 
 QT_BEGIN_NAMESPACE
 
+class QDebug;
 class QAccessibleInterface;
 class QAccessibleEvent;
 class QWindow;
@@ -43,6 +43,7 @@ class QAccessibleTableInterface;
 class QAccessibleTableCellInterface;
 class QAccessibleHyperlinkInterface;
 class QAccessibleSelectionInterface;
+class QAccessibleAttributesInterface;
 class QAccessibleTableModelChangeEvent;
 
 class Q_GUI_EXPORT QAccessibleInterface
@@ -57,7 +58,7 @@ public:
     virtual QWindow *window() const;
 
     // relations
-    virtual QList<QPair<QAccessibleInterface *, QAccessible::Relation>>
+    virtual QList<std::pair<QAccessibleInterface *, QAccessible::Relation>>
     relations(QAccessible::Relation match = QAccessible::AllRelations) const;
     virtual QAccessibleInterface *focusChild() const;
 
@@ -105,6 +106,9 @@ public:
 
     inline QAccessibleSelectionInterface *selectionInterface()
     { return reinterpret_cast<QAccessibleSelectionInterface *>(interface_cast(QAccessible::SelectionInterface)); }
+
+    inline QAccessibleAttributesInterface *attributesInterface()
+    { return reinterpret_cast<QAccessibleAttributesInterface *>(interface_cast(QAccessible::AttributesInterface)); }
 
     virtual void virtual_hook(int id, void *data);
 
@@ -284,6 +288,15 @@ public:
     virtual bool clear() = 0;
 };
 
+class Q_GUI_EXPORT QAccessibleAttributesInterface
+{
+public:
+    virtual ~QAccessibleAttributesInterface();
+    virtual QList<QAccessible::Attribute> attributeKeys() const = 0;
+    virtual QVariant attributeValue(QAccessible::Attribute key) const = 0;
+};
+
+
 class Q_GUI_EXPORT QAccessibleEvent
 {
     Q_DISABLE_COPY(QAccessibleEvent)
@@ -303,6 +316,7 @@ public:
         Q_ASSERT(m_type != QAccessible::TextRemoved);
         Q_ASSERT(m_type != QAccessible::TextUpdated);
         Q_ASSERT(m_type != QAccessible::TableModelChanged);
+        Q_ASSERT(m_type != QAccessible::Announcement);
     }
 
     inline QAccessibleEvent(QAccessibleInterface *iface, QAccessible::Event typ)
@@ -317,6 +331,7 @@ public:
         Q_ASSERT(m_type != QAccessible::TextRemoved);
         Q_ASSERT(m_type != QAccessible::TextUpdated);
         Q_ASSERT(m_type != QAccessible::TableModelChanged);
+        Q_ASSERT(m_type != QAccessible::Announcement);
         m_uniqueId = QAccessible::uniqueId(iface);
         m_object = iface->object();
     }
@@ -590,6 +605,37 @@ protected:
     int m_firstColumn;
     int m_lastRow;
     int m_lastColumn;
+};
+
+class Q_GUI_EXPORT QAccessibleAnnouncementEvent : public QAccessibleEvent
+{
+public:
+    explicit QAccessibleAnnouncementEvent(QObject *object, const QString &message)
+        : QAccessibleEvent(object, QAccessible::InvalidEvent)
+          , m_message(message)
+          , m_politeness(QAccessible::AnnouncementPoliteness::Polite)
+    {
+        m_type = QAccessible::Announcement;
+    }
+
+    explicit QAccessibleAnnouncementEvent(QAccessibleInterface *iface, const QString &message)
+        : QAccessibleEvent(iface, QAccessible::InvalidEvent)
+          , m_message(message)
+          , m_politeness(QAccessible::AnnouncementPoliteness::Polite)
+    {
+        m_type = QAccessible::Announcement;
+    }
+
+    ~QAccessibleAnnouncementEvent() override;
+
+    QString message() const { return m_message; }
+    QAccessible::AnnouncementPoliteness politeness() const { return m_politeness; }
+    void setPoliteness(QAccessible::AnnouncementPoliteness politeness)
+    { m_politeness = politeness; }
+
+protected:
+    QString m_message;
+    QAccessible::AnnouncementPoliteness m_politeness;
 };
 
 #ifndef Q_QDOC

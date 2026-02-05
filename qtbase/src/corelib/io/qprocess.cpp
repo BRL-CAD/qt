@@ -1,6 +1,7 @@
 // Copyright (C) 2021 The Qt Company Ltd.
 // Copyright (C) 2022 Intel Corporation.
 // SPDX-License-Identifier: LicenseRef-Qt-Commercial OR LGPL-3.0-only OR GPL-2.0-only OR GPL-3.0-only
+// Qt-Security score:critical reason:execute-external-code
 
 //#define QPROCESS_DEBUG
 
@@ -14,7 +15,6 @@
 #include <qbytearray.h>
 #include <qdeadlinetimer.h>
 #include <qcoreapplication.h>
-#include <qtimer.h>
 
 #if __has_include(<paths.h>)
 #include <paths.h>
@@ -34,6 +34,8 @@ QT_BEGIN_NAMESPACE
     \ingroup shared
     \reentrant
     \since 4.6
+
+    \compares equality
 
     A process's environment is composed of a set of key=value pairs known as
     environment variables. The QProcessEnvironment class wraps that concept
@@ -178,21 +180,21 @@ QProcessEnvironment &QProcessEnvironment::operator=(const QProcessEnvironment &o
 /*!
     \fn void QProcessEnvironment::swap(QProcessEnvironment &other)
     \since 5.0
-
-    Swaps this process environment instance with \a other. This
-    function is very fast and never fails.
+    \memberswap{process environment instance}
 */
 
 /*!
-    \fn bool QProcessEnvironment::operator !=(const QProcessEnvironment &other) const
+    \fn bool QProcessEnvironment::operator!=(const QProcessEnvironment &lhs, const QProcessEnvironment &rhs)
 
-    Returns \c true if this and the \a other QProcessEnvironment objects are different.
+    Returns \c true if the process environment objects \a lhs and \a rhs are different.
 
     \sa operator==()
 */
 
 /*!
-    Returns \c true if this and the \a other QProcessEnvironment objects are equal.
+   \fn bool QProcessEnvironment::operator==(const QProcessEnvironment &lhs, const QProcessEnvironment &rhs)
+
+    Returns \c true if the process environment objects \a lhs and \a rhs are equal.
 
     Two QProcessEnvironment objects are considered equal if they have the same
     set of key=value pairs. The comparison of keys is done case-sensitive on
@@ -200,12 +202,12 @@ QProcessEnvironment &QProcessEnvironment::operator=(const QProcessEnvironment &o
 
     \sa operator!=(), contains()
 */
-bool QProcessEnvironment::operator==(const QProcessEnvironment &other) const
+bool comparesEqual(const QProcessEnvironment &lhs, const QProcessEnvironment &rhs)
 {
-    if (d == other.d)
+    if (lhs.d == rhs.d)
         return true;
 
-    return d && other.d && d->vars == other.d->vars;
+    return lhs.d && rhs.d && lhs.d->vars == rhs.d->vars;
 }
 
 /*!
@@ -893,6 +895,16 @@ void QProcessPrivate::Channel::clear()
            if QProcess will actually use \c{vfork(2)} and if \c{vfork(2)} is
            different from standard \c{fork(2)}.
 
+    \value [since 6.9] DisableCoreDumps     Requests that QProcess disable core
+           dumps in the child process. This is useful if the executable being
+           run is likely to crash but users and maintainers are going to be
+           uninterested in generating bug reports for those conditions (for
+           example, the executable is a test process). This setting does not
+           affect the exitStatus() of the crashed process. It is implemented
+           by setting the core dump size resource soft limit to zero, meaning
+           the application can still reverse this change by raising it to a
+           value up to the hard limit.
+
     \sa setUnixProcessParameters(), unixProcessParameters()
 */
 
@@ -1481,22 +1493,22 @@ void QProcess::setStandardInputFile(const QString &fileName)
 
     Redirects the process' standard output to the file \a
     fileName. When the redirection is in place, the standard output
-    read channel is closed: reading from it using read() will always
-    fail, as will readAllStandardOutput().
+    read channel is closed: reading from it using \l read() will always
+    fail, as will \l readAllStandardOutput().
 
-    To discard all standard output from the process, pass nullDevice()
+    To discard all standard output from the process, pass \l nullDevice()
     here. This is more efficient than simply never reading the standard
     output, as no QProcess buffers are filled.
 
-    If the file \a fileName doesn't exist at the moment start() is
+    If the file \a fileName doesn't exist at the moment \l start() is
     called, it will be created. If it cannot be created, the starting
     will fail.
 
-    If the file exists and \a mode is QIODevice::Truncate, the file
-    will be truncated. Otherwise (if \a mode is QIODevice::Append),
+    If the file exists and \a mode is \ QIODeviceBase::Truncate, the file
+    will be truncated. Otherwise (if \a mode is \l QIODeviceBase::Append),
     the file will be appended to.
 
-    Calling setStandardOutputFile() after the process has started has
+    Calling \l setStandardOutputFile() after the process has started has
     no effect.
 
     If \a fileName is an empty string, it stops redirecting the standard
@@ -2411,6 +2423,7 @@ void QProcessPrivate::start(QIODevice::OpenMode mode)
     errorString.clear();
     startProcess();
 }
+#endif // QT_CONFIG(process)
 
 /*!
     \since 5.15
@@ -2461,6 +2474,7 @@ QStringList QProcess::splitCommand(QStringView command)
     return args;
 }
 
+#if QT_CONFIG(process)
 /*!
     \since 5.0
 
@@ -2716,4 +2730,6 @@ QString QProcess::nullDevice()
 
 QT_END_NAMESPACE
 
+#if QT_CONFIG(process)
 #include "moc_qprocess.cpp"
+#endif

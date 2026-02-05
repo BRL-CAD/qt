@@ -11,11 +11,14 @@
 #include <QtCore/private/qcore_mac_p.h>
 #include <QtGui/qaccessible.h>
 
+#import <AppKit/NSAccessibilityElement.h>
+
 QT_DECLARE_NAMESPACED_OBJC_INTERFACE(QMacAccessibilityElement, NSObject <NSAccessibilityElement>
 - (instancetype)initWithId:(QAccessible::Id)anId;
 - (instancetype)initWithId:(QAccessible::Id)anId role:(NSAccessibilityRole)role;
 + (instancetype)elementWithId:(QAccessible::Id)anId;
 + (instancetype)elementWithInterface:(QAccessibleInterface *)iface;
++ (void)removeElementsFromCache:(NSArray *)array;
 - (void)updateTableModel;
 - (QAccessibleInterface *)qtInterface;
 )

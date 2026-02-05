@@ -7,13 +7,13 @@
 #include <QtGui/qtguiglobal.h>
 #include <QtGui/qcolortransform.h>
 #include <QtCore/qobjectdefs.h>
+#include <QtCore/qpoint.h>
 #include <QtCore/qshareddata.h>
 #include <QtCore/qvariant.h>
 
 QT_BEGIN_NAMESPACE
 
 class QColorSpacePrivate;
-class QPointF;
 
 QT_DECLARE_QESDP_SPECIALIZATION_DTOR_WITH_EXPORT(QColorSpacePrivate, Q_GUI_EXPORT)
 
@@ -26,7 +26,10 @@ public:
         SRgbLinear,
         AdobeRgb,
         DisplayP3,
-        ProPhotoRgb
+        ProPhotoRgb,
+        Bt2020,
+        Bt2100Pq,
+        Bt2100Hlg,
     };
     Q_ENUM(NamedColorSpace)
     enum class Primaries {
@@ -34,7 +37,8 @@ public:
         SRgb,
         AdobeRgb,
         DciP3D65,
-        ProPhotoRgb
+        ProPhotoRgb,
+        Bt2020,
     };
     Q_ENUM(Primaries)
     enum class TransferFunction {
@@ -42,17 +46,46 @@ public:
         Linear,
         Gamma,
         SRgb,
-        ProPhotoRgb
+        ProPhotoRgb,
+        Bt2020,
+        St2084,
+        Hlg,
     };
     Q_ENUM(TransferFunction)
+    enum class TransformModel : uint8_t {
+        ThreeComponentMatrix = 0,
+        ElementListProcessing,
+    };
+    Q_ENUM(TransformModel)
+    enum class ColorModel : uint8_t {
+        Undefined = 0,
+        Rgb = 1,
+        Gray = 2,
+        Cmyk = 3,
+    };
+    Q_ENUM(ColorModel)
+
+    struct PrimaryPoints
+    {
+        Q_GUI_EXPORT static PrimaryPoints fromPrimaries(Primaries primaries);
+        Q_GUI_EXPORT bool isValid() const noexcept;
+        QPointF whitePoint;
+        QPointF redPoint;
+        QPointF greenPoint;
+        QPointF bluePoint;
+    };
 
     QColorSpace() noexcept = default;
     QColorSpace(NamedColorSpace namedColorSpace);
+    explicit QColorSpace(QPointF whitePoint, TransferFunction transferFunction, float gamma = 0.0f);
+    explicit QColorSpace(QPointF whitePoint, const QList<uint16_t> &transferFunctionTable);
     QColorSpace(Primaries primaries, TransferFunction transferFunction, float gamma = 0.0f);
     QColorSpace(Primaries primaries, float gamma);
     QColorSpace(Primaries primaries, const QList<uint16_t> &transferFunctionTable);
     QColorSpace(const QPointF &whitePoint, const QPointF &redPoint,
                 const QPointF &greenPoint, const QPointF &bluePoint,
+                TransferFunction transferFunction, float gamma = 0.0f);
+    QColorSpace(const PrimaryPoints &primaryPoints,
                 TransferFunction transferFunction, float gamma = 0.0f);
     QColorSpace(const QPointF &whitePoint, const QPointF &redPoint,
                 const QPointF &greenPoint, const QPointF &bluePoint,
@@ -99,9 +132,16 @@ public:
     void setPrimaries(Primaries primariesId);
     void setPrimaries(const QPointF &whitePoint, const QPointF &redPoint,
                       const QPointF &greenPoint, const QPointF &bluePoint);
+    void setWhitePoint(QPointF whitePoint);
+    QPointF whitePoint() const;
+    void setPrimaryPoints(const PrimaryPoints &primaryPoints);
+    PrimaryPoints primaryPoints() const;
 
+    TransformModel transformModel() const noexcept;
+    ColorModel colorModel() const noexcept;
     void detach();
     bool isValid() const noexcept;
+    bool isValidTarget() const noexcept;
 
     friend inline bool operator==(const QColorSpace &colorSpace1, const QColorSpace &colorSpace2)
     { return colorSpace1.equals(colorSpace2); }

@@ -1,5 +1,6 @@
 // Copyright (C) 2021 The Qt Company Ltd.
 // SPDX-License-Identifier: LicenseRef-Qt-Commercial OR LGPL-3.0-only OR GPL-2.0-only OR GPL-3.0-only
+// Qt-Security score:significant reason:default
 
 #ifndef QTLSBACKEND_P_H
 #define QTLSBACKEND_P_H
@@ -33,7 +34,6 @@
 #include <QtCore/qloggingcategory.h>
 #include <QtCore/qnamespace.h>
 #include <QtCore/qobject.h>
-#include <QtCore/qglobal.h>
 #include <QtCore/qstring.h>
 #include <QtCore/qlist.h>
 #include <QtCore/qmap.h>
@@ -57,8 +57,11 @@ class QSslKey;
 
 namespace QTlsPrivate {
 
-class Q_NETWORK_PRIVATE_EXPORT TlsKey {
+class Q_NETWORK_EXPORT TlsKey {
 public:
+    TlsKey() = default;
+    Q_DISABLE_COPY_MOVE(TlsKey)
+
     virtual ~TlsKey();
 
     using KeyType = QSsl::KeyType;
@@ -94,7 +97,7 @@ public:
     QByteArray pemFooter() const;
 };
 
-class Q_NETWORK_PRIVATE_EXPORT X509Certificate
+class Q_NETWORK_EXPORT X509Certificate
 {
 public:
     virtual ~X509Certificate();
@@ -151,7 +154,7 @@ using X509Pkcs12ReaderPtr = bool (*)(QIODevice *device, QSslKey *key, QSslCertif
 
 #if QT_CONFIG(ssl)
 // TLS over TCP. Handshake, encryption/decryption.
-class Q_NETWORK_PRIVATE_EXPORT TlsCryptograph : public QObject
+class Q_NETWORK_EXPORT TlsCryptograph : public QObject
 {
 public:
     virtual ~TlsCryptograph();
@@ -187,7 +190,7 @@ class TlsCryptograph;
 
 #if QT_CONFIG(dtls)
 
-class Q_NETWORK_PRIVATE_EXPORT DtlsBase
+class Q_NETWORK_EXPORT DtlsBase
 {
 public:
     virtual ~DtlsBase();
@@ -217,7 +220,7 @@ public:
 };
 
 // TLS over UDP. Handshake, encryption/decryption.
-class Q_NETWORK_PRIVATE_EXPORT DtlsCryptograph : virtual public DtlsBase
+class Q_NETWORK_EXPORT DtlsCryptograph : virtual public DtlsBase
 {
 public:
 

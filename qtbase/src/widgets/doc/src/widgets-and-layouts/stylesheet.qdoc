@@ -28,7 +28,7 @@
     \list
     \li \l{Overview}
     \li \l{The Style Sheet Syntax}
-    \li \l{Qt Designer Integration}
+    \li \l{Qt Widgets Designer Integration}
     \li \l{Customizing Qt Widgets Using Style Sheets}
     \li \l{Qt Style Sheets Reference}
     \li \l{Qt Style Sheets Examples}
@@ -75,7 +75,7 @@
     consideration. Unlike palette fiddling, style sheets offer
     guarantees: If you set the background color of a QPushButton to be
     red, you can be assured that the button will have a red background
-    in all styles, on all platforms. In addition, Qt Designer
+    in all styles, on all platforms. In addition, \QD
     provides style sheet integration, making it easy to view the effects
     of a style sheet in different \l{QStyle}{widget styles}.
 
@@ -100,14 +100,12 @@
 /*!
     \page stylesheet-syntax.html
     \previouspage Qt Style Sheets
-    \nextpage Qt Designer Integration
+    \nextpage Qt Widgets Designer Integration
     \title The Style Sheet Syntax
 
     Qt Style Sheet terminology and syntactic rules are almost
     identical to those of HTML CSS. If you already know CSS, you can
     probably skim quickly through this section.
-
-    \tableofcontents
 
     \section1 Style Rules
 
@@ -532,30 +530,32 @@
     \page stylesheet-designer.html
     \previouspage The Style Sheet Syntax
     \nextpage Customizing Qt Widgets Using Style Sheets
-    \title Qt Designer Integration
+    \title Qt Widgets Designer Integration
 
-    Qt Designer{Qt Designer} is an excellent tool
+    \l{Qt Widgets Designer Manual}{\QD} is an excellent tool
     to preview style sheets. You can right-click on any widget in Designer
     and select \uicontrol{Change styleSheet...} to set the style sheet.
 
-    \image designer-stylesheet-options.png
+    \image designer-stylesheet-options.webp
+           {Editing a form in Qt Widgets Designer}
 
-    In Qt 4.2 and later, Qt Designer also includes a
-    style sheet syntax highlighter and validator. The validator indicates
-    if the syntax is valid or invalid, at the bottom left of the \uicontrol{Edit
-    Style Sheet} dialog.
+    \QD also includes a style sheet syntax highlighter and validator. The
+    validator indicates if the syntax is valid or invalid, at the bottom left
+    of the \uicontrol{Edit Style Sheet} dialog.
 
-    \image designer-validator-highlighter.png
+    \image designer-validator-highlighter.webp
+           {Editing and validating a stylesheet}
 
-    When you click \uicontrol{OK} or \uicontrol{Apply}, Qt Designer will automatically display
+    When you click \uicontrol{OK} or \uicontrol{Apply}, \QD will automatically display
     the widget with its new stylesheet.
 
-    \image designer-stylesheet-usage.png
+    \image designer-stylesheet-usage.webp
+           {Preview of a form with the new stylesheet}
     */
 
 /*!
     \page stylesheet-customizing.html
-    \previouspage Qt Designer Integration
+    \previouspage Qt Widgets Designer Integration
     \nextpage Qt Style Sheets Reference
     \title Customizing Qt Widgets Using Style Sheets
 
@@ -564,14 +564,13 @@
     padding rectangle, and the content rectangle. The box model describes
     this in further detail.
 
-    \tableofcontents
-
     \target box model
     \section1 The Box Model
 
     The four concentric rectangles appear conceptually as below:
 
     \image stylesheet-boxmodel.png
+           {Diagram of the CSS box model for layout design}
 
     \list
     \li The margin falls outside the border.
@@ -665,8 +664,6 @@
     Qt Style Sheets support various properties, pseudo-states, and
     subcontrols that make it possible to customize the look of
     widgets.
-
-    \tableofcontents
 
     \section1 List of Stylable Widgets
 
@@ -919,7 +916,7 @@
            control over the items in the QListView.
         \br
         \br
-           See \l{qabstractscrollarea-widget}{QAbsractScrollArea} to
+           See \l{qabstractscrollarea-widget}{QAbstractScrollArea} to
            style scrollable backgrounds.
         \br
         \br
@@ -1286,7 +1283,7 @@
            \l{#gridline-color-prop}{gridline-color} property.
         \br
         \br
-           See \l{qabstractscrollarea-widget}{QAbsractScrollArea} to
+           See \l{qabstractscrollarea-widget}{QAbstractScrollArea} to
            style scrollable backgrounds.
         \br
         \br
@@ -1312,7 +1309,7 @@
            \l{#placeholder-text-color-prop}{placeholder-text-color} property.
         \br
         \br
-           See \l{qabstractscrollarea-widget}{QAbsractScrollArea} to
+           See \l{qabstractscrollarea-widget}{QAbstractScrollArea} to
            style scrollable backgrounds.
 
     \row
@@ -1347,6 +1344,19 @@
            for an example.
 
     \row
+        \li QToolBox \target qtoolbox-widget
+        \li Supports the \l{box model}.
+     \br
+     \br
+       The individual tabs can by styled using the
+       \l{#tab-sub}{::tab} subcontrol. The tabs support the
+       \l{#only-one-ps}{:only-one}, \l{#first-ps}{:first},
+       \l{#last-ps}{:last}, \l{#middle-ps}{:middle},
+      \l{#previous-selected-ps}{:previous-selected},
+       \l{#next-selected-ps}{:next-selected},
+       \l{#selected-ps}{:selected} pseudo states.
+
+    \row
         \li QToolButton \target qtoolbutton-widget
         \li Supports the \l{box model}.
         \br
@@ -1378,19 +1388,6 @@
 
            See \l{Qt Style Sheets Examples#Customizing QToolButton}{Customizing QToolButton}
            for an example.
-
-    \row
-        \li QToolBox \target qtoolbox-widget
-        \li Supports the \l{box model}.
-        \br
-        \br
-          The individual tabs can by styled using the
-          \l{#tab-sub}{::tab} subcontrol. The tabs support the
-          \l{#only-one-ps}{:only-one}, \l{#first-ps}{:first},
-          \l{#last-ps}{:last}, \l{#middle-ps}{:middle},
-         \l{#previous-selected-ps}{:previous-selected},
-          \l{#next-selected-ps}{:next-selected},
-          \l{#selected-ps}{:selected} pseudo states.
 
     \row
         \li QToolTip \target qtooltip-widget
@@ -1431,7 +1428,7 @@
            control over the items in the QTreeView.
         \br
         \br
-           See \l{qabstractscrollarea-widget}{QAbsractScrollArea} to
+           See \l{qabstractscrollarea-widget}{QAbstractScrollArea} to
            style scrollable backgrounds.
         \br
         \br
@@ -2278,6 +2275,13 @@
            See also \l{#right-prop}{right}, \l{Qt Style Sheets Reference#top-prop}{top}, and
            \l{#bottom-prop}{bottom}.
 
+    \section2 letter-spacing
+    \table
+      \row \li \b Type \li \l{#Length}{Length}
+    \endtable
+
+           Space between characters in a string within a widget.
+
     \section2 lineedit-password-character*
     \target lineedit-password-character-prop
     \table
@@ -2907,6 +2911,12 @@
 
            See also \l{#height-prop}{height}.
 
+    \section2 word-spacing
+    \table
+      \row \li \b Type \li \l{#Length}{Length}
+    \endtable
+
+           Space between each word in a string within a widget.
 
     \section2 -qt-background-role
     \table
@@ -2924,7 +2934,6 @@
            The list of CSS properties that you want to apply Qt-specific styles on.
 
             \note The \c list can only include properties that are not pixmap-based.
-
 
     \target list of icons
     \section1 List of Icons
@@ -3445,8 +3454,11 @@
               | \c link-visited \br
               | \c mid \br
               | \c midlight \br
+              | \c placeholder-text \br
               | \c shadow \br
               | \c text \br
+              | \c tooltip-base \br
+              | \c tooltip-text \br
               | \c window \br
               | \c window-text \br
         \li These values correspond the \l{QPalette::ColorRole}{Color roles}
@@ -3886,7 +3898,6 @@
 
     We will now see a few examples to get started with using Qt Style Sheets.
 
-    \tableofcontents
     \section1 Style Sheet Usage
 
     \section2 Customizing the Foreground and Background Colors
@@ -3958,7 +3969,7 @@
 
     However, the result is a boring, flat button with no borders:
 
-    \image stylesheet-redbutton1.png A flat red button
+    \image stylesheet-redbutton1.png {Flat red button}
 
     What happened is this:
 
@@ -3977,7 +3988,7 @@
 
     \snippet code/doc_src_stylesheet.qdoc 97
 
-    \image stylesheet-redbutton2.png A red button with a beige border
+    \image stylesheet-redbutton2.png {Red button with a beige border}
 
     Things look already a lot better. But the button looks a bit
     cramped. Let's specify some spacing between the border and the
@@ -3987,7 +3998,8 @@
 
     \snippet code/doc_src_stylesheet.qdoc 98
 
-    \image stylesheet-redbutton3.png A red button with a round beige border and big, bold text
+    \image stylesheet-redbutton3.png
+           {Red button with a round beige border and big, bold text}
 
     The only issue remaining is that the button doesn't react when we
     press it. We can fix this by specifying a slightly different
@@ -4175,7 +4187,7 @@
     style sheets. However, if one property or sub-control is customized,
     all the other properties or sub-controls must be customized as well.
 
-    \image progressBar-stylesheet.png
+    \image progressBar-stylesheet.png {Progress bar showing 30%}
 
     For example, we change the \l{stylesheet-reference.html#border-prop}
     {border} to grey and the \l{stylesheet-reference.html#chunk-sub}{chunk}
@@ -4192,7 +4204,7 @@
     A \l{stylesheet-reference.html#margin-prop}{margin} can be included to
     obtain more visible chunks.
 
-    \image progressBar2-stylesheet.png
+    \image progressBar2-stylesheet.png {Notched progress bar}
 
     In the screenshot above, we use a
     \l{stylesheet-reference.html#margin-prop}{margin} of 0.5 pixels.
@@ -4227,7 +4239,7 @@
     if one property or sub-control is customized, all the other properties or
     sub-controls must be customized as well.
 
-    \image stylesheet-scrollbar1.png
+    \image stylesheet-scrollbar1.png {Green stylized scroll bar}
 
     The scroll bar above has been styled in aquamarine with a solid grey
     border.
@@ -4251,7 +4263,7 @@
     \snippet code/doc_src_stylesheet.qdoc 136
 
     The scroll bar using the above stylesheet looks like this:
-        \image stylesheet-scrollbar2.png
+        \image stylesheet-scrollbar2.png {Colorized scroll bar}
 
 
     To customize a vertical scroll bar use a style sheet similar to the following:
@@ -4300,14 +4312,14 @@
 
     \section2 Customizing QTabWidget and QTabBar
 
-    \image tabWidget-stylesheet1.png
+    \image tabWidget-stylesheet1.png {Image of several tabs}
 
     For the screenshot above, we need a stylesheet as follows:
 
     \snippet code/doc_src_stylesheet.qdoc 145
 
     Often we require the tabs to overlap to look like below:
-    \image tabWidget-stylesheet2.png
+    \image tabWidget-stylesheet2.png {Image of overlapped tabs}
 
     For a tab widget that looks like above, we make use of
     \l{https://doc.qt.io/qt-5/stylesheet-customizing.html#the-box-model}
@@ -4318,7 +4330,7 @@
     \snippet code/doc_src_stylesheet.qdoc 146
 
     To move the tab bar to the center (as below), we require the following stylesheet:
-    \image tabWidget-stylesheet3.png
+    \image tabWidget-stylesheet3.png {Several tabs centered in the widget}
 
     \snippet code/doc_src_stylesheet.qdoc 147
 
@@ -4333,7 +4345,7 @@
     Suppose we'd like our selected item in QTableView to have bubblegum pink
     fade to white as its background.
 
-    \image tableWidget-stylesheet.png
+    \image tableWidget-stylesheet.png {Table view with custom style}
 
     This is possible with the
     \l{stylesheet-reference.html#selection-background-color-prop}
@@ -4415,11 +4427,11 @@
 
     \table
     \row
-    \li \inlineimage stylesheet-vline.png
-    \li \inlineimage stylesheet-branch-more.png
-    \li \inlineimage stylesheet-branch-end.png
-    \li \inlineimage stylesheet-branch-closed.png
-    \li \inlineimage stylesheet-branch-open.png
+    \li \inlineimage stylesheet-vline.png {Vertical line}
+    \li \inlineimage stylesheet-branch-more.png {Junction line for lists}
+    \li \inlineimage stylesheet-branch-end.png {Line for terminating the list}
+    \li \inlineimage stylesheet-branch-closed.png {Arrow pointing right}
+    \li \inlineimage stylesheet-branch-open.png {Arrow pointing down}
     \row
     \li vline.png
     \li branch-more.png
@@ -4432,7 +4444,7 @@
 
     The resulting tree view looks like this:
 
-    \image stylesheet-treeview.png
+    \image stylesheet-treeview.png {Tree view with styled branches}
 
     \sa {Supported HTML Subset}, QStyle
 
@@ -4466,7 +4478,7 @@
 
     This will produce a button looking like this:
 
-    \image stylesheet-border-image-normal.png
+    \image stylesheet-border-image-normal.png {Button with a background}
 
     The numbers after the url gives the top, right, bottom and left number of
     pixels, respectively. These numbers correspond to the border and should not
@@ -4476,18 +4488,12 @@
     will not. This makes the borders of the button look more natural, like
     this:
 
-    \table
-    \row
-    \li \inlineimage stylesheet-border-image-stretched.png
-    \row
-    \li With borders
-    \endtable
+    \image stylesheet-border-image-stretched.png
+           {Button with specified border sizes}
+    \caption With borders
 
-    \table
-    \row
-    \li \inlineimage stylesheet-border-image-wrong.png
-    \row
-    \li Without borders
-    \endtable
+    \image stylesheet-border-image-wrong.png
+           {Button without specified border sizes}
+    \caption Without borders
 
     */

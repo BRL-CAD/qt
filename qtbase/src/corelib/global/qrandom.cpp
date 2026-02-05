@@ -1,6 +1,7 @@
 // Copyright (C) 2021 Intel Corporation.
 // Copyright (C) 2021 The Qt Company Ltd.
 // SPDX-License-Identifier: LicenseRef-Qt-Commercial OR LGPL-3.0-only OR GPL-2.0-only OR GPL-3.0-only
+// Qt-Security score:critical reason:cryptography
 
 // for rand_s
 #define _CRT_RAND_S
@@ -292,10 +293,7 @@ Q_NEVER_INLINE void QRandomGenerator::SystemGenerator::generate(quint32 *begin, 
     }
 
     qsizetype filled = 0;
-    if (qHasHwrng() && (uint(qt_randomdevice_control.loadAcquire()) & SkipHWRNG) == 0)
-        filled += qRandomCpu(buffer, count);
-
-    if (filled != count && (uint(qt_randomdevice_control.loadAcquire()) & SkipSystemRNG) == 0) {
+    if ((uint(qt_randomdevice_control.loadAcquire()) & SkipSystemRNG) == 0) {
         qsizetype bytesFilled =
                 fillBuffer(buffer + filled, (count - filled) * qsizetype(sizeof(*buffer)));
         filled += bytesFilled / qsizetype(sizeof(*buffer));

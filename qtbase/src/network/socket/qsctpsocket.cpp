@@ -1,5 +1,6 @@
 // Copyright (C) 2016 Alex Trotsenko <alex1973tr@gmail.com>
 // SPDX-License-Identifier: LicenseRef-Qt-Commercial OR LGPL-3.0-only OR GPL-2.0-only OR GPL-3.0-only
+// Qt-Security score:significant reason:default
 
 //#define QSCTPSOCKET_DEBUG
 
@@ -83,7 +84,6 @@
 #include "qsctpsocket_p.h"
 
 #include "qabstractsocketengine_p.h"
-#include "private/qbytearray_p.h"
 
 #ifdef QSCTPSOCKET_DEBUG
 #include <qdebug.h>
@@ -133,7 +133,7 @@ bool QSctpSocketPrivate::canReadNotification()
                 bytesToRead = 4096;
             }
 
-            Q_ASSERT((datagramSize + qsizetype(bytesToRead)) < MaxByteArraySize);
+            Q_ASSERT((datagramSize + qsizetype(bytesToRead)) < QByteArray::maxSize());
             incomingDatagram.resize(datagramSize + int(bytesToRead));
 
 #if defined (QSCTPSOCKET_DEBUG)

@@ -1,5 +1,6 @@
 // Copyright (C) 2016 The Qt Company Ltd.
 // SPDX-License-Identifier: LicenseRef-Qt-Commercial OR LGPL-3.0-only OR GPL-2.0-only OR GPL-3.0-only
+// Qt-Security score:critical reason:data-parser
 
 #include "qfilesystemengine_p.h"
 #include <QtCore/qdir.h>
@@ -12,6 +13,21 @@
 #include <QtCore/private/qduplicatetracker_p.h>
 
 QT_BEGIN_NAMESPACE
+
+/*! \class QFileSystemEngine
+    \internal
+
+    QFileSystemEngine offers OS-independent API for native system library
+    methods, which work with files on physical disk drives; using such methods
+    directly is faster than using a custom file engine (see QAbstractFileEngine
+    and its sub-classes). Typically, you need a custom file engine when working
+    with virtual file systems (for example QResource). Various Qt classes,
+    for example QDir, QFile, and QFileInfo, can handle both types of files by
+    detecting the file path scheme, for example, \c file:///, \c :/someresource
+    (QResource).
+
+    \sa QAbstractFileEngine, QAbstractFileEngineHandler, QFSFileEngine, QResourceFileEngine
+*/
 
 /*!
     \internal
@@ -83,12 +99,11 @@ static inline bool _q_checkEntry(QFileSystemEntry &entry, QFileSystemMetaData &d
     return true;
 }
 
-static inline bool _q_checkEntry(QAbstractFileEngine *&engine, bool resolvingEntry)
+static inline bool _q_checkEntry(std::unique_ptr<QAbstractFileEngine> &engine, bool resolvingEntry)
 {
     if (resolvingEntry) {
         if (!(engine->fileFlags(QAbstractFileEngine::FlagsMask) & QAbstractFileEngine::ExistsFlag)) {
-            delete engine;
-            engine = nullptr;
+            engine.reset();
             return false;
         }
     }
@@ -96,8 +111,9 @@ static inline bool _q_checkEntry(QAbstractFileEngine *&engine, bool resolvingEnt
     return true;
 }
 
-static bool _q_resolveEntryAndCreateLegacyEngine_recursive(QFileSystemEntry &entry, QFileSystemMetaData &data,
-        QAbstractFileEngine *&engine, bool resolvingEntry = false)
+static bool _q_createLegacyEngine_recursive(QFileSystemEntry &entry, QFileSystemMetaData &data,
+                                            std::unique_ptr<QAbstractFileEngine> &engine,
+                                            bool resolvingEntry = false)
 {
     QString const &filePath = entry.filePath();
     if ((engine = qt_custom_file_engine_handler_create(filePath)))
@@ -111,7 +127,7 @@ static bool _q_resolveEntryAndCreateLegacyEngine_recursive(QFileSystemEntry &ent
 
         if (ch == u':') {
             if (prefixSeparator == 0) {
-                engine = new QResourceFileEngine(filePath);
+                engine = std::make_unique<QResourceFileEngine>(filePath);
                 return _q_checkEntry(engine, resolvingEntry);
             }
 
@@ -123,7 +139,7 @@ static bool _q_resolveEntryAndCreateLegacyEngine_recursive(QFileSystemEntry &ent
                 entry = QFileSystemEntry(QDir::cleanPath(
                         paths.at(i) % u'/' % QStringView{filePath}.mid(prefixSeparator + 1)));
                 // Recurse!
-                if (_q_resolveEntryAndCreateLegacyEngine_recursive(entry, data, engine, true))
+                if (_q_createLegacyEngine_recursive(entry, data, engine, true))
                     return true;
             }
 
@@ -143,6 +159,12 @@ static bool _q_resolveEntryAndCreateLegacyEngine_recursive(QFileSystemEntry &ent
     return _q_checkEntry(entry, data, resolvingEntry);
 }
 
+Q_CORE_EXPORT bool qt_isCaseSensitive(const QFileSystemEntry &entry, QFileSystemMetaData &data)
+{
+    // called from QtGui (QFileSystemModel, QFileInfoGatherer)
+    return QFileSystemEngine::isCaseSensitive(entry, data);
+}
+
 /*!
     \internal
 
@@ -153,12 +175,13 @@ static bool _q_resolveEntryAndCreateLegacyEngine_recursive(QFileSystemEntry &ent
     QFileSystemEngine API should be used to query and interact with the file
     system object.
 */
-QAbstractFileEngine *QFileSystemEngine::resolveEntryAndCreateLegacyEngine(
-        QFileSystemEntry &entry, QFileSystemMetaData &data) {
+std::unique_ptr<QAbstractFileEngine>
+QFileSystemEngine::createLegacyEngine(QFileSystemEntry &entry, QFileSystemMetaData &data)
+{
     QFileSystemEntry copy = entry;
-    QAbstractFileEngine *engine = nullptr;
+    std::unique_ptr<QAbstractFileEngine> engine;
 
-    if (_q_resolveEntryAndCreateLegacyEngine_recursive(copy, data, engine))
+    if (_q_createLegacyEngine_recursive(copy, data, engine))
         // Reset entry to resolved copy.
         entry = copy;
     else

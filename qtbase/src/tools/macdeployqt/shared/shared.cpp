@@ -19,6 +19,7 @@
 #include <QJsonArray>
 #include <QJsonValue>
 #include <QRegularExpression>
+#include <QSaveFile>
 #include "shared.h"
 
 #ifdef Q_OS_DARWIN
@@ -134,13 +135,22 @@ void patch_debugInInfoPlist(const QString &infoPlistPath)
 {
     // Older versions of qmake may have the "_debug" binary as
     // the value for CFBundleExecutable. Remove it.
-    QFile infoPlist(infoPlistPath);
-    infoPlist.open(QIODevice::ReadOnly);
-    QByteArray contents = infoPlist.readAll();
-    infoPlist.close();
-    infoPlist.open(QIODevice::WriteOnly | QIODevice::Truncate);
-    contents.replace("_debug", ""); // surely there are no legit uses of "_debug" in an Info.plist
-    infoPlist.write(contents);
+    if (QFile infoPlist(infoPlistPath); infoPlist.open(QIODevice::ReadOnly)) {
+        QByteArray contents = infoPlist.readAll();
+        infoPlist.close();
+        QSaveFile writableInfoPlist(infoPlistPath);
+        bool success = writableInfoPlist.open(QIODevice::WriteOnly | QIODevice::Truncate);
+        if (success) {
+            contents.replace("_debug", ""); // surely there are no legit uses of "_debug" in an Info.plist
+            writableInfoPlist.write(contents);
+            success = writableInfoPlist.commit();
+        }
+        if (!success) {
+            LogError() << "Failed to write Info.plist file" << infoPlistPath;
+        }
+    } else {
+        LogError() << "Failed to read Info.plist file" << infoPlistPath;
+    }
 }
 
 OtoolInfo findDependencyInfo(const QString &binaryPath)
@@ -152,7 +162,7 @@ OtoolInfo findDependencyInfo(const QString &binaryPath)
     LogDebug() << " inspecting" << binaryPath;
     QProcess otool;
     otool.start("otool", QStringList() << "-L" << binaryPath);
-    otool.waitForFinished();
+    otool.waitForFinished(-1);
 
     if (otool.exitStatus() != QProcess::NormalExit || otool.exitCode() != 0) {
         LogError() << otool.readAllStandardError();
@@ -663,17 +673,20 @@ void recursiveCopyAndDeploy(const QString &appBundlePath, const QList<QString> &
     QDir().mkpath(destinationPath);
 
     LogNormal() << "copy:" << sourcePath << destinationPath;
-    const bool isDwarfPath = sourcePath.endsWith("DWARF");
 
     const QDir sourceDir(sourcePath);
 
     const QStringList files = sourceDir.entryList(QStringList() << QStringLiteral("*"), QDir::Files | QDir::NoDotAndDotDot);
     for (const QString &file : files) {
+        if (file.endsWith("_debug.dylib"))
+            continue; // Skip debug versions
+
+        if (file.endsWith(".qrc"))
+            continue;
+
         const QString fileSourcePath = sourcePath + u'/' + file;
 
-        if (file.endsWith("_debug.dylib")) {
-            continue; // Skip debug versions
-        } else if (!isDwarfPath && file.endsWith(QStringLiteral(".dylib"))) {
+        if (file.endsWith(QStringLiteral(".dylib"))) {
             // App store code signing rules forbids code binaries in Contents/Resources/,
             // which poses a problem for deploying mixed .qml/.dylib Qt Quick imports.
             // Solve this by placing the dylibs in Contents/PlugIns/quick, and then
@@ -715,6 +728,9 @@ void recursiveCopyAndDeploy(const QString &appBundlePath, const QList<QString> &
 
     const QStringList subdirs = sourceDir.entryList(QStringList() << QStringLiteral("*"), QDir::Dirs | QDir::NoDotAndDotDot);
     for (const QString &dir : subdirs) {
+        if (dir.endsWith(".dSYM"))
+            continue;
+
         recursiveCopyAndDeploy(appBundlePath, rpaths, sourcePath + u'/' + dir, destinationPath + u'/' + dir);
     }
 }
@@ -993,6 +1009,31 @@ DeploymentInfo deployQtFrameworks(QList<FrameworkInfo> frameworks,
             rpathsUsed.append(framework.rpathUsed);
         }
 
+        // To properly find all dependencies of the current framework / library further down in
+        // getQtFrameworks, we need to get its rpaths, resolve them in the context of its original
+        // location before it is copied, and add them as candidate rpaths.
+        //
+        // This is necessary to handle cases like
+        // (1) QtNetwork.framework -> (2) libbrotlidec.dylib -> (3) libbrotlicommon.1.dylib
+        // to correctly resolve the path to (3) when it is referenced as
+        // '@rpath/libbrotlicommon.1.dylib' and (2) has an LC_RPATH of '@loader_path/../lib', and
+        // no other absolute rpaths. So the '@loader_path/../lib' will be resolved relative
+        // to (2)'s original location and its LC_RPATH.
+        //
+        // Otherwise we'd only have the Qt prefix and the current bundle app dir as rpath
+        // candidates, and once (2) is copied into the app bundle, there's no way
+        // '@rpath/libbrotlicommon.1.dylib' could resolve to the real path on disk from the two
+        // candidates above.
+        if (!framework.sourceFilePath.isEmpty()) {
+            const QList<QString> sourceRPaths = getBinaryRPaths(framework.sourceFilePath, true);
+            for (const QString &sourceRPath : sourceRPaths) {
+                const QDir sourceRPathDir(sourceRPath);
+                if (sourceRPathDir.exists() && !rpathsUsed.contains(sourceRPath)) {
+                    rpathsUsed.append(sourceRPath);
+                }
+            }
+        }
+
         // Copy the framework/dylib to the app bundle.
         const QString deployedBinaryPath = framework.isDylib ? copyDylib(framework, bundlePath)
                                                              : copyFramework(framework, bundlePath);
@@ -1017,7 +1058,7 @@ DeploymentInfo deployQtFrameworks(QList<FrameworkInfo> frameworks,
         for (const FrameworkInfo &dependency : dependencies) {
             if (dependency.rpathUsed.isEmpty()) {
                 changeInstallName(bundlePath, dependency, QStringList() << deployedBinaryPath, useLoaderPath);
-            } else {
+            } else if (!rpathsUsed.contains(dependency.rpathUsed)) {
                 rpathsUsed.append(dependency.rpathUsed);
             }
 
@@ -1170,13 +1211,15 @@ void deployPlugins(const ApplicationBundleInfo &appBundleInfo, const QString &pl
         });
     }
 
+    // FIXME: Parse modules/Foo.json's plugin_types instead
     static const std::map<QString, std::vector<QString>> map {
         {QStringLiteral("Multimedia"), {QStringLiteral("multimedia")}},
         {QStringLiteral("3DRender"), {QStringLiteral("sceneparsers"), QStringLiteral("geometryloaders"), QStringLiteral("renderers")}},
         {QStringLiteral("3DQuickRender"), {QStringLiteral("renderplugins")}},
         {QStringLiteral("Positioning"), {QStringLiteral("position")}},
         {QStringLiteral("Location"), {QStringLiteral("geoservices")}},
-        {QStringLiteral("TextToSpeech"), {QStringLiteral("texttospeech")}}
+        {QStringLiteral("TextToSpeech"), {QStringLiteral("texttospeech")}},
+        {QStringLiteral("SerialBus"), {QStringLiteral("canbus")}},
     };
 
     for (const auto &it : map) {
@@ -1214,8 +1257,7 @@ void createQtConf(const QString &appBundlePath)
 
     QDir().mkpath(filePath);
 
-    QFile qtconf(fileName);
-    if (qtconf.exists() && !alwaysOwerwriteEnabled) {
+    if (QFile::exists(fileName) && !alwaysOwerwriteEnabled) {
         LogWarning();
         LogWarning() << fileName << "already exists, will not overwrite.";
         LogWarning() << "To make sure the plugins are loaded from the correct location,";
@@ -1225,8 +1267,8 @@ void createQtConf(const QString &appBundlePath)
         return;
     }
 
-    qtconf.open(QIODevice::WriteOnly);
-    if (qtconf.write(contents) != -1) {
+    if (QSaveFile qtconf(fileName); qtconf.open(QIODevice::WriteOnly)
+        && qtconf.write(contents) != -1 && qtconf.commit()) {
         LogNormal() << "Created configuration file:" << fileName;
         LogNormal() << "This file sets the plugin search path to" << appBundlePath + "/Contents/PlugIns";
     }
@@ -1431,6 +1473,17 @@ QSet<QString> codesignBundle(const QString &identity,
     QString appBundleAbsolutePath = QFileInfo(appBundlePath).absoluteFilePath();
     QString rootBinariesPath = appBundleAbsolutePath + "/Contents/MacOS/";
     QStringList foundRootBinaries = QDir(rootBinariesPath).entryList(QStringList() << "*", QDir::Files);
+
+    // The app binary must be signed last.
+    QString appBinary = findAppBinary(appBundleAbsolutePath);
+    QString appBinaryName = QFileInfo(appBinary).fileName();
+    if (int appBinaryIdx = foundRootBinaries.indexOf(appBinaryName); appBinaryIdx > 0) {
+      foundRootBinaries.swapItemsAt(0, appBinaryIdx);
+      LogDebug() << "swapped appBinary to start of list";
+    }
+    LogDebug() << "App binary is" << appBinaryName;
+    LogDebug() << "Binaries in" << rootBinariesPath << "are" << foundRootBinaries;
+
     for (const QString &binary : foundRootBinaries) {
         QString binaryPath = rootBinariesPath + binary;
         pendingBinaries.push(binaryPath);

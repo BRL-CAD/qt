@@ -71,6 +71,7 @@ protected:
 
 class Q_GUI_EXPORT QPointerEvent : public QInputEvent
 {
+    Q_GADGET
     Q_DECL_EVENT_COMMON(QPointerEvent)
 public:
     explicit QPointerEvent(Type type, const QPointingDevice *dev,
@@ -133,6 +134,7 @@ public:
 
 protected:
     friend class ::tst_QEvent;
+    friend class QMutableSinglePointEvent;
     QSinglePointEvent(Type type, const QPointingDevice *dev, const QEventPoint &point,
                       Qt::MouseButton button, Qt::MouseButtons buttons,
                       Qt::KeyboardModifiers modifiers, Qt::MouseEventSource source);
@@ -508,6 +510,7 @@ public:
 protected:
     QPoint m_pos, m_oldPos;
     friend class QApplication;
+    friend class QApplicationPrivate;
 };
 
 class Q_GUI_EXPORT QExposeEvent : public QEvent
@@ -554,6 +557,7 @@ public:
 protected:
     QSize m_size, m_oldSize;
     friend class QApplication;
+    friend class QApplicationPrivate;
 };
 
 
@@ -629,7 +633,8 @@ public:
        Cursor,
        Language,
        Ruby,
-       Selection
+       Selection,
+       MimeData
     };
     class Attribute {
     public:
@@ -909,6 +914,7 @@ private:
 };
 
 #ifndef QT_NO_DEBUG_STREAM
+// ### Qt 7: move this to Qt Core and add a hook to allow GUI events to be printed: QTBUG-127680
 Q_GUI_EXPORT QDebug operator<<(QDebug, const QEvent *);
 #endif
 
@@ -942,6 +948,7 @@ public:
     bool isEndEvent() const override;
 
 protected:
+    friend class QMutableTouchEvent;
     QObject *m_target = nullptr;
     QEventPoint::States m_touchPointStates = QEventPoint::State::Unknown;
     quint32 m_reserved : 24;

@@ -1,5 +1,6 @@
 // Copyright (C) 2016 The Qt Company Ltd.
 // SPDX-License-Identifier: LicenseRef-Qt-Commercial OR LGPL-3.0-only OR GPL-2.0-only OR GPL-3.0-only
+// Qt-Security score:significant reason:default
 
 #ifndef HUFFMAN_P_H
 #define HUFFMAN_P_H
@@ -14,8 +15,6 @@
 //
 // We mean it.
 //
-
-#include <QtCore/private/qglobal_p.h>
 
 QT_BEGIN_NAMESPACE
 
@@ -115,8 +114,8 @@ public:
 
 private:
     quint32 addTable(quint32 prefixLength, quint32 indexLength);
-    PrefixTableEntry tableEntry(const PrefixTable &table, quint32 index);
-    void setTableEntry(const PrefixTable &table, quint32 index, const PrefixTableEntry &entry);
+    PrefixTableEntry tableEntry(PrefixTable table, quint32 index);
+    void setTableEntry(PrefixTable table, quint32 index, PrefixTableEntry entry);
 
     std::vector<PrefixTable> prefixTables;
     std::vector<PrefixTableEntry> tableData;

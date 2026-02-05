@@ -38,15 +38,17 @@ enum QtMsgType {
 #endif
 };
 
+class QInternalMessageLogContext;
 class QMessageLogContext
 {
     Q_DISABLE_COPY(QMessageLogContext)
 public:
+    static constexpr int CurrentVersion = 2;
     constexpr QMessageLogContext() noexcept = default;
     constexpr QMessageLogContext(const char *fileName, int lineNumber, const char *functionName, const char *categoryName) noexcept
         : line(lineNumber), file(fileName), function(functionName), category(categoryName) {}
 
-    int version = 2;
+    int version = CurrentVersion;
     int line = 0;
     const char *file = nullptr;
     const char *function = nullptr;
@@ -55,8 +57,8 @@ public:
 private:
     QMessageLogContext &copyContextFrom(const QMessageLogContext &logContext) noexcept;
 
+    friend class QInternalMessageLogContext;
     friend class QMessageLogger;
-    friend class QDebug;
 };
 
 class QLoggingCategory;
@@ -132,9 +134,12 @@ public:
     QDebug fatal(const QLoggingCategory &cat) const;
     Q_DECL_COLD_FUNCTION
     QDebug fatal(CategoryFunction catFunc) const;
-
-    QNoDebug noDebug() const noexcept;
 #endif // QT_NO_DEBUG_STREAM
+
+#  if QT_CORE_REMOVED_SINCE(6, 10)
+    QNoDebug noDebug() const noexcept;
+#  endif
+    inline QNoDebug noDebug(...) const noexcept;    // in qdebug.h
 
 private:
     QMessageLogContext context;
@@ -166,6 +171,9 @@ private:
 #define qCritical QMessageLogger(QT_MESSAGELOG_FILE, QT_MESSAGELOG_LINE, QT_MESSAGELOG_FUNC).critical
 #define qFatal QMessageLogger(QT_MESSAGELOG_FILE, QT_MESSAGELOG_LINE, QT_MESSAGELOG_FUNC).fatal
 
+Q_CORE_EXPORT Q_DECL_COLD_FUNCTION void qErrnoWarning(int code, const char *msg, ...);
+Q_CORE_EXPORT Q_DECL_COLD_FUNCTION void qErrnoWarning(const char *msg, ...);
+
 #define QT_NO_QDEBUG_MACRO while (false) QMessageLogger().noDebug
 
 #if defined(QT_NO_DEBUG_OUTPUT)
@@ -179,13 +187,11 @@ private:
 #if defined(QT_NO_WARNING_OUTPUT)
 #  undef qWarning
 #  define qWarning QT_NO_QDEBUG_MACRO
+#  define qErrnoWarning QT_NO_QDEBUG_MACRO
 #endif
 
 Q_CORE_EXPORT void qt_message_output(QtMsgType, const QMessageLogContext &context,
                                      const QString &message);
-
-Q_CORE_EXPORT Q_DECL_COLD_FUNCTION void qErrnoWarning(int code, const char *msg, ...);
-Q_CORE_EXPORT Q_DECL_COLD_FUNCTION void qErrnoWarning(const char *msg, ...);
 
 typedef void (*QtMessageHandler)(QtMsgType, const QMessageLogContext &, const QString &);
 Q_CORE_EXPORT QtMessageHandler qInstallMessageHandler(QtMessageHandler);

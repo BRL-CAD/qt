@@ -8,5 +8,7 @@ if (ANDROID)
     add_subdirectory(jar)
     add_subdirectory(java)
     add_subdirectory(templates)
+    add_subdirectory(templates_aar)
 endif()
 
+qt_internal_add_java_documentation(Global)

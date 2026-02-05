@@ -1,6 +1,7 @@
 // Copyright (C) 2023 The Qt Company Ltd.
 // Copyright (C) 2023 Intel Corporation.
 // SPDX-License-Identifier: LicenseRef-Qt-Commercial OR LGPL-3.0-only OR GPL-2.0-only OR GPL-3.0-only
+// Qt-Security score:significant reason:default
 
 #ifndef QYIELDCPU_H
 #define QYIELDCPU_H
@@ -21,10 +22,11 @@ void _mm_pause(void);       // the compiler recognizes as intrinsic
 
 QT_BEGIN_NAMESPACE
 
+Q_ALWAYS_INLINE
 #ifdef Q_CC_GNU
 __attribute__((artificial))
 #endif
-Q_ALWAYS_INLINE void qYieldCpu(void) Q_DECL_NOEXCEPT;
+void qYieldCpu(void) Q_DECL_NOEXCEPT;
 
 void qYieldCpu(void)
 #ifdef __cplusplus
@@ -44,15 +46,15 @@ void qYieldCpu(void)
 #elif defined(Q_PROCESSOR_X86) && defined(Q_CC_MSVC)
     _mm_pause();
 #elif defined(Q_PROCESSOR_X86)
-    asm("pause");           // hopefully asm() works in this compiler
+    __asm__("pause");           // hopefully asm() works in this compiler
 
 #elif __has_builtin(__builtin_arm_yield)
     __builtin_arm_yield();
 #elif defined(Q_PROCESSOR_ARM) && Q_PROCESSOR_ARM >= 7 && defined(Q_CC_GNU)
-    asm("yield");           // this works everywhere
+    __asm__("yield");           // this works everywhere
 
 #elif defined(Q_PROCESSOR_RISCV)
-    asm(".word 0x0100000f");        // a.k.a. "pause"
+    __asm__(".word 0x0100000f");        // a.k.a. "pause"
 
 #elif defined(_YIELD_PROCESSOR) && defined(Q_CC_GHS)
     _YIELD_PROCESSOR;       // Green Hills (INTEGRITY), but only on ARM

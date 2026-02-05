@@ -1,5 +1,6 @@
 // Copyright (C) 2016 The Qt Company Ltd.
 // SPDX-License-Identifier: LicenseRef-Qt-Commercial OR LGPL-3.0-only OR GPL-2.0-only OR GPL-3.0-only
+// Qt-Security score:significant reason:default
 
 #include <AppKit/AppKit.h>
 #include <CoreGraphics/CoreGraphics.h>
@@ -256,10 +257,10 @@ static void qt_mac_draw_pattern(void *info, CGContextRef c)
             CGDataProviderRelease(provider);
 #else
             const int numBytes = (w*h)/sizeof(uchar);
-            uchar xor_bytes[numBytes];
+            QVarLengthArray<uchar> xor_bytes(numBytes);
             for (int i = 0; i < numBytes; ++i)
                 xor_bytes[i] = pat->data.bytes[i] ^ 0xFF;
-            CGDataProviderRef provider = CGDataProviderCreateWithData(nullptr, xor_bytes, w*h, nullptr);
+            CGDataProviderRef provider = CGDataProviderCreateWithData(nullptr, xor_bytes.constData(), w*h, nullptr);
             CGImageRef swatch = CGImageMaskCreate(w, h, 1, 1, 1, provider, nullptr, false);
             CGDataProviderRelease(provider);
 

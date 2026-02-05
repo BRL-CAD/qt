@@ -7,39 +7,37 @@ package org.qtproject.qt.android;
 import android.annotation.SuppressLint;
 import android.content.Context;
 import android.graphics.PixelFormat;
-import android.view.Surface;
 import android.view.SurfaceHolder;
 import android.view.SurfaceView;
 
 @SuppressLint("ViewConstructor")
-public class QtSurface extends SurfaceView implements SurfaceHolder.Callback
+class QtSurface extends SurfaceView implements SurfaceHolder.Callback
 {
-    private QtSurfaceInterface m_surfaceCallback;
+    private final QtSurfaceInterface m_surfaceCallback;
 
-    public QtSurface(Context context, QtSurfaceInterface surfaceCallback, boolean onTop, int imageDepth)
+    QtSurface(Context context, QtSurfaceInterface surfaceCallback, boolean onTop, int imageDepth)
     {
         super(context);
         setFocusable(false);
         setFocusableInTouchMode(false);
         setZOrderMediaOverlay(onTop);
         m_surfaceCallback = surfaceCallback;
-        getHolder().addCallback(this);
-        if (imageDepth == 16)
-            getHolder().setFormat(PixelFormat.RGB_565);
-        else
-            getHolder().setFormat(PixelFormat.RGBA_8888);
+        SurfaceHolder holder = getHolder();
+        holder.setFormat(imageDepth == 16 ? PixelFormat.RGB_565 : PixelFormat.RGBA_8888);
+        holder.addCallback(this);
     }
 
     @Override
     public void surfaceCreated(SurfaceHolder holder)
     {
+        if (m_surfaceCallback != null)
+            m_surfaceCallback.onSurfaceChanged(holder.getSurface());
     }
 
     @Override
     public void surfaceChanged(SurfaceHolder holder, int format, int width, int height)
     {
-        if (width < 1 || height < 1)
-            return;
+        // FIXME: this can sometimes cause flicker on orientation change
         if (m_surfaceCallback != null)
             m_surfaceCallback.onSurfaceChanged(holder.getSurface());
     }
@@ -47,6 +45,8 @@ public class QtSurface extends SurfaceView implements SurfaceHolder.Callback
     @Override
     public void surfaceDestroyed(SurfaceHolder holder)
     {
+        // Once we return from this function, the Surface will be destroyed,
+        // so everything holding a reference to it needs to clean it up before we do that
         if (m_surfaceCallback != null)
             m_surfaceCallback.onSurfaceChanged(null);
     }

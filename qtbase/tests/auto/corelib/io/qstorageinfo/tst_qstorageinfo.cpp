@@ -2,11 +2,14 @@
 // SPDX-License-Identifier: LicenseRef-Qt-Commercial OR GPL-3.0-only
 
 #include <QTest>
+#include <QtTest/private/qcomparisontesthelper_p.h>
 #include <QSet>
 #include <QStandardPaths>
 #include <QStorageInfo>
 #include <QTemporaryFile>
 #include "private/qemulationdetector_p.h"
+
+#include <cstdio>
 
 #include <stdarg.h>
 
@@ -19,9 +22,11 @@
 
 #include "../../../../manual/qstorageinfo/printvolumes.cpp"
 
-#ifdef Q_OS_LINUX
+#if defined(Q_OS_LINUX) && defined(QT_BUILD_INTERNAL)
 #  include "../../../../../src/corelib/io/qstorageinfo_linux_p.h"
 #endif
+
+using namespace Qt::StringLiterals;
 
 class tst_QStorageInfo : public QObject
 {
@@ -29,6 +34,7 @@ class tst_QStorageInfo : public QObject
 private slots:
     void defaultValues();
     void dump();
+    void compareCompiles();
     void operatorEqual();
     void operatorNotEqual();
     void root();
@@ -67,7 +73,7 @@ static int qInfoPrinter(const char *format, ...)
 
     va_list ap;
     va_start(ap, format); // use variable arg list
-    int n = qvsnprintf(buf + bufuse, sizeof(buf) - bufuse, format, ap);
+    const int n = std::vsnprintf(buf + bufuse, sizeof(buf) - bufuse, format, ap);
     va_end(ap);
 
     bufuse += n;
@@ -87,31 +93,36 @@ void tst_QStorageInfo::dump()
     printVolumes(QStorageInfo::mountedVolumes(), qInfoPrinter);
 }
 
+void tst_QStorageInfo::compareCompiles()
+{
+    QTestPrivate::testEqualityOperatorsCompile<QStorageInfo>();
+}
+
 void tst_QStorageInfo::operatorEqual()
 {
     {
         QStorageInfo storage1 = QStorageInfo::root();
         QStorageInfo storage2(QDir::rootPath());
-        QCOMPARE(storage1, storage2);
+        QT_TEST_EQUALITY_OPS(storage1, storage2, true);
     }
 
     {
         QStorageInfo storage1(QCoreApplication::applicationDirPath());
         QStorageInfo storage2(QCoreApplication::applicationFilePath());
-        QCOMPARE(storage1, storage2);
+        QT_TEST_EQUALITY_OPS(storage1, storage2, true);
     }
 
     {
         QStorageInfo storage1;
         QStorageInfo storage2;
-        QCOMPARE(storage1, storage2);
+        QT_TEST_EQUALITY_OPS(storage1, storage2, true);
     }
 
     // Test copy ctor
     {
         QStorageInfo storage1 = QStorageInfo::root();
         QStorageInfo storage2(storage1);
-        QCOMPARE(storage1, storage2);
+        QT_TEST_EQUALITY_OPS(storage1, storage2, true);
     }
 }
 
@@ -119,7 +130,7 @@ void tst_QStorageInfo::operatorNotEqual()
 {
     QStorageInfo storage1 = QStorageInfo::root();
     QStorageInfo storage2;
-    QCOMPARE_NE(storage1, storage2);
+    QT_TEST_EQUALITY_OPS(storage1, storage2, false);
 }
 
 void tst_QStorageInfo::root()
@@ -130,8 +141,10 @@ void tst_QStorageInfo::root()
     QVERIFY(storage.isReady());
     QCOMPARE(storage.rootPath(), QDir::rootPath());
     QVERIFY(storage.isRoot());
+#ifndef Q_OS_WASM
     QVERIFY(!storage.device().isEmpty());
     QVERIFY(!storage.fileSystemType().isEmpty());
+#endif
 #ifndef Q_OS_HAIKU
     QCOMPARE_GE(storage.bytesTotal(), 0);
     QCOMPARE_GE(storage.bytesFree(), 0);
@@ -142,6 +155,9 @@ void tst_QStorageInfo::root()
 void tst_QStorageInfo::currentStorage()
 {
     QString appPath = QCoreApplication::applicationFilePath();
+    if (appPath.isEmpty())
+        QSKIP("No applicationFilePath(), cannot test");
+
     QStorageInfo storage(appPath);
     QVERIFY(storage.isValid());
     QVERIFY(storage.isReady());
@@ -301,7 +317,10 @@ void tst_QStorageInfo::freeSpaceUpdate()
     QCOMPARE(free, storage2.bytesFree());
     storage2.refresh();
     QCOMPARE(storage1, storage2);
+
+#ifndef Q_OS_WASM
     QCOMPARE_NE(free, storage2.bytesFree());
+#endif
 }
 
 #if defined(Q_OS_LINUX) && defined(QT_BUILD_INTERNAL)

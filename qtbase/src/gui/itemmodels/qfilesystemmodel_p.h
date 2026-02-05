@@ -1,5 +1,6 @@
 // Copyright (C) 2016 The Qt Company Ltd.
 // SPDX-License-Identifier: LicenseRef-Qt-Commercial OR LGPL-3.0-only OR GPL-2.0-only OR GPL-3.0-only
+// Qt-Security score:critical reason:data-parser
 
 #ifndef QFILESYSTEMMODEL_P_H
 #define QFILESYSTEMMODEL_P_H
@@ -21,7 +22,6 @@
 #include <private/qabstractitemmodel_p.h>
 #include <qabstractitemmodel.h>
 #include "qfileinfogatherer_p.h"
-#include <qpair.h>
 #include <qdir.h>
 #include <qicon.h>
 #include <qfileinfo.h>
@@ -257,10 +257,10 @@ public:
     QString type(const QModelIndex &index) const;
     QString time(const QModelIndex &index) const;
 
-    void _q_directoryChanged(const QString &directory, const QStringList &list);
-    void _q_performDelayedSort();
-    void _q_fileSystemChanged(const QString &path, const QList<std::pair<QString, QFileInfo>> &);
-    void _q_resolvedName(const QString &fileName, const QString &resolvedName);
+    void directoryChanged(const QString &directory, const QStringList &list);
+    void performDelayedSort();
+    void fileSystemChanged(const QString &path, const QList<std::pair<QString, QFileInfo>> &);
+    void resolvedName(const QString &fileName, const QString &resolvedName);
 
     QDir rootDir;
 #if QT_CONFIG(filesystemwatcher)

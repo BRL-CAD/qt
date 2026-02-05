@@ -34,6 +34,12 @@ QT_BEGIN_NAMESPACE
     \note Both physical and logical DPI are expressed in device-independent dots.
     Multiply by QScreen::devicePixelRatio() to get device-dependent density.
 
+    To obtain a QScreen object, use QGuiApplication::primaryScreen() for the
+    primary screen, or QGuiApplication::screens() to get a list of all screens.
+
+    \sa QGuiApplication::primaryScreen()
+    \sa QGuiApplication::screens()
+
     \inmodule QtGui
 */
 
@@ -61,7 +67,8 @@ void QScreenPrivate::updateGeometry()
     qreal scaleFactor = QHighDpiScaling::factor(platformScreen);
     QRect nativeGeometry = platformScreen->geometry();
     geometry = QRect(nativeGeometry.topLeft(), QHighDpi::fromNative(nativeGeometry.size(), scaleFactor));
-    availableGeometry = QHighDpi::fromNative(platformScreen->availableGeometry(), scaleFactor, geometry.topLeft());
+    QRect nativeAvailableGeometry = platformScreen->availableGeometry();
+    availableGeometry = QRect(nativeAvailableGeometry.topLeft(), QHighDpi::fromNative(nativeAvailableGeometry.size(), scaleFactor));
 }
 
 /*!
@@ -277,8 +284,13 @@ qreal QScreen::logicalDotsPerInch() const
 
     Returns the ratio between physical pixels and device-independent pixels for the screen.
 
-    Common values are 1.0 on normal displays and 2.0 on "retina" displays.
-    Higher values are also possible.
+    This function may return a value that differs from QWindow::devicePixelRatio(),
+    for instance on Wayland when using fractional scaling, or if window properties
+    that affect surface resolution are set. Prefer using QWindow::devicePixelRatio().
+
+    \note On some platforms the devicePixelRatio of a window and the screen it is on can
+    be different. Use this function only when you don't know which window you are targeting.
+    If you do know the target window, use QWindow::devicePixelRatio() instead.
 
     \sa QWindow::devicePixelRatio(), QGuiApplication::devicePixelRatio()
 */
@@ -461,8 +473,8 @@ Qt::ScreenOrientation QScreen::orientation() const
   \property QScreen::refreshRate
   \brief the approximate vertical refresh rate of the screen in Hz
 
-  \warning Avoid using the screen's refresh rate to drive animations
-  via a timer such as QTimer. Instead use QWindow::requestUpdate().
+  \warning Avoid using the screen's refresh rate to drive animations via a
+  timer such as QChronoTimer. Instead use QWindow::requestUpdate().
 
   \sa QWindow::requestUpdate()
 */

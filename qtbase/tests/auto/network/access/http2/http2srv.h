@@ -58,9 +58,12 @@ public:
     ~Http2Server();
 
 
+    // To send responses with status code 1xx
+    void setInformationalStatusCode(int code);
     // To be called before server started:
     void enablePushPromise(bool enabled, const QByteArray &path = QByteArray());
     void setResponseBody(const QByteArray &body);
+    void enableSendEarlyError(bool enable);
     // No content encoding is actually performed, call setResponseBody with already encoded data
     void setContentEncoding(const QByteArray &contentEncoding);
     // No authentication data is generated for the method, the full header value must be set
@@ -72,7 +75,7 @@ public:
     void setRedirect(const QByteArray &redirectUrl, int count);
     // Send a trailing HEADERS frame with PRIORITY and END_STREAM flag
     void setSendTrailingHEADERS(bool enable);
-    void emulateGOAWAY(int timeout);
+    void emulateGOAWAY(int goawayCode, int timeout);
     void redirectOpenStream(quint16 targetPort);
 
     bool isClearText() const;
@@ -145,6 +148,7 @@ private:
     RawSettings expectedClientSettings;
 
     bool connectionError = false;
+    bool sendEarlyError = false;
 
     Http2::FrameReader reader;
     Http2::Frame inboundFrame;
@@ -182,6 +186,7 @@ private:
 
     bool testingGOAWAY = false;
     int goawayTimeout = 0;
+    int goawayCode = 0;
 
     // Clear text HTTP/2, we have to deal with the protocol upgrade request
     // from the initial HTTP/1.1 request.
@@ -210,6 +215,9 @@ private:
     int redirectCount = 0;
 
     bool sendTrailingHEADERS = false;
+    int informationalStatusCode = 0;
+
+    std::optional<quint32> pendingMaxTableSizeUpdate;
 protected slots:
     void ignoreErrorSlot();
 };

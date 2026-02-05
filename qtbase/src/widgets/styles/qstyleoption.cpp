@@ -1,5 +1,6 @@
 // Copyright (C) 2016 The Qt Company Ltd.
 // SPDX-License-Identifier: LicenseRef-Qt-Commercial OR LGPL-3.0-only OR GPL-2.0-only OR GPL-3.0-only
+// Qt-Security score:significant reason:default
 
 #include <QtWidgets/private/qtwidgetsglobal_p.h>
 #include "private/qstylehelper_p.h"
@@ -1069,6 +1070,7 @@ QStyleOptionToolBar::QStyleOptionToolBar(int version)
     \enum QStyleOptionToolBar::ToolBarPosition
 
     \image qstyleoptiontoolbar-position.png
+    {Diagram of thee toolbar line and the positions relative to the line}
 
     This enum is used to describe the position of a toolbar line, as
     well as the toolbar's position within the line.
@@ -1342,7 +1344,7 @@ QStyleOptionTab::QStyleOptionTab(int version)
 /*!
     \variable QStyleOptionTab::shape
     \brief the tab shape used to draw the tab; by default
-    QTabBar::RoundedNorth
+    QTabBar::RoundedNorth.
 
     \sa QTabBar::Shape
 */
@@ -1401,6 +1403,8 @@ QStyleOptionTab::QStyleOptionTab(int version)
 
     \value None A normal tab button.
     \value HasFrame The tab button is positioned on a tab frame
+    \value [since 6.9] MinimumSizeHint The tab button's minimum size hint is being measured,
+           in contrast to its regular size hint.
 
     \sa QStyleOptionToolBar::features
 */
@@ -1557,7 +1561,7 @@ QStyleOptionProgressBar::QStyleOptionProgressBar(int version)
 
 /*!
     \variable QStyleOptionProgressBar::textAlignment
-    \brief the text alignment for the text in the QProgressBar
+    \brief the text alignment for the text in the QProgressBar.
 
     This can be used as a guide on where the text should be in the
     progress bar. The default value is Qt::AlignLeft.
@@ -2283,6 +2287,7 @@ QStyleOptionDockWidget::QStyleOptionDockWidget(int version)
     The default value is true.
 */
 
+#if QT_CONFIG(toolbutton)
 /*!
     \class QStyleOptionToolButton
     \brief The QStyleOptionToolButton class is used to describe the
@@ -2443,6 +2448,7 @@ QStyleOptionToolButton::QStyleOptionToolButton(int version)
     Qt::ToolButtonTextOnly. By default, the application's default font
     is used.
 */
+#endif  // QT_CONFIG(toolbutton)
 
 /*!
     \class QStyleOptionComboBox
@@ -2946,6 +2952,23 @@ QStyleOptionTitleBar::QStyleOptionTitleBar(int version)
 */
 
 /*!
+    \variable QStyleOptionViewItem::locale
+    \brief the locale to use for displaying text, numbers and dates.
+
+    This allows the style to display e.g. dates in a different locale than
+    the default locale of the application.
+*/
+
+/*!
+    \variable QStyleOptionViewItem::widget
+    \brief the parent widget of the item
+
+    This member contains the parent widget (itemview) of the item to
+    be able to e.g. access some properties within the QStyledItemDelegate
+    methods.
+*/
+
+/*!
     \variable QStyleOptionViewItem::textElideMode
     \brief where ellipsis should be added for text that is too long to fit
     into an item
@@ -3074,6 +3097,10 @@ QStyleOptionViewItem::QStyleOptionViewItem(int version)
     \value HasCheckIndicator Indicates that the item has a check state indicator.
     \value HasDisplay        Indicates that the item has a display role.
     \value HasDecoration     Indicates that the item has a decoration role.
+    \value [since 6.9] IsDecoratedRootColumn  Indicates that the item has a tree view branch
+    part for painting.
+    \value [since 6.9] IsDecorationForRootColumn  Indicates that the item contains the
+    information to draw the tree view branch part.
 */
 
 /*!

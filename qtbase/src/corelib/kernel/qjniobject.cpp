@@ -34,19 +34,10 @@ using namespace Qt::StringLiterals;
 
     \sa QJniEnvironment
 
-    \section1 General Notes
-
-    \list
-        \li Class names need to be fully-qualified, for example: \c "java/lang/String".
-        \li Method signatures are written as \c "(ArgumentsTypes)ReturnType", see \l {JNI Types}.
-        \li All object types are returned as a QJniObject.
-    \endlist
-
     \section1 Method Signatures
 
     QJniObject provides convenience functions that will use the correct signature based on the
-    provided template types. For functions that only return and take \l {JNI types}, the
-    signature can be generate at compile time:
+    provided or deduced template arguments.
 
     \code
     jint x = QJniObject::callMethod<jint>("getSize");
@@ -54,13 +45,11 @@ using namespace Qt::StringLiterals;
     jint ret = jString1.callMethod<jint>("compareToIgnoreCase", jString2.object<jstring>());
     \endcode
 
-    These functions are variadic templates, and the compiler will deduce the template arguments
-    from the actual argument types. In many situations, only the return type needs to be provided
-    explicitly.
-
-    For functions that take other argument types, you need to supply the signature yourself. It is
-    important that the signature matches the function you want to call. The example below
-    demonstrates how to call different static functions:
+    These functions are variadic templates, and the compiler will deduce the
+    signature from the actual argument types. Only the return type needs to be
+    provided explicitly. QJniObject can deduce the signature string for
+    functions that take \l {JNI types}, and for types that have been declared
+    with the QtJniTypes type mapping.
 
     \code
     // Java class
@@ -72,6 +61,31 @@ using namespace Qt::StringLiterals;
         static String[] stringArray(String s1, String s2) { ... }
     }
     \endcode
+
+    \code
+    // C++ code
+    Q_DECLARE_JNI_CLASS(TestClass, "org/qtproject/qt/TestClass")
+
+    // ...
+    using namespace QtJniTypes;
+    TestClass testClass = TestClass::callStaticMethod<TestClass>("create");
+    \endcode
+
+    This allows working with arbitrary Java and Android types in C++ code, without having to
+    create JNI signature strings explicitly.
+
+    \section2 Explicit JNI Signatures
+
+    It is possible to supply the signature yourself. In that case, it is important
+    that the signature matches the function you want to call.
+
+    \list
+        \li Class names need to be fully-qualified, for example: \c "java/lang/String".
+        \li Method signatures are written as \c "(ArgumentsTypes)ReturnType", see \l {JNI Types}.
+        \li All object types are returned as a QJniObject.
+    \endlist
+
+    The example below demonstrates how to call different static functions:
 
     The signature structure is \c "(ArgumentsTypes)ReturnType". Array types in the signature
     must have the \c {[} prefix, and the fully-qualified \c Object type names must have the
@@ -314,10 +328,18 @@ public:
         }
     }
 
+    bool isJString(JNIEnv *env) const;
+
     QByteArray m_className;
     jobject m_jobject = nullptr;
     jclass m_jclass = nullptr;
     bool m_own_jclass = true;
+    enum class IsJString : quint8 {
+        Unknown,
+        Yes,
+        No,
+    };
+    mutable IsJString m_is_jstring = IsJString::Unknown;
 };
 
 template <typename ...Args>
@@ -335,6 +357,29 @@ static jclass getCachedClass(const QByteArray &className)
     QReadLocker locker(cachedClassesLock);
     const auto &it = cachedClasses->constFind(className);
     return it != cachedClasses->constEnd() ? it.value() : nullptr;
+}
+
+
+bool QJniObjectPrivate::isJString(JNIEnv *env) const
+{
+    Q_ASSERT(m_jobject);
+    if (m_is_jstring != IsJString::Unknown)
+        return m_is_jstring == IsJString::Yes;
+
+    static constexpr auto stringSignature = QtJniTypes::Traits<jstring>::className();
+    if (!m_className.isEmpty()) {
+        m_is_jstring = m_className == stringSignature
+                     ? IsJString::Yes
+                     : IsJString::No;
+    } else {
+        const jclass strClass = getCachedClass(stringSignature.data());
+        const bool isStringInstance = strClass
+                                    ? env->IsInstanceOf(m_jobject, strClass)
+                                    : false;
+        m_is_jstring = isStringInstance ? IsJString::Yes : IsJString::No;
+    }
+
+    return m_is_jstring == IsJString::Yes;
 }
 
 /*!
@@ -692,7 +737,7 @@ QJniObject::QJniObject(jobject object)
     if (!object)
         return;
 
-    JNIEnv *env = QJniEnvironment::getJniEnv();
+    JNIEnv *env = jniEnv();
     d->m_jobject = env->NewGlobalRef(object);
     jclass cls = env->GetObjectClass(object);
     d->m_jclass = static_cast<jclass>(env->NewGlobalRef(cls));
@@ -721,6 +766,13 @@ QJniObject::QJniObject(jobject object)
 */
 QJniObject::~QJniObject()
 {}
+
+/*!
+    \fn void QJniObject::swap(QJniObject &other)
+    \since 6.8
+    \memberswap{object}
+*/
+
 
 namespace {
 QByteArray getClassNameHelper(JNIEnv *env, const QJniObjectPrivate *d)
@@ -819,7 +871,7 @@ QByteArray QJniObject::className() const
     is a jobject type, then the returned value will be a QJniObject.
 
     \code
-    QJniObject myJavaStrin("org/qtproject/qt/TestClass");
+    QJniObject myJavaString("org/qtproject/qt/TestClass");
     jint index = myJavaString.callMethod<jint>("indexOf", "(I)I", 0x0051);
     \endcode
 */
@@ -833,7 +885,7 @@ QByteArray QJniObject::className() const
     will be a QJniObject.
 
     \code
-    QJniObject myJavaStrin("org/qtproject/qt/TestClass");
+    QJniObject myJavaString("org/qtproject/qt/TestClass");
     jint size = myJavaString.callMethod<jint>("length");
     \endcode
 
@@ -954,11 +1006,12 @@ QByteArray QJniObject::className() const
 */
 QJniObject QJniObject::callObjectMethod(const char *methodName, const char *signature, ...) const
 {
-    jmethodID id = getCachedMethodID(jniEnv(), methodName, signature);
+    JNIEnv *env = jniEnv();
+    jmethodID id = getCachedMethodID(env, methodName, signature);
     if (id) {
         va_list args;
         va_start(args, signature);
-        QJniObject res = getCleanJniObject(jniEnv()->CallObjectMethodV(d->m_jobject, id, args), jniEnv());
+        QJniObject res = getCleanJniObject(env->CallObjectMethodV(d->m_jobject, id, args), env);
         va_end(args);
         return res;
     }
@@ -1042,10 +1095,10 @@ QJniObject QJniObject::callStaticObjectMethod(jclass clazz, const char *methodNa
 QJniObject QJniObject::callStaticObjectMethod(jclass clazz, jmethodID methodId, ...)
 {
     if (clazz && methodId) {
-        QJniEnvironment env;
+        JNIEnv *env = QJniEnvironment::getJniEnv();
         va_list args;
         va_start(args, methodId);
-        QJniObject res = getCleanJniObject(env->CallStaticObjectMethodV(clazz, methodId, args), env.jniEnv());
+        QJniObject res = getCleanJniObject(env->CallStaticObjectMethodV(clazz, methodId, args), env);
         va_end(args);
         return res;
     }
@@ -1249,11 +1302,12 @@ QJniObject QJniObject::getStaticObjectField(jclass clazz, const char *fieldName,
 */
 QJniObject QJniObject::getObjectField(const char *fieldName, const char *signature) const
 {
-    jfieldID id = getCachedFieldID(jniEnv(), fieldName, signature);
+    JNIEnv *env = jniEnv();
+    jfieldID id = getCachedFieldID(env, fieldName, signature);
     if (!id)
         return QJniObject();
 
-    return getCleanJniObject(jniEnv()->GetObjectField(d->m_jobject, id), jniEnv());
+    return getCleanJniObject(env->GetObjectField(d->m_jobject, id), env);
 }
 
 /*!
@@ -1303,11 +1357,11 @@ QJniObject QJniObject::getObjectField(const char *fieldName, const char *signatu
 */
 QJniObject QJniObject::fromString(const QString &string)
 {
-    QJniEnvironment env;
-    jstring stringRef = env->NewString(reinterpret_cast<const jchar*>(string.constData()),
-                                                                      string.length());
-    QJniObject stringObject = getCleanJniObject(stringRef, env.jniEnv());
-    stringObject.d->m_className = "java/lang/String";
+    JNIEnv *env = QJniEnvironment::getJniEnv();
+    jstring stringRef = QtJniTypes::Detail::fromQString(string, env);
+    QJniObject stringObject = getCleanJniObject(stringRef, env);
+    stringObject.d->m_className = QtJniTypes::Traits<jstring>::className();
+    stringObject.d->m_is_jstring = QJniObjectPrivate::IsJString::Yes;
     return stringObject;
 }
 
@@ -1330,11 +1384,12 @@ QString QJniObject::toString() const
     if (!isValid())
         return QString();
 
-    QJniObject string = callObjectMethod<jstring>("toString");
-    const int strLength = string.jniEnv()->GetStringLength(string.object<jstring>());
-    QString res(strLength, Qt::Uninitialized);
-    string.jniEnv()->GetStringRegion(string.object<jstring>(), 0, strLength, reinterpret_cast<jchar *>(res.data()));
-    return res;
+    JNIEnv *env = jniEnv();
+    if (d->isJString(env))
+        return QtJniTypes::Detail::toQString(object<jstring>(), env);
+
+    const QJniObject string = callMethod<jstring>("toString");
+    return QtJniTypes::Detail::toQString(string.object<jstring>(), env);
 }
 
 /*!
@@ -1350,12 +1405,12 @@ QString QJniObject::toString() const
 */
 bool QJniObject::isClassAvailable(const char *className)
 {
-    QJniEnvironment env;
+    JNIEnv *env = QJniEnvironment::getJniEnv();
 
-    if (!env.jniEnv())
+    if (!env)
         return false;
 
-    return loadClass(className, env.jniEnv());;
+    return loadClass(className, env);
 }
 
 /*!
@@ -1371,7 +1426,7 @@ bool QJniObject::isClassAvailable(const char *className)
 */
 bool QJniObject::isValid() const
 {
-    return d->m_jobject;
+    return d && d->m_jobject;
 }
 
 /*!
@@ -1397,6 +1452,8 @@ QJniObject QJniObject::fromLocalRef(jobject lref)
 
 bool QJniObject::isSameObject(jobject obj) const
 {
+    if (!d)
+        return obj == nullptr;
     if (d->m_jobject == obj)
         return true;
     if (!d->m_jobject || !obj)
@@ -1406,6 +1463,8 @@ bool QJniObject::isSameObject(jobject obj) const
 
 bool QJniObject::isSameObject(const QJniObject &other) const
 {
+    if (!other.isValid())
+        return !isValid();
     return isSameObject(other.d->m_jobject);
 }
 
@@ -1416,7 +1475,7 @@ void QJniObject::assign(jobject obj)
 
     d = QSharedPointer<QJniObjectPrivate>::create();
     if (obj) {
-        JNIEnv *env = QJniEnvironment::getJniEnv();
+        JNIEnv *env = jniEnv();
         d->m_jobject = env->NewGlobalRef(obj);
         jclass objectClass = env->GetObjectClass(obj);
         d->m_jclass = static_cast<jclass>(env->NewGlobalRef(objectClass));

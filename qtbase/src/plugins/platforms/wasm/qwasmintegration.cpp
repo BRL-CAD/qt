@@ -6,7 +6,9 @@
 #include "qwasmcompositor.h"
 #include "qwasmopenglcontext.h"
 #include "qwasmtheme.h"
+#if QT_CONFIG(clipboard)
 #include "qwasmclipboard.h"
+#endif
 #include "qwasmaccessibility.h"
 #include "qwasmservices.h"
 #include "qwasmoffscreensurface.h"
@@ -14,7 +16,9 @@
 #include "qwasmwindow.h"
 #include "qwasmbackingstore.h"
 #include "qwasmfontdatabase.h"
+#if QT_CONFIG(draganddrop)
 #include "qwasmdrag.h"
+#endif
 
 #include <qpa/qplatformwindow.h>
 #include <QtGui/qscreen.h>
@@ -22,13 +26,16 @@
 #include <QtCore/qcoreapplication.h>
 #include <qpa/qplatforminputcontextfactory_p.h>
 #include <qpa/qwindowsysteminterface_p.h>
+#include "private/qwasmsuspendresumecontrol_p.h"
 
 #include <emscripten/bind.h>
 #include <emscripten/val.h>
 
 // this is where EGL headers are pulled in, make sure it is last
 #include "qwasmscreen.h"
+#if QT_CONFIG(draganddrop)
 #include <private/qsimpledrag_p.h>
+#endif
 
 QT_BEGIN_NAMESPACE
 
@@ -69,6 +76,11 @@ static void resizeAllScreens(emscripten::val event)
     QWasmIntegration::get()->resizeAllScreens();
 }
 
+static void loadLocalFontFamilies(emscripten::val event)
+{
+    QWasmIntegration::get()->loadLocalFontFamilies(event);
+}
+
 EMSCRIPTEN_BINDINGS(qtQWasmIntegraton)
 {
     function("qtSetContainerElements", &setContainerElements);
@@ -77,14 +89,18 @@ EMSCRIPTEN_BINDINGS(qtQWasmIntegraton)
     function("qtResizeContainerElement", &resizeContainerElement);
     function("qtUpdateDpi", &qtUpdateDpi);
     function("qtResizeAllScreens", &resizeAllScreens);
+    function("qtLoadLocalFontFamilies", &loadLocalFontFamilies);
 }
 
 QWasmIntegration *QWasmIntegration::s_instance;
 
 QWasmIntegration::QWasmIntegration()
-    : m_fontDb(nullptr)
+    : m_suspendResume(std::make_shared<QWasmSuspendResumeControl>()) // create early in order to register event handlers at startup
+    , m_fontDb(nullptr)
     , m_desktopServices(nullptr)
+#if QT_CONFIG(clipboard)
     , m_clipboard(new QWasmClipboard)
+#endif
 #if QT_CONFIG(accessibility)
     , m_accessibility(new QWasmAccessibility)
 #endif
@@ -120,14 +136,14 @@ QWasmIntegration::QWasmIntegration()
 
     // install browser window resize handler
     emscripten_set_resize_callback(EMSCRIPTEN_EVENT_TARGET_WINDOW, nullptr, EM_TRUE,
-                                   [](int, const EmscriptenUiEvent *, void *) -> int {
+                                   [](int, const EmscriptenUiEvent *, void *) -> EM_BOOL {
                                        // This resize event is called when the HTML window is
                                        // resized. Depending on the page layout the elements might
                                        // also have been resized, so we update the Qt screen sizes
                                        // (and canvas render sizes).
                                        if (QWasmIntegration *integration = QWasmIntegration::get())
                                            integration->resizeAllScreens();
-                                       return 0;
+                                       return EM_FALSE;
                                    });
 
     // install visualViewport resize handler which picks up size and scale change on mobile.
@@ -136,7 +152,9 @@ QWasmIntegration::QWasmIntegration()
         visualViewport.call<void>("addEventListener", val("resize"),
                                   val::module_property("qtResizeAllScreens"));
     }
+#if QT_CONFIG(draganddrop)
     m_drag = std::make_unique<QWasmDrag>();
+#endif
 }
 
 QWasmIntegration::~QWasmIntegration()
@@ -151,8 +169,6 @@ QWasmIntegration::~QWasmIntegration()
 
     delete m_fontDb;
     delete m_desktopServices;
-    if (m_platformInputContext)
-        delete m_platformInputContext;
 #if QT_CONFIG(accessibility)
     delete m_accessibility;
 #endif
@@ -174,17 +190,29 @@ bool QWasmIntegration::hasCapability(QPlatformIntegration::Capability cap) const
     case RasterGLSurface: return false; // to enable this you need to fix qopenglwidget and quickwidget for wasm
     case MultipleWindows: return true;
     case WindowManagement: return true;
+    case ForeignWindows: return true;
     case OpenGLOnRasterSurface: return true;
+    case OffscreenSurface: return true;
     default: return QPlatformIntegration::hasCapability(cap);
     }
 }
 
-QPlatformWindow *QWasmIntegration::createPlatformWindow(QWindow *window) const
+QWasmWindow *QWasmIntegration::createWindow(QWindow *window, WId nativeHandle) const
 {
     auto *wasmScreen = QWasmScreen::get(window->screen());
     QWasmCompositor *compositor = wasmScreen->compositor();
     return new QWasmWindow(window, wasmScreen->deadKeySupport(), compositor,
-                           m_backingStores.value(window));
+                           m_backingStores.value(window), nativeHandle);
+}
+
+QPlatformWindow *QWasmIntegration::createPlatformWindow(QWindow *window) const
+{
+    return createWindow(window, 0);
+}
+
+QPlatformWindow *QWasmIntegration::createForeignWindow(QWindow *window, WId nativeHandle) const
+{
+    return createWindow(window, nativeHandle);
 }
 
 QPlatformBackingStore *QWasmIntegration::createPlatformBackingStore(QWindow *window) const
@@ -200,6 +228,16 @@ void QWasmIntegration::removeBackingStore(QWindow* window)
     m_backingStores.remove(window);
 }
 
+void QWasmIntegration::releaseRequesetUpdateHold()
+{
+    if (QWasmCompositor::releaseRequestUpdateHold())
+    {
+        for (const auto &elementAndScreen : m_screens) {
+            elementAndScreen.wasmScreen->compositor()->requestUpdate();
+        }
+    }
+}
+
 #ifndef QT_NO_OPENGL
 QPlatformOpenGLContext *QWasmIntegration::createPlatformOpenGLContext(QOpenGLContext *context) const
 {
@@ -209,14 +247,14 @@ QPlatformOpenGLContext *QWasmIntegration::createPlatformOpenGLContext(QOpenGLCon
 
 void QWasmIntegration::initialize()
 {
-    if (qgetenv("QT_IM_MODULE").isEmpty() && touchPoints < 1)
-        return;
-
-    QString icStr = QPlatformInputContextFactory::requested();
-    if (!icStr.isNull())
-        m_inputContext.reset(QPlatformInputContextFactory::create(icStr));
-    else
+    auto icStrs = QPlatformInputContextFactory::requested();
+    if (!icStrs.isEmpty()) {
+        m_inputContext.reset(QPlatformInputContextFactory::create(icStrs));
+        m_wasmInputContext = nullptr;
+    } else {
         m_inputContext.reset(new QWasmInputContext());
+        m_wasmInputContext = static_cast<QWasmInputContext *>(m_inputContext.data());
+    }
 }
 
 QPlatformInputContext *QWasmIntegration::inputContext() const
@@ -239,7 +277,7 @@ QPlatformFontDatabase *QWasmIntegration::fontDatabase() const
 
 QAbstractEventDispatcher *QWasmIntegration::createEventDispatcher() const
 {
-    return new QWasmEventDispatcher;
+    return new QWasmEventDispatcher(m_suspendResume);
 }
 
 QVariant QWasmIntegration::styleHint(QPlatformIntegration::StyleHint hint) const
@@ -282,10 +320,12 @@ QPlatformServices *QWasmIntegration::services() const
     return m_desktopServices;
 }
 
+#if QT_CONFIG(clipboard)
 QPlatformClipboard* QWasmIntegration::clipboard() const
 {
     return m_clipboard;
 }
+#endif
 
 #ifndef QT_NO_ACCESSIBILITY
 QPlatformAccessibility *QWasmIntegration::accessibility() const
@@ -380,7 +420,7 @@ void QWasmIntegration::resizeScreen(const emscripten::val &element)
                    << QString::fromEcmaString(element["id"]);
         return;
     }
-    it->wasmScreen->updateQScreenAndCanvasRenderSize();
+    it->wasmScreen->updateQScreenSize();
 }
 
 void QWasmIntegration::updateDpi()
@@ -396,7 +436,12 @@ void QWasmIntegration::updateDpi()
 void QWasmIntegration::resizeAllScreens()
 {
     for (const auto &elementAndScreen : m_screens)
-        elementAndScreen.wasmScreen->updateQScreenAndCanvasRenderSize();
+        elementAndScreen.wasmScreen->updateQScreenSize();
+}
+
+void QWasmIntegration::loadLocalFontFamilies(emscripten::val families)
+{
+    m_fontDb->populateLocalFontFamilies(families);
 }
 
 quint64 QWasmIntegration::getTimestamp()

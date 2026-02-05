@@ -5,6 +5,10 @@
 #include <QCborStreamWriter>
 #include <QBuffer>
 
+#ifndef QTEST_THROW_ON_FAIL
+# error This test requires QTEST_THROW_ON_FAIL being active.
+#endif
+
 class tst_QCborStreamWriter : public QObject
 {
     Q_OBJECT
@@ -185,6 +189,7 @@ void tst_QCborStreamWriter::nonAsciiStrings()
 
     // will be wrong if !isLatin1
     QByteArray latin1 = input.toLatin1();
+    QByteArray utf8 = input.toUtf8();
 
     if (useDevice) {
         {
@@ -192,6 +197,14 @@ void tst_QCborStreamWriter::nonAsciiStrings()
             buffer.open(QIODevice::WriteOnly);
             QCborStreamWriter writer(&buffer);
             writer.append(input);
+            QCOMPARE(buffer.data(), output);
+        }
+
+        {
+            QBuffer buffer;
+            buffer.open(QIODevice::WriteOnly);
+            QCborStreamWriter writer(&buffer);
+            writer.append(QUtf8StringView(utf8));
             QCOMPARE(buffer.data(), output);
         }
 
@@ -207,6 +220,13 @@ void tst_QCborStreamWriter::nonAsciiStrings()
             QByteArray buffer;
             QCborStreamWriter writer(&buffer);
             encodeVariant(writer, input);
+            QCOMPARE(buffer, output);
+        }
+
+        {
+            QByteArray buffer;
+            QCborStreamWriter writer(&buffer);
+            writer.append(QUtf8StringView(utf8));
             QCOMPARE(buffer, output);
         }
 
@@ -247,18 +267,10 @@ void tst_QCborStreamWriter::arrays()
     QFETCH(QByteArray, output);
 
     compare(make_list(input), "\x81" + output);
-    if (QTest::currentTestFailed())
-        return;
-
     compare(make_list(input, input), "\x82" + output + output);
-    if (QTest::currentTestFailed())
-        return;
 
     // nested lists
     compare(make_list(make_list(input)), "\x81\x81" + output);
-    if (QTest::currentTestFailed())
-        return;
-
     compare(make_list(make_list(input), make_list(input)), "\x82\x81" + output + "\x81" + output);
 }
 
@@ -268,9 +280,6 @@ void tst_QCborStreamWriter::maps()
     QFETCH(QByteArray, output);
 
     compare(make_map({{1, input}}), "\xa1\1" + output);
-    if (QTest::currentTestFailed())
-        return;
-
     compare(make_map({{1, input}, {input, 24}}), "\xa2\1" + output + output + "\x18\x18");
 }
 

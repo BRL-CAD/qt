@@ -25,6 +25,8 @@
 #include <qlayout.h>
 #include <qmenu.h>
 #include <qrandom.h>
+#include <qpointer.h>
+#include <qsettings.h>
 #include "../../../../../src/widgets/dialogs/qsidebar_p.h"
 #include "../../../../../src/gui/itemmodels/qfilesystemmodel_p.h"
 #include "../../../../../src/widgets/dialogs/qfiledialog_p.h"
@@ -104,6 +106,7 @@ private slots:
     void QTBUG4419_lineEditSelectAll();
     void QTBUG6558_showDirsOnly();
     void QTBUG4842_selectFilterWithHideNameFilterDetails();
+    void noCrashWhenParentIsDeleted();
     void dontShowCompleterOnRoot();
     void nameFilterParsing_data();
     void nameFilterParsing();
@@ -466,8 +469,10 @@ void tst_QFileDialog2::settingsCompatibility()
 {
     static const QByteArray ba32 = QByteArrayLiteral("\x00\x00\x00\xFF\x00\x00\x00\x00\x00\x00\x00\x01\x00\x00\x00\x00\x00\x00\x00\x00\x01\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x01\xF7\x00\x00\x00\x04\x01\x01\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00""d\xFF\xFF\xFF\xFF\x00\x00\x00\x81\x00\x00\x00\x00\x00\x00\x00\x04\x00\x00\x01\t\x00\x00\x00\x01\x00\x00\x00\x00\x00\x00\x00>\x00\x00\x00\x01\x00\x00\x00\x00\x00\x00\x00""B\x00\x00\x00\x01\x00\x00\x00\x00\x00\x00\x00n\x00\x00\x00\x01\x00\x00\x00\x00\x00\x00\x03\xE8\x00\xFF\xFF\xFF\xFF\x00\x00\x00\x00");
     static const QByteArray ba64 = QByteArrayLiteral("\x00\x00\x00\xFF\x00\x00\x00\x00\x00\x00\x00\x01\x00\x00\x00\x00\x00\x00\x00\x00\x01\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x01\xF7\x00\x00\x00\x04\x01\x01\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00""d\xFF\xFF\xFF\xFF\x00\x00\x00\x81\x00\x00\x00\x00\x00\x00\x00\x04\x00\x00\x01\t\x00\x00\x00\x01\x00\x00\x00\x00\x00\x00\x00>\x00\x00\x00\x01\x00\x00\x00\x00\x00\x00\x00""B\x00\x00\x00\x01\x00\x00\x00\x00\x00\x00\x00n\x00\x00\x00\x01\x00\x00\x00\x00\x00\x00\x03\xE8\x00\xFF\xFF\xFF\xFF\x00\x00\x00\x00");
+    QByteArray impHeaderData;
     QFETCH(QString, qtVersion);
     QFETCH(QDataStream::Version, dsVersion);
+
     // Create a header view, convert template to target format and store it in settings
     {
         QSettings settings(QSettings::UserScope, "QtProject");
@@ -475,18 +480,38 @@ void tst_QFileDialog2::settingsCompatibility()
         settings.setValue("sidebarWidth", 93); // random value
         settings.setValue("shortcuts", QStringList({settings.fileName(), "/tmp"}));
         settings.setValue("qtVersion", qtVersion);
-        settings.setValue("treeViewHeader", dsVersion < QDataStream::Qt_6_0 ? ba32 : ba64);
+        impHeaderData = dsVersion < QDataStream::Qt_6_0 ? ba32 : ba64;
+        settings.setValue("treeViewHeader", impHeaderData);
         settings.endGroup();
     }
     // Create a file dialog, read settings write them back
     {
         QFileDialog fd;
     }
-    // Read back settings and compare byte array
+
+    // This test has been changed a bit since a settings readback and compare likely isn't very useful.
+    // It would either require that we could centrally (and/or decentrally) can set the saveState and
+    // restoreState versions (which currently isn't the case) or it will block
+    // any (also backward compatible) extension of saveState and restoreState (which isn't acceptable).
+    // So we check that we can indeed import the old data and that a transient saveResult will result
+    // in the same data.
+    // That we are decent forward compatible from newer to older versions is difficult to test.
     QSettings settings(QSettings::UserScope, "QtProject");
     settings.beginGroup("FileDialog");
     const QByteArray savedState = settings.value("treeViewHeader").toByteArray();
-    QCOMPARE(savedState, ba32);
+
+    // Check that we can restore data from an old version.
+    QHeaderView header1(Qt::Horizontal);
+    QVERIFY(header1.restoreState(impHeaderData));
+
+    // Check that we can restore the now saved data.
+    QHeaderView header2(Qt::Horizontal);
+    QVERIFY(header2.restoreState(savedState));
+
+    // Check that these states provide the same result
+    QByteArray h2data = header2.saveState();
+    QCOMPARE(header1.saveState(), h2data);
+    QCOMPARE(h2data, savedState);
 }
 #endif
 
@@ -1110,7 +1135,6 @@ void tst_QFileDialog2::task254490_selectFileMultipleTimes()
     QTemporaryFile *t;
     t = new QTemporaryFile;
     QVERIFY2(t->open(), qPrintable(t->errorString()));
-    t->open();
     QFileDialog fd(0, "TestFileDialog");
 
     fd.setDirectory(tempPath);
@@ -1253,7 +1277,7 @@ void tst_QFileDialog2::QTBUG6558_showDirsOnly()
 
     //Create a file
     QFile tempFile(dirPath + "/plop.txt");
-    tempFile.open(QIODevice::WriteOnly | QIODevice::Text);
+    QVERIFY(tempFile.open(QIODevice::WriteOnly | QIODevice::Text));
     QTextStream out(&tempFile);
     out << "The magic number is: " << 49 << "\n";
     tempFile.close();
@@ -1266,7 +1290,6 @@ void tst_QFileDialog2::QTBUG6558_showDirsOnly()
     fd.setOption(QFileDialog::ShowDirsOnly, true);
     fd.show();
 
-    QApplicationPrivate::setActiveWindow(&fd);
     QVERIFY(QTest::qWaitForWindowActive(&fd));
     QCOMPARE(fd.isVisible(), true);
     QCOMPARE(QApplication::activeWindow(), static_cast<QWidget*>(&fd));
@@ -1310,7 +1333,6 @@ void tst_QFileDialog2::QTBUG4842_selectFilterWithHideNameFilterDetails()
     fd.selectNameFilter(chosenFilterString);
     fd.show();
 
-    QApplicationPrivate::setActiveWindow(&fd);
     QVERIFY(QTest::qWaitForWindowActive(&fd));
     QCOMPARE(fd.isVisible(), true);
     QCOMPARE(QApplication::activeWindow(), static_cast<QWidget*>(&fd));
@@ -1326,7 +1348,6 @@ void tst_QFileDialog2::QTBUG4842_selectFilterWithHideNameFilterDetails()
     fd2.selectNameFilter(chosenFilterString);
     fd2.show();
 
-    QApplicationPrivate::setActiveWindow(&fd2);
     QVERIFY(QTest::qWaitForWindowActive(&fd2));
     QCOMPARE(fd2.isVisible(), true);
     QCOMPARE(QApplication::activeWindow(), static_cast<QWidget*>(&fd2));
@@ -1335,6 +1356,53 @@ void tst_QFileDialog2::QTBUG4842_selectFilterWithHideNameFilterDetails()
     //We compare the current combobox text with the non stripped version
     QCOMPARE(filters2->currentText(), chosenFilterString);
 
+}
+
+void tst_QFileDialog2::noCrashWhenParentIsDeleted()
+{
+    {
+        QPointer<QWidget> mainWindow = new QWidget();
+        QTimer::singleShot(1000, mainWindow, [mainWindow]
+                           { if (mainWindow.get()) mainWindow->deleteLater(); });
+        const QUrl url = QFileDialog::getOpenFileUrl(mainWindow.get(),
+                                                     QStringLiteral("getOpenFileUrl"));
+        QVERIFY(url.isEmpty());
+        QVERIFY(!url.isValid());
+        QVERIFY(!mainWindow.get());
+    }
+
+    {
+        QPointer<QWidget> mainWindow = new QWidget();
+        QTimer::singleShot(1000, mainWindow, [mainWindow]
+                           { if (mainWindow.get()) mainWindow->deleteLater(); });
+        const QUrl url = QFileDialog::getSaveFileUrl(mainWindow.get(),
+                                                     QStringLiteral("getSaveFileUrl"));
+        QVERIFY(url.isEmpty());
+        QVERIFY(!url.isValid());
+        QVERIFY(!mainWindow.get());
+    }
+
+    {
+        QPointer<QWidget> mainWindow = new QWidget();
+        QTimer::singleShot(1000, mainWindow, [mainWindow]
+                           { if (mainWindow.get()) mainWindow->deleteLater(); });
+        const QUrl url
+                = QFileDialog::getExistingDirectoryUrl(mainWindow.get(),
+                                                       QStringLiteral("getExistingDirectoryUrl"));
+        QVERIFY(url.isEmpty());
+        QVERIFY(!url.isValid());
+        QVERIFY(!mainWindow.get());
+    }
+
+    {
+        QPointer<QWidget> mainWindow = new QWidget();
+        QTimer::singleShot(1000, mainWindow, [mainWindow]
+                           { if (mainWindow.get()) mainWindow->deleteLater(); });
+        const QList<QUrl> url = QFileDialog::getOpenFileUrls(mainWindow.get(),
+                                                      QStringLiteral("getOpenFileUrls"));
+        QVERIFY(url.isEmpty());
+        QVERIFY(!mainWindow.get());
+    }
 }
 
 void tst_QFileDialog2::dontShowCompleterOnRoot()
@@ -1346,7 +1414,6 @@ void tst_QFileDialog2::dontShowCompleterOnRoot()
     fd.setAcceptMode(QFileDialog::AcceptSave);
     fd.show();
 
-    QApplicationPrivate::setActiveWindow(&fd);
     QVERIFY(QTest::qWaitForWindowActive(&fd));
     QCOMPARE(fd.isVisible(), true);
     QCOMPARE(QApplication::activeWindow(), static_cast<QWidget*>(&fd));

@@ -1,5 +1,6 @@
 // Copyright (C) 2016 The Qt Company Ltd.
 // SPDX-License-Identifier: LicenseRef-Qt-Commercial OR LGPL-3.0-only OR GPL-2.0-only OR GPL-3.0-only
+// Qt-Security score:significant reason:default
 
 #ifndef QTHREADPOOL_P_H
 #define QTHREADPOOL_P_H
@@ -23,8 +24,6 @@
 #include "QtCore/qset.h"
 #include "QtCore/qqueue.h"
 #include "private/qobject_p.h"
-
-QT_REQUIRE_CONFIG(thread);
 
 QT_BEGIN_NAMESPACE
 
@@ -128,13 +127,10 @@ public:
     { return qMax(requestedMaxThreadCount, 1); }    // documentation says we start at least one
     void startThread(QRunnable *runnable = nullptr);
     void reset();
-    bool waitForDone(int msecs);
     bool waitForDone(const QDeadlineTimer &timer);
     void clear();
     void stealAndRunRunnable(QRunnable *runnable);
     void deletePageIfFinished(QueuePage *page);
-
-    static QThreadPool *qtGuiInstance();
 
     mutable QMutex mutex;
     QSet<QThreadPoolThread *> allThreads;
@@ -144,12 +140,13 @@ public:
     QWaitCondition noActiveThreads;
     QString objectName;
 
-    int expiryTimeout = 30000;
+    std::chrono::duration<int, std::milli> expiryTimeout = std::chrono::seconds(30);
     int requestedMaxThreadCount = QThread::idealThreadCount();  // don't use this directly
     int reservedThreads = 0;
     int activeThreads = 0;
     uint stackSize = 0;
     QThread::Priority threadPriority = QThread::InheritPriority;
+    QThread::QualityOfService serviceLevel = QThread::QualityOfService::Auto;
 };
 
 QT_END_NAMESPACE

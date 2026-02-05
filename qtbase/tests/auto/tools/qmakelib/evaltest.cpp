@@ -2331,7 +2331,7 @@ void tst_qmakelib::addTestFunctions(const QString &qindir)
             << "jsontext = not good\n"
                "parseJson(jsontext, json): OK = 1"
             << "OK = UNDEF"
-            << "##:2: Error parsing JSON at 1:1: illegal value"
+            << "##:2: Error parsing JSON at 1:2: illegal value"
             << true;
 
     QTest::newRow("parseJson(): bad number of arguments")
@@ -2463,10 +2463,10 @@ void tst_qmakelib::addTestFunctions(const QString &qindir)
 #else
                "pwd"
 #endif
-               "> '" + QMakeEvaluator::quoteValue(ProString(QDir::toNativeSeparators(
-                            m_outdir + "/system_out.txt"))) + "): OK = 1\n"
-               "DIR = $$cat(" + QMakeEvaluator::quoteValue(ProString(
-                            m_outdir + "/system_out.txt")) + ")"
+               "> " + QMakeEvaluator::quoteValue(ProString(QDir::toNativeSeparators(
+                             m_outdir + "/system_out.txt"))) + "'): OK = 1\n"
+               "DIR = $$quote($$cat(" + QMakeEvaluator::quoteValue(ProString(
+                             m_outdir + "/system_out.txt")) + "))"
             << "OK = 1\nDIR = " + QMakeEvaluator::quoteValue(ProString(QDir::toNativeSeparators(m_indir)))
             << ""
             << true;

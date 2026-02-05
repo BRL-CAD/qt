@@ -6,6 +6,7 @@
 #define QMETAOBJECT_H
 
 #include <QtCore/qobjectdefs.h>
+#include <QtCore/qcompare.h>
 #include <QtCore/qvariant.h>
 
 QT_BEGIN_NAMESPACE
@@ -21,6 +22,7 @@ public:
 
     QByteArray methodSignature() const;
     QByteArray name() const;
+    QByteArrayView nameView() const;
     const char *typeName() const;
     int returnType() const;
     QMetaType returnMetaType() const;
@@ -251,10 +253,11 @@ protected:
     friend struct QMetaObject;
     friend struct QMetaObjectPrivate;
     friend class QObject;
-    friend bool operator==(const QMetaMethod &m1, const QMetaMethod &m2) noexcept
-    { return m1.data == m2.data; }
-    friend bool operator!=(const QMetaMethod &m1, const QMetaMethod &m2) noexcept
-    { return !(m1 == m2); }
+
+private:
+    friend bool comparesEqual(const QMetaMethod &lhs, const QMetaMethod &rhs) noexcept
+    { return lhs.data == rhs.data; }
+    Q_DECLARE_EQUALITY_COMPARABLE(QMetaMethod)
 };
 Q_DECLARE_TYPEINFO(QMetaMethod, Q_RELOCATABLE_TYPE);
 
@@ -269,17 +272,25 @@ public:
 
     bool isFlag() const;
     bool isScoped() const;
+    bool is64Bit() const;
 
     int keyCount() const;
     const char *key(int index) const;
     int value(int index) const;
+    std::optional<quint64> value64(int index) const;
 
     const char *scope() const;
 
     int keyToValue(const char *key, bool *ok = nullptr) const;
-    const char *valueToKey(int value) const;
     int keysToValue(const char *keys, bool *ok = nullptr) const;
+    std::optional<quint64> keyToValue64(const char *key) const;
+    std::optional<quint64> keysToValue64(const char *keys) const;
+#if QT_CORE_REMOVED_SINCE(6, 9)
+    const char *valueToKey(int value) const;
     QByteArray valueToKeys(int value) const;
+#endif
+    const char *valueToKey(quint64 value) const;
+    QByteArray valueToKeys(quint64 value) const;
 
     inline const QMetaObject *enclosingMetaObject() const { return mobj; }
 
@@ -310,6 +321,7 @@ private:
     };
 
     QMetaEnum(const QMetaObject *mobj, int index);
+    template <typename... Args> quint64 value_helper(uint index, Args...) const noexcept;
 
     const QMetaObject *mobj;
     Data data;

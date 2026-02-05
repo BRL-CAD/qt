@@ -19,10 +19,12 @@
 #if QT_CONFIG(process)
 # include <QtCore/QProcess>
 #endif
+#include <QtCore/QSettings>
 #include <QtCore/private/qeventloop_p.h>
 
 #include <QtGui/QFontDatabase>
 #include <QtGui/QClipboard>
+#include <QtGui/QStyleHints>
 
 #include <QtWidgets/QApplication>
 #include <QtWidgets/QMessageBox>
@@ -45,9 +47,10 @@
 #include <private/qevent_p.h>
 #include <private/qhighdpiscaling_p.h>
 
-#include <algorithm>
+#include "../../../corelib/kernel/qcoreapplication/apphelper.h"
+#include "../../../../../shared/androidutils.h"
 
-Q_LOGGING_CATEGORY(lcTests, "qt.widgets.tests")
+#include <algorithm>
 
 QT_BEGIN_NAMESPACE
 
@@ -88,15 +91,15 @@ private slots:
     void testDeleteLaterProcessEvents4();
     void testDeleteLaterProcessEvents5();
 
-#if QT_CONFIG(library)
-    void libraryPaths();
-    void libraryPaths_qt_plugin_path();
-    void libraryPaths_qt_plugin_path_2();
-#endif
-
 #ifdef QT_BUILD_INTERNAL
     void sendPostedEvents();
 #endif  // ifdef QT_BUILD_INTERNAL
+
+    void exitFromEventLoop() { QCoreApplicationTestHelper::run(); }
+    void exitFromThread() { QCoreApplicationTestHelper::run(); }
+    void exitFromThreadedEventLoop() { QCoreApplicationTestHelper::run(); }
+    void exitWithPlugins() { QCoreApplicationTestHelper::run(); }
+    void mainAppInAThread() { QCoreApplicationTestHelper::run(); }
 
     void thread();
     void desktopSettingsAware();
@@ -119,6 +122,7 @@ private slots:
 
     void style();
     void applicationPalettePolish();
+    void setColorScheme();
 
     void allWidgets();
     void topLevelWidgets();
@@ -129,7 +133,7 @@ private slots:
     void wheelEventPropagation_data();
     void wheelEventPropagation();
 
-    void qtbug_12673();
+    void modalDialog();
     void qtbug_103611();
     void noQuitOnHide();
 
@@ -311,10 +315,8 @@ void tst_QApplication::alert()
     QApplication::alert(&widget, -1);
     QApplication::alert(&widget, 250);
     widget2.activateWindow();
-    QApplicationPrivate::setActiveWindow(&widget2);
     QApplication::alert(&widget, 0);
     widget.activateWindow();
-    QApplicationPrivate::setActiveWindow(&widget);
     QApplication::alert(&widget, 200);
 }
 
@@ -946,203 +948,6 @@ void tst_QApplication::closeAllWindows()
     qDeleteAll(QApplication::topLevelWidgets());
 }
 
-bool isPathListIncluded(const QStringList &l, const QStringList &r)
-{
-    int size = r.size();
-    if (size > l.size())
-        return false;
-#if defined (Q_OS_WIN)
-    Qt::CaseSensitivity cs = Qt::CaseInsensitive;
-#else
-    Qt::CaseSensitivity cs = Qt::CaseSensitive;
-#endif
-    int i = 0, j = 0;
-    for ( ; i < l.size() && j < r.size(); ++i) {
-        if (QDir::toNativeSeparators(l[i]).compare(QDir::toNativeSeparators(r[j]), cs) == 0) {
-            ++j;
-            i = -1;
-        }
-    }
-    return j == r.size();
-}
-
-#if QT_CONFIG(library)
-void tst_QApplication::libraryPaths()
-{
-#ifndef BUILTIN_TESTDATA
-        const QString testDir = QFileInfo(QFINDTESTDATA("test/CMakeLists.txt")).absolutePath();
-#else
-        const QString testDir = QFileInfo(QFINDTESTDATA("CMakeLists.txt")).absolutePath();
-#endif
-        QVERIFY(!testDir.isEmpty());
-    {
-        QApplication::setLibraryPaths(QStringList() << testDir);
-        QCOMPARE(QApplication::libraryPaths(), (QStringList() << testDir));
-
-        // creating QApplication adds the applicationDirPath to the libraryPath
-        int argc = 1;
-        QApplication app(argc, &argv0);
-        QString appDirPath = QDir(QCoreApplication::applicationDirPath()).canonicalPath();
-
-        QStringList actual = QApplication::libraryPaths();
-        actual.sort();
-        QStringList expected;
-        expected << testDir << appDirPath;
-        expected = QSet<QString>(expected.constBegin(), expected.constEnd()).values();
-        expected.sort();
-
-        QVERIFY2(isPathListIncluded(actual, expected),
-                 qPrintable("actual:\n - " + actual.join("\n - ") +
-                            "\nexpected:\n - " + expected.join("\n - ")));
-    }
-    {
-        // creating QApplication adds the applicationDirPath and plugin install path to the libraryPath
-        int argc = 1;
-        QApplication app(argc, &argv0);
-        QString appDirPath = QCoreApplication::applicationDirPath();
-        QString installPathPlugins =  QLibraryInfo::path(QLibraryInfo::PluginsPath);
-
-        QStringList actual = QApplication::libraryPaths();
-        actual.sort();
-
-        QStringList expected;
-        expected << installPathPlugins << appDirPath;
-        expected = QSet<QString>(expected.constBegin(), expected.constEnd()).values();
-        expected.sort();
-
-        QVERIFY2(isPathListIncluded(actual, expected),
-                 qPrintable("actual:\n - " + actual.join("\n - ") +
-                            "\nexpected:\n - " + expected.join("\n - ")));
-
-        // setting the library paths overrides everything
-         QApplication::setLibraryPaths(QStringList() << testDir);
-        QVERIFY2(isPathListIncluded(QApplication::libraryPaths(), (QStringList() << testDir)),
-                 qPrintable("actual:\n - " + QApplication::libraryPaths().join("\n - ") +
-                            "\nexpected:\n - " + testDir));
-    }
-    {
-        qCDebug(lcTests) << "Initial library path:" << QApplication::libraryPaths();
-
-        int count = QApplication::libraryPaths().size();
-#if 0
-        // this test doesn't work if KDE 4 is installed
-        QCOMPARE(count, 1); // before creating QApplication, only the PluginsPath is in the libraryPaths()
-#endif
-        QString installPathPlugins =  QLibraryInfo::path(QLibraryInfo::PluginsPath);
-        QApplication::addLibraryPath(installPathPlugins);
-        qCDebug(lcTests) << "installPathPlugins" << installPathPlugins;
-        qCDebug(lcTests) << "After adding plugins path:" << QApplication::libraryPaths();
-        QCOMPARE(QApplication::libraryPaths().size(), count);
-        QApplication::addLibraryPath(testDir);
-        QCOMPARE(QApplication::libraryPaths().size(), count + 1);
-
-        // creating QApplication adds the applicationDirPath to the libraryPath
-        int argc = 1;
-        QApplication app(argc, &argv0);
-        QString appDirPath = QCoreApplication::applicationDirPath();
-        qCDebug(lcTests) << QApplication::libraryPaths();
-        // On Windows CE these are identical and might also be the case for other
-        // systems too
-        if (appDirPath != installPathPlugins)
-            QCOMPARE(QApplication::libraryPaths().size(), count + 2);
-    }
-    {
-        int argc = 1;
-        QApplication app(argc, &argv0);
-
-        qCDebug(lcTests) << "Initial library path:" << QCoreApplication::libraryPaths();
-        int count = QCoreApplication::libraryPaths().size();
-        QString installPathPlugins =  QLibraryInfo::path(QLibraryInfo::PluginsPath);
-        QCoreApplication::addLibraryPath(installPathPlugins);
-        qCDebug(lcTests) << "installPathPlugins" << installPathPlugins;
-        qCDebug(lcTests) << "After adding plugins path:" << QCoreApplication::libraryPaths();
-        QCOMPARE(QCoreApplication::libraryPaths().size(), count);
-
-        QString appDirPath = QCoreApplication::applicationDirPath();
-
-        QCoreApplication::addLibraryPath(appDirPath);
-        QCoreApplication::addLibraryPath(appDirPath + "/..");
-        qCDebug(lcTests) << "appDirPath" << appDirPath;
-        qCDebug(lcTests) << "After adding appDirPath && appDirPath + /..:" << QCoreApplication::libraryPaths();
-        QCOMPARE(QCoreApplication::libraryPaths().size(), count + 1);
-#ifdef Q_OS_MACOS
-        QCoreApplication::addLibraryPath(appDirPath + "/../MacOS");
-#else
-        QCoreApplication::addLibraryPath(appDirPath + "/tmp/..");
-#endif
-        qCDebug(lcTests) << "After adding appDirPath + /tmp/..:" << QCoreApplication::libraryPaths();
-        QCOMPARE(QCoreApplication::libraryPaths().size(), count + 1);
-    }
-}
-
-void tst_QApplication::libraryPaths_qt_plugin_path()
-{
-    int argc = 1;
-
-    QApplication app(argc, &argv0);
-    QString appDirPath = QCoreApplication::applicationDirPath();
-
-    // Our hook into libraryPaths() initialization: Set the QT_PLUGIN_PATH environment variable
-    QString installPathPluginsDeCanon = appDirPath + QString::fromLatin1("/tmp/..");
-    QByteArray ascii = QFile::encodeName(installPathPluginsDeCanon);
-    qputenv("QT_PLUGIN_PATH", ascii);
-
-    QVERIFY(!QCoreApplication::libraryPaths().contains(appDirPath + QString::fromLatin1("/tmp/..")));
-}
-
-void tst_QApplication::libraryPaths_qt_plugin_path_2()
-{
-#ifdef Q_OS_UNIX
-    QByteArray validPath = QDir("/tmp").canonicalPath().toLatin1();
-    QByteArray nonExistentPath = "/nonexistent";
-    QByteArray pluginPath = validPath + ':' + nonExistentPath;
-#elif defined(Q_OS_WIN)
-    QByteArray validPath = "C:\\windows";
-    QByteArray nonExistentPath = "Z:\\nonexistent";
-    QByteArray pluginPath = validPath + ';' + nonExistentPath;
-#endif
-
-    {
-        // Our hook into libraryPaths() initialization: Set the QT_PLUGIN_PATH environment variable
-        qputenv("QT_PLUGIN_PATH", pluginPath);
-
-        int argc = 1;
-
-        QApplication app(argc, &argv0);
-
-        // library path list should contain the default plus the one valid path
-        QStringList expected =
-            QStringList()
-            << QLibraryInfo::path(QLibraryInfo::PluginsPath)
-            << QDir(QCoreApplication::applicationDirPath()).canonicalPath()
-            << QDir(QDir::fromNativeSeparators(QString::fromLatin1(validPath))).canonicalPath();
-
-        QVERIFY2(isPathListIncluded(QCoreApplication::libraryPaths(), expected),
-                 qPrintable("actual:\n - " + QCoreApplication::libraryPaths().join("\n - ") +
-                            "\nexpected:\n - " + expected.join("\n - ")));
-    }
-
-    {
-        int argc = 1;
-
-        QApplication app(argc, &argv0);
-
-        // library paths are initialized by the QApplication, setting
-        // the environment variable here doesn't work
-        qputenv("QT_PLUGIN_PATH", pluginPath);
-
-        // library path list should contain the default
-        QStringList expected =
-            QStringList()
-            << QLibraryInfo::path(QLibraryInfo::PluginsPath)
-            << QCoreApplication::applicationDirPath();
-        QVERIFY(isPathListIncluded(QCoreApplication::libraryPaths(), expected));
-
-        qputenv("QT_PLUGIN_PATH", nullptr);
-    }
-}
-#endif
-
 #ifdef QT_BUILD_INTERNAL
 class SendPostedEventsTester : public QObject
 {
@@ -1624,8 +1429,7 @@ void tst_QApplication::focusWidget()
         QTextEdit te;
         te.show();
 
-        QApplicationPrivate::setActiveWindow(&te);
-        QVERIFY(QTest::qWaitForWindowActive(&te));
+        QVERIFY(QTest::qWaitForWindowFocused(&te));
 
         const auto focusWidget = QApplication::focusWidget();
         QVERIFY(focusWidget);
@@ -1640,8 +1444,7 @@ void tst_QApplication::focusWidget()
         QTextEdit te(&w);
         w.show();
 
-        QApplicationPrivate::setActiveWindow(&w);
-        QVERIFY(QTest::qWaitForWindowActive(&w));
+        QVERIFY(QTest::qWaitForWindowFocused(&w));
 
         const auto focusWidget = QApplication::focusWidget();
         QVERIFY(focusWidget);
@@ -2055,6 +1858,122 @@ void tst_QApplication::applicationPalettePolish()
     }
 }
 
+void tst_QApplication::setColorScheme()
+{
+    int argc = 1;
+    QApplication app(argc, &argv0);
+
+    if (QStringList{"minimal", "offscreen", "wayland", "xcb", "wasm", "webassembly"}
+        .contains(QGuiApplication::platformName(), Qt::CaseInsensitive)) {
+        QSKIP("Setting the colorScheme is not implemented on this platform.");
+    }
+    qDebug() << "Testing setColorScheme on platform" << QGuiApplication::platformName();
+
+    if (QByteArrayView(app.style()->metaObject()->className()) == "QWindowsVistaStyle")
+        QSKIP("Setting the colorScheme is not supported with the Windows Vista style.");
+
+    const Qt::ColorScheme defaultColorScheme = QApplication::styleHints()->colorScheme();
+    // if we implement setColorScheme, then we must be able to read it
+    QVERIFY(defaultColorScheme != Qt::ColorScheme::Unknown);
+    const Qt::ColorScheme newColorScheme = defaultColorScheme == Qt::ColorScheme::Light
+                                         ? Qt::ColorScheme::Dark : Qt::ColorScheme::Light;
+
+    class TopLevelWidget : public QWidget
+    {
+        QList<QEvent::Type> events;
+    public:
+        TopLevelWidget()
+        {
+            setObjectName("colorScheme TopLevelWidget");
+        }
+
+        void clearEvents()
+        {
+            events.clear();
+        }
+        qsizetype eventCount(QEvent::Type type) const
+        {
+            return events.count(type);
+        }
+    protected:
+        bool event(QEvent *event) override
+        {
+            switch (event->type()) {
+            case QEvent::ApplicationPaletteChange:
+            case QEvent::PaletteChange:
+            case QEvent::ThemeChange:
+                events << event->type();
+                break;
+            default:
+                break;
+            }
+
+            return QWidget::event(event);
+        }
+    } topLevelWidget;
+    topLevelWidget.show();
+    QVERIFY(QTest::qWaitForWindowExposed(&topLevelWidget));
+
+    QSignalSpy colorSchemeChangedSpy(app.styleHints(), &QStyleHints::colorSchemeChanged);
+
+    // always start with a clean list
+    topLevelWidget.clearEvents();
+    const QPalette defaultPalette = topLevelWidget.palette();
+
+    bool oldPaletteWhenSchemeChanged = false;
+    connect(app.styleHints(), &QStyleHints::colorSchemeChanged, this,
+            [defaultPalette, &topLevelWidget, &oldPaletteWhenSchemeChanged]{
+        oldPaletteWhenSchemeChanged = defaultPalette == topLevelWidget.palette();
+    });
+
+    app.styleHints()->setColorScheme(newColorScheme);
+    QTRY_COMPARE(colorSchemeChangedSpy.count(), 1);
+    // We have not yet updated the palette when we emit the colorSchemeChanged
+    // signal, so the toplevel widget should still use the previous palette
+    QVERIFY(oldPaletteWhenSchemeChanged);
+    QCOMPARE(topLevelWidget.eventCount(QEvent::ThemeChange), 1);
+    // We can't guarantee that there is only one ApplicationPaletteChange,
+    // and they might arrive asynchronously in response to ThemeChange
+    QTRY_COMPARE_GE(topLevelWidget.eventCount(QEvent::ApplicationPaletteChange), 1);
+    // But we can guarantee a single PaletteChange event for the widget
+    QCOMPARE(topLevelWidget.eventCount(QEvent::PaletteChange), 1);
+    // The palette should have changed
+    QCOMPARE_NE(topLevelWidget.palette(), defaultPalette);
+
+    topLevelWidget.clearEvents();
+    colorSchemeChangedSpy.clear();
+
+    // verify that a widget shown with a color scheme override in place respect that
+    QWidget newWidget;
+    newWidget.show();
+    QVERIFY(QTest::qWaitForWindowExposed(&newWidget));
+    QCOMPARE(newWidget.palette(), topLevelWidget.palette());
+
+    // Setting to Unknown should follow the system preference again
+    app.styleHints()->setColorScheme(Qt::ColorScheme::Unknown);
+    QTRY_COMPARE(colorSchemeChangedSpy.count(), 1);
+    QCOMPARE(app.styleHints()->colorScheme(), defaultColorScheme);
+    QTRY_COMPARE(topLevelWidget.eventCount(QEvent::PaletteChange), 1);
+
+    auto debugPalette = qScopeGuard([defaultPalette, &topLevelWidget]{
+        qDebug() << "Inspecting palettes for differences";
+        const QPalette palette = topLevelWidget.palette();
+        for (int g = 0; g < QPalette::NColorGroups; ++g) {
+            for (int r = 0; r < QPalette::NColorRoles; ++r) {
+                const auto group = static_cast<QPalette::ColorGroup>(g);
+                const auto role = static_cast<QPalette::ColorRole>(r);
+                qDebug() << "...Checking" << group << role;
+                const auto actualBrush = palette.brush(group, role);
+                const auto expectedBrush = defaultPalette.brush(group, role);
+                if (palette.brush(group, role) != defaultPalette.brush(group, role))
+                    qWarning() << "...Difference in" << group << role << actualBrush << expectedBrush;
+            }
+        }
+    });
+    QCOMPARE(topLevelWidget.palette(), defaultPalette);
+    debugPalette.dismiss();
+}
+
 void tst_QApplication::allWidgets()
 {
     int argc = 1;
@@ -2174,8 +2093,7 @@ void tst_QApplication::touchEventPropagation()
         QVERIFY(QTest::qWaitForWindowExposed(&window));
         // QPA always takes screen positions and since we map the TouchPoint back to QPA's structure first,
         // we must ensure there is a screen position in the TouchPoint that maps to a local 0, 0.
-        const QPoint deviceGlobalPos =
-            QHighDpi::toNativePixels(window.mapToGlobal(QPoint(0, 0)), window.windowHandle()->screen());
+        const QPoint deviceGlobalPos = window.mapToGlobal(QPoint(0, 0));
         auto pressedTouchPoints = QList<QEventPoint>() <<
             QEventPoint(0, QEventPoint::State::Pressed, QPointF(), deviceGlobalPos);
         auto releasedTouchPoints = QList<QEventPoint>() <<
@@ -2234,8 +2152,7 @@ void tst_QApplication::touchEventPropagation()
         window.show();
         auto handle = window.windowHandle();
         QVERIFY(QTest::qWaitForWindowExposed(&window));
-        const QPoint deviceGlobalPos =
-            QHighDpi::toNativePixels(window.mapToGlobal(QPoint(50, 150)), window.windowHandle()->screen());
+        const QPoint deviceGlobalPos = window.mapToGlobal(QPoint(50, 150));
         auto pressedTouchPoints = QList<QEventPoint>() <<
             QEventPoint(0, QEventPoint::State::Pressed, QPointF(), deviceGlobalPos);
         auto releasedTouchPoints = QList<QEventPoint>() <<
@@ -2516,18 +2433,30 @@ void tst_QApplication::wheelEventPropagation()
     }
 }
 
-void tst_QApplication::qtbug_12673()
+QString modalHelperPath()
+{
+#ifdef Q_OS_ANDROID
+    int argc = 1;
+    QApplication app(argc, &argv0);
+    return app.applicationDirPath() + QString("/libmodal_helper_%1.so").arg(androidAbi());
+#else
+    return "./modal_helper";
+#endif
+}
+
+// QTBUG-133037, QTBUG-12673
+void tst_QApplication::modalDialog()
 {
 #if QT_CONFIG(process)
     QProcess testProcess;
     QStringList arguments;
-    testProcess.start("./modal_helper", arguments);
+    testProcess.start(modalHelperPath(), arguments);
     QVERIFY2(testProcess.waitForStarted(),
              qPrintable(QString::fromLatin1("Cannot start 'modal_helper': %1").arg(testProcess.errorString())));
     QVERIFY(testProcess.waitForFinished(20000));
     QCOMPARE(testProcess.exitStatus(), QProcess::NormalExit);
 #else
-    QSKIP( "No QProcess support", SkipAll);
+    QSKIP("No QProcess support");
 #endif
 }
 
@@ -2574,7 +2503,6 @@ public:
     explicit ShowCloseShowWidget(bool showAgain, QWidget *parent = nullptr)
         : QWidget(parent), showAgain(showAgain)
     {
-        QTimer::singleShot(0, this, &ShowCloseShowWidget::doClose);
         int timeout = 500;
 #ifdef Q_OS_ANDROID
         // On Android, CI Android emulator is not running HW accelerated graphics and can be slow,
@@ -2582,6 +2510,19 @@ public:
         timeout = 1000;
 #endif
         QTimer::singleShot(timeout, this, [] () { QCoreApplication::exit(1); });
+    }
+
+    bool shown = false;
+
+protected:
+    void showEvent(QShowEvent *) override
+    {
+        QTimer::singleShot(0, this, &ShowCloseShowWidget::doClose);
+        shown = true;
+    }
+    void hideEvent(QHideEvent *) override
+    {
+        shown = false;
     }
 
 private slots:
@@ -2599,14 +2540,20 @@ void tst_QApplication::abortQuitOnShow()
 {
     int argc = 0;
     QApplication app(argc, nullptr);
+
+    if (QGuiApplication::platformName().startsWith(QLatin1String("wayland"), Qt::CaseInsensitive))
+        QSKIP("Wayland: This crash, see QTBUG-123172.");
+
     ShowCloseShowWidget window1(false);
     window1.setWindowTitle(QLatin1String(QTest::currentTestFunction()));
     window1.show();
+    QVERIFY(QTest::qWaitFor([&window1](){ return window1.shown; }));
     QCOMPARE(QCoreApplication::exec(), 0);
 
     ShowCloseShowWidget window2(true);
     window2.setWindowTitle(QLatin1String(QTest::currentTestFunction()));
     window2.show();
+    QVERIFY(QTest::qWaitFor([&window2](){ return window2.shown; }));
     QCOMPARE(QCoreApplication::exec(), 1);
 }
 

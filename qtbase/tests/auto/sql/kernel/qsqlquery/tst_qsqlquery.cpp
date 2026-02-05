@@ -243,6 +243,9 @@ private slots:
     void QTBUG_73286_data() { generic_data("QODBC"); }
     void QTBUG_73286();
 
+    void ODBC_FloatingPoint_data() { return generic_data("QODBC"); }
+    void ODBC_FloatingPoint();
+
     void insertVarChar1_data() { generic_data("QODBC"); }
     void insertVarChar1();
 
@@ -256,6 +259,12 @@ private slots:
     void ibaseDateTimeWithTZ();
     void ibaseTimeStampTzArray_data() { generic_data("QIBASE"); }
     void ibaseTimeStampTzArray();
+    void ibaseInt128_data() { generic_data("QIBASE"); }
+    void ibaseInt128();
+
+    void QTBUG_128493_data() { generic_data("QIBASE"); }
+    void QTBUG_128493();
+
 
     void psqlJsonOperator_data() { generic_data("QPSQL"); }
     void psqlJsonOperator();
@@ -264,6 +273,16 @@ private slots:
     // invalidQuery() if run later; so put this one last !
     void prematureExec_data() { generic_data(); }
     void prematureExec();
+
+    void uuid_data() { generic_data(); }
+    void uuid();
+
+#if QT_REMOVAL_QT7_DEPRECATED_SINCE(6, 2)
+    // cleanup() is data-driven
+    void qmetatypeDeprecatedCopy_data() { generic_data(); }
+    void qmetatypeDeprecatedCopy();
+#endif
+
 private:
     // returns all database connections
     void generic_data(const QString &engine=QString());
@@ -386,19 +405,18 @@ void tst_QSqlQuery::createTestTables(QSqlDatabase db)
 
 void tst_QSqlQuery::populateTestTables(QSqlDatabase db)
 {
+    QSqlDriver::DbmsType dbType = tst_Databases::getDatabaseType(db);
     QSqlQuery q(db);
     const QString qtest_null(qTableName("qtest_null", __FILE__, db));
     q.exec("delete from " + qtest);
-    QVERIFY_SQL(q, exec(QLatin1String("insert into %1 values (1, 'VarChar1', 'Char1')")
-                        .arg(qtest)));
-    QVERIFY_SQL(q, exec(QLatin1String("insert into %1 values (2, 'VarChar2', 'Char2')")
-                        .arg(qtest)));
-    QVERIFY_SQL(q, exec(QLatin1String("insert into %1 values (3, 'VarChar3', 'Char3')")
-                        .arg(qtest)));
-    QVERIFY_SQL(q, exec(QLatin1String("insert into %1 values (4, 'VarChar4', 'Char4')")
-                        .arg(qtest)));
-    QVERIFY_SQL(q, exec(QLatin1String("insert into %1 values (5, 'VarChar5', 'Char5')")
-                        .arg(qtest)));
+    if (dbType == QSqlDriver::MSSqlServer)
+        q.exec("SET IDENTITY_INSERT " + qtest + " ON"); // do not reset, also needed for tests later on
+    for (int i = 1; i <= 5; ++i) {
+        const QString stmt =
+                QString("insert into %1 (id, t_varchar, t_char) values (%2, 'VarChar%2', 'Char%2')")
+                        .arg(qtest).arg(i);
+        QVERIFY_SQL(q, exec(stmt));
+    }
 
     q.exec("delete from " + qtest_null);
     QVERIFY_SQL(q, exec(QLatin1String("insert into %1 values (0, NULL)").arg(qtest_null)));
@@ -1120,11 +1138,11 @@ void tst_QSqlQuery::isActive()
         QVERIFY(!q.next());
     QVERIFY(q.isActive());
 
-    QVERIFY_SQL(q, exec(QLatin1String("insert into %1 values (41, 'VarChar41', 'Char41')")
+    QVERIFY_SQL(q, exec(QLatin1String("insert into %1 (id, t_varchar, t_char) values (41, 'VarChar41', 'Char41')")
                         .arg(qtest)));
     QVERIFY(q.isActive());
 
-    QVERIFY_SQL(q, exec(QLatin1String("update %1 set id = 42 where id = 41").arg(qtest)));
+    QVERIFY_SQL(q, exec(QLatin1String("update %1 set t_varchar = 'VarChar42' where id = 41").arg(qtest)));
     QVERIFY(q.isActive());
 
     QVERIFY_SQL(q, exec(QLatin1String("delete from %1 where id = 42").arg(qtest)));
@@ -1222,7 +1240,7 @@ void tst_QSqlQuery::size()
 
     q2.clear();
 
-    QVERIFY_SQL(q, exec(QLatin1String("update %1 set id = 100 where id = 1").arg(qtest)));
+    QVERIFY_SQL(q, exec(QLatin1String("update %1 set t_varchar = 'VarChar42' where id = 1").arg(qtest)));
     QCOMPARE(q.size(), -1);
     QCOMPARE(q.size(), -1); // yes, twice
 }
@@ -1237,7 +1255,7 @@ void tst_QSqlQuery::isSelect()
     QVERIFY_SQL(q, exec("select * from " + qtest));
     QVERIFY(q.isSelect());
 
-    QVERIFY_SQL(q, exec(QLatin1String("update %1 set id = 1 where id = 1").arg(qtest)));
+    QVERIFY_SQL(q, exec(QLatin1String("update %1 set t_varchar = 'VarChar42' where id = 1").arg(qtest)));
     QVERIFY(!q.isSelect());
 }
 
@@ -1875,52 +1893,54 @@ void tst_QSqlQuery::oci_rawField()
 // Test whether we can fetch values with more than DOUBLE precision
 // note that SQLite highest precision is that of a double, although
 // you can define field with higher precision:
+// Test whether we can fetch values with more than DOUBLE precision
+// note that SQLite highest precision is that of a double, although
+// you can define field with higher precision:
 void tst_QSqlQuery::precision()
 {
     QFETCH(QString, dbName);
     QSqlDatabase db = QSqlDatabase::database(dbName);
     CHECK_DATABASE(db);
     const QSqlDriver::DbmsType dbType = tst_Databases::getDatabaseType(db);
-    if (dbType == QSqlDriver::Interbase)
-        QSKIP("DB unable to store high precision");
 
     const auto tidier = qScopeGuard([db, oldPrecision = db.driver()->numericalPrecisionPolicy()]() {
         db.driver()->setNumericalPrecisionPolicy(oldPrecision);
     });
+    int digits = 21;
+    int decimals = 20;
+    std::array<QLatin1String, 2> precStrings = { "1.2345678901234567891"_L1,
+                                                 "-1.2345678901234567891"_L1 };
+    if (dbType == QSqlDriver::SQLite) {
+        // SQLite 3.45 does not return more, even when speicfied
+        digits = 17;
+        decimals = 16;
+        precStrings = { "1.2345678901234567"_L1, "-1.2345678901234567"_L1 };
+    } else if (dbType == QSqlDriver::Sybase)
+        decimals = 18;
 
     db.driver()->setNumericalPrecisionPolicy(QSql::HighPrecision);
     TableScope ts(db, "qtest_precision", __FILE__);
-    static const QLatin1String precStr("1.2345678901234567891");
 
-    {
-        // need a new scope for SQLITE
-        QSqlQuery q(db);
-
-        QVERIFY_SQL(q, exec(QLatin1String(tst_Databases::isMSAccess(db)
-                                          ? "CREATE TABLE %1 (col1 number)"
-                                          : "CREATE TABLE %1 (col1 numeric(21, 20))")
-                            .arg(ts.tableName())));
-
-        QVERIFY_SQL(q, exec(QLatin1String("INSERT INTO %1 (col1) VALUES (%2)")
-                            .arg(ts.tableName(), precStr)));
+    QSqlQuery q(db);
+    QString stmt = "CREATE TABLE %1 (col1 numeric("_L1 + QString::number(digits) + ", "_L1 +
+                    QString::number(decimals) + "))"_L1;
+    if (tst_Databases::isMSAccess(db))
+        stmt = "CREATE TABLE %1 (col1 number)"_L1;
+    QVERIFY_SQL(q, exec(stmt.arg(ts.tableName())));
+    for (const auto &precStr : precStrings) {
+        QVERIFY_SQL(q, exec("DELETE FROM %1"_L1.arg(ts.tableName())));
+        QVERIFY_SQL(q, exec("INSERT INTO %1 (col1) VALUES (%2)"_L1.arg(ts.tableName(), precStr)));
         QVERIFY_SQL(q, exec("SELECT * FROM " + ts.tableName()));
         QVERIFY(q.next());
         const QString val = q.value(0).toString();
         if (!val.startsWith(precStr)) {
             int i = 0;
-            while (i < val.size() && precStr[i] != 0 && precStr[i] == val[i].toLatin1())
+            while (i < val.size() && precStr[i] != 0 && precStr[i] == val[i])
                 ++i;
-
-            // TDS has crappy precisions by default
-            if (dbType == QSqlDriver::Sybase) {
-                if (i < 18)
-                    qWarning("TDS didn't return the right precision");
-            } else {
-                qWarning() << tst_Databases::dbToString(db) << "didn't return the right precision ("
-                    << i << "out of 21)," << val;
-            }
+            qWarning() << tst_Databases::dbToString(db) << "didn't return the right precision ("
+                        << i << "out of " << digits << ")," << val;
         }
-    } // SQLITE scope
+    }
 }
 
 void tst_QSqlQuery::nullResult()
@@ -2776,6 +2796,7 @@ void tst_QSqlQuery::lastInsertId()
         QSKIP("Database doesn't support lastInsertId");
 
     QSqlQuery q(db);
+    q.exec("SET IDENTITY_INSERT " + qtest + " ON"); // do not reset, also needed for tests later on
 
     // PostgreSQL >= 8.1 relies on lastval() which does not work if a value is
     // manually inserted to the serial field, so we create a table specifically
@@ -2786,11 +2807,12 @@ void tst_QSqlQuery::lastInsertId()
                             .arg(ts.tableName())));
         QVERIFY_SQL(q, exec(QLatin1String("insert into %1 (t_varchar, t_char) values "
                                           "('VarChar41', 'Char41')").arg(ts.tableName())));
+        QVERIFY(q.lastInsertId().isValid());
     } else {
-        QVERIFY_SQL(q, exec(QLatin1String("insert into %1 values (41, 'VarChar41', 'Char41')")
+        QVERIFY_SQL(q, exec(QLatin1String("insert into %1 (id, t_varchar, t_char) values (41, 'VarChar41', 'Char41')")
                             .arg(qtest)));
+        QVERIFY(q.lastInsertId().isValid());
     }
-    QVERIFY(q.lastInsertId().isValid());
 }
 
 void tst_QSqlQuery::lastQuery()
@@ -2899,10 +2921,10 @@ void tst_QSqlQuery::queryOnInvalidDatabase()
             QSqlDatabase::removeDatabase("invalidConnection");
         });
         // Note: destruction of db needs to happen before we call removeDatabase.
-        QTest::ignoreMessage(QtWarningMsg, "QSqlDatabase: INVALID driver not loaded");
 #if QT_CONFIG(regularexpression)
         QTest::ignoreMessage(QtWarningMsg,
-                             QRegularExpression("QSqlDatabase: available drivers: "));
+                             QRegularExpression("QSqlDatabase: can not load requested driver "
+                                                "'INVALID', available drivers: "));
 #endif
         QSqlDatabase db = QSqlDatabase::addDatabase("INVALID", "invalidConnection");
         QVERIFY(db.lastError().isValid());
@@ -3673,7 +3695,7 @@ void tst_QSqlQuery::QTBUG_18435()
 
     QVERIFY_SQL(q, exec(stmt));
     QVERIFY_SQL(q, prepare(QLatin1String("{CALL %1(?)}").arg(ps.name())));
-    const QString testStr = "0123";
+    const QString testStr = "01234";
     q.bindValue(0, testStr, QSql::Out);
     QVERIFY_SQL(q, exec());
     QCOMPARE(q.boundValue(0).toString(), QLatin1String("TEST"));
@@ -4392,7 +4414,7 @@ void tst_QSqlQuery::aggregateFunctionTypes()
         const auto &tableName = ts.tableName();
 
         QSqlQuery q(db);
-        QVERIFY_SQL(q, exec(QLatin1String("CREATE TABLE %1 (id REAL)").arg(tableName)));
+        QVERIFY_SQL(q, exec(QLatin1String("CREATE TABLE %1 (id DOUBLE PRECISION)").arg(tableName)));
 
         // First test without any entries
         QVERIFY_SQL(q, exec("SELECT SUM(id) FROM " + tableName));
@@ -4667,6 +4689,34 @@ void tst_QSqlQuery::QTBUG_73286()
     QCOMPARE(q.value(2).toString(), "12345678901234567.890");
 }
 
+void tst_QSqlQuery::ODBC_FloatingPoint()
+{
+    QFETCH(QString, dbName);
+    QSqlDatabase db = QSqlDatabase::database(dbName);
+    CHECK_DATABASE(db);
+    TableScope ts(db, "qtbug138642", __FILE__);
+
+    constexpr auto val1 = 0.015625; // more than 7 chars which is the length of real!
+    constexpr auto val2 = 0.09375;
+    QSqlQuery q(db);
+    QVERIFY_SQL(q, exec("CREATE TABLE %1 (Id INT, Column1 REAL, Column2 FLOAT)"_L1.arg(ts.tableName())));
+    QVERIFY_SQL(q, exec("INSERT INTO %1 (Id, Column1, Column2) Values (1, %2, %2)"_L1.arg(ts.tableName()).arg(val1)));
+    QVERIFY_SQL(q, exec("INSERT INTO %1 (Id, Column1, Column2) Values (2, %2, %2)"_L1.arg(ts.tableName()).arg(val2)));
+
+    const auto prec = {QSql::HighPrecision, QSql::LowPrecisionDouble};
+    for (const auto p  : prec) {
+        q.setNumericalPrecisionPolicy(p);
+        QVERIFY_SQL(q, exec("SELECT Column1, Column2 FROM %1 ORDER BY Id"_L1.arg(ts.tableName())));
+        QVERIFY_SQL(q, next());
+        QCOMPARE(q.value(0).toDouble(), val1);
+        QCOMPARE(q.value(1).toDouble(), val1);
+        QVERIFY_SQL(q, next());
+        QCOMPARE(q.value(0).toDouble(), val2);
+        QCOMPARE(q.value(1).toDouble(), val2);
+    }
+}
+
+
 void tst_QSqlQuery::insertVarChar1()
 {
     QFETCH(QString, dbName);
@@ -4863,6 +4913,56 @@ void tst_QSqlQuery::ibaseDateTimeWithTZ()
     }
 }
 
+void tst_QSqlQuery::QTBUG_128493()
+{
+    QFETCH(QString, dbName);
+    QSqlDatabase db = QSqlDatabase::database(dbName);
+    CHECK_DATABASE(db);
+    if (tst_Databases::getDatabaseType(db) != QSqlDriver::Interbase)
+        QSKIP("Implemented only for Interbase");
+
+    if (tst_Databases::getIbaseEngineVersion(db).majorVersion() < 4)
+        QSKIP("Time zone support only implemented for firebird engine version 4 and greater");
+
+
+    QSqlQuery q{db};
+
+#if QT_CONFIG(timezone)
+    const auto currentDateTime = QDateTime::currentDateTime().toTimeZone(QTimeZone("Europe/Vienna"_ba));
+    //Set session time zone
+    QVERIFY_SQL(q, exec(u"set time zone 'Europe/Vienna'"_s));
+#else
+    const auto currentDateTime = QDateTime::currentDateTime();
+#endif // QT_CONFIG(timezone)
+
+    QVERIFY_SQL(q, exec(u"select current_timestamp from rdb$database"_s));
+    QVERIFY_SQL(q, isActive());
+    QVERIFY_SQL(q, next());
+    const auto currentDateTimeDB = q.value(0).toDateTime();
+
+    QCOMPARE(currentDateTime.date(), currentDateTimeDB.date());
+    QCOMPARE(currentDateTime.offsetFromUtc(), currentDateTimeDB.offsetFromUtc());
+    QCOMPARE(currentDateTime.isDaylightTime(), currentDateTimeDB.isDaylightTime());
+
+    QCOMPARE(currentDateTime.time().hour(), currentDateTimeDB.time().hour());
+
+    const QString tableName(qTableName(u"dateTimeTS"_s, __FILE__, db));
+    QVERIFY_SQL(q, exec(u"CREATE TABLE "_s + tableName + u"(dt timestamp with time zone)"_s));
+
+    QVERIFY_SQL(q, prepare(u"INSERT INTO %1 values(:dt)"_s.arg(tableName)));
+    q.bindValue(":dt", currentDateTime );
+    QVERIFY_SQL(q, exec());
+
+    QVERIFY_SQL(q, exec(u"SELECT cast(dt AS VARCHAR(50)) FROM "_s + tableName));
+    QVERIFY_SQL(q, next());
+
+    const auto currentDateTimeFromDBString = q.value(0).toString();
+    auto currentDateTimeFromDB = QDateTime::fromString(currentDateTimeFromDBString,
+                                                       u"yyyy-MM-dd hh:mm:ss.zzz0 tttt"_s);
+
+    QCOMPARE(currentDateTimeFromDB, currentDateTime);
+}
+
 void tst_QSqlQuery::sqliteVirtualTable()
 {
     // Virtual tables can behave differently when it comes to prepared
@@ -5034,6 +5134,54 @@ void tst_QSqlQuery::ibaseTimeStampTzArray()
 #endif // QT_CONFIG(timezone)
 }
 
+void tst_QSqlQuery::ibaseInt128()
+{
+    QFETCH(QString, dbName);
+    QSqlDatabase db = QSqlDatabase::database(dbName);
+    CHECK_DATABASE(db);
+
+    TableScope ts(db, "int128test", __FILE__);
+    db.setNumericalPrecisionPolicy(QSql::HighPrecision);
+    QSqlQuery q(db);
+    if (!q.exec("CREATE TABLE " + ts.tableName() + " (id INT PRIMARY KEY, price NUMERIC(20, 4))"))
+        QSKIP("Need at least Firebird 4 for this test - skipping");
+
+    QVERIFY_SQL(q, exec("INSERT INTO " + ts.tableName() + "(id,price) values(1,40001.1234)"));
+    QVERIFY_SQL(q, prepare("INSERT INTO " + ts.tableName() + "(id,price) values(2,:amount)"));
+    q.bindValue(":amount", 12345.67890);
+    QVERIFY_SQL(q, exec());
+    {
+        QSqlQuery q2(db);
+        q2.setNumericalPrecisionPolicy(QSql::LowPrecisionDouble);
+        QVERIFY_SQL(q2, exec("SELECT price FROM " + ts.tableName() + " ORDER BY id"));
+        QVERIFY_SQL(q2, next());
+        QCOMPARE(q2.value(0).metaType().id(), QMetaType::Double);
+        QCOMPARE(q2.value(0).toDouble(), 40001.1234);
+        QVERIFY_SQL(q2, next());
+        QCOMPARE(q2.value("price").metaType().id(), QMetaType::Double);
+        QCOMPARE(q2.value("price").toDouble(), 12345.6789);
+        QVERIFY_SQL(q2, exec("SELECT sum(price) FROM " + ts.tableName()));
+        QVERIFY_SQL(q2, next());
+        QCOMPARE(q2.value(0).metaType().id(), QMetaType::Double);
+        QCOMPARE(q2.value(0).toDouble(), 52346.8023);
+    }
+    {
+        QSqlQuery q2(db);
+        q2.setNumericalPrecisionPolicy(QSql::HighPrecision);
+        QVERIFY_SQL(q2, exec("SELECT price FROM " + ts.tableName() + " ORDER BY id"));
+        QVERIFY_SQL(q2, next());
+        QCOMPARE(q2.value(0).metaType().id(), QMetaType::QString);
+        QCOMPARE(q2.value(0).toString(), "40001.1234");
+        QVERIFY_SQL(q2, next());
+        QCOMPARE(q2.value("price").metaType().id(), QMetaType::QString);
+        QCOMPARE(q2.value("price").toString(), "12345.6789");
+        QVERIFY_SQL(q2, exec("SELECT sum(price) FROM " + ts.tableName()));
+        QVERIFY_SQL(q2, next());
+        QCOMPARE(q2.value(0).metaType().id(), QMetaType::QString);
+        QCOMPARE(q2.value(0).toString(), "52346.8023");
+    }
+}
+
 void tst_QSqlQuery::ibase_executeBlock()
 {
     QFETCH(QString, dbName);
@@ -5131,6 +5279,57 @@ void tst_QSqlQuery::psqlJsonOperator()
     QCOMPARE(qry.value(1).toByteArray(), "{\"b\": [3, 4]}");
 }
 
+void tst_QSqlQuery::uuid()
+{
+    QFETCH(QString, dbName);
+    QSqlDatabase db = QSqlDatabase::database(dbName);
+    CHECK_DATABASE(db);
+    if (tst_Databases::getDatabaseType(db) != QSqlDriver::PostgreSQL &&
+        tst_Databases::getDatabaseType(db) != QSqlDriver::MimerSQL)
+        QSKIP("UUID only supported by PostgreSQL and MimerSQL");
+
+    TableScope ts(db, "uuid", __FILE__);
+    const QString &tableName = ts.tableName();
+    const QUuid uuid1(QUuid::createUuid());
+    const QUuid uuid2(QUuid::createUuid());
+
+    QSqlQuery qry(db);
+    QVERIFY_SQL(qry, exec("CREATE TABLE " + tableName + " (id integer, uuidcol uuid)"));
+    auto tableRecord = db.record(tableName);
+    QCOMPARE(tableRecord.value(0).metaType().id(), QMetaType::Int);
+    QCOMPARE(tableRecord.value(1).metaType().id(), QMetaType::QUuid);
+
+    QString stmt =
+            "INSERT INTO " + tableName + " (id, uuidcol) VALUES (1, '" + uuid1.toString() + "')";
+    QVERIFY_SQL(qry, exec(stmt));
+    QVERIFY_SQL(qry, prepare("INSERT INTO " + tableName + " (id, uuidcol) VALUES (:id, :uuid)"));
+    qry.bindValue(":id", 2);
+    qry.bindValue(":uuid", uuid2);
+    QVERIFY_SQL(qry, exec());
+    QVERIFY_SQL(qry, exec("SELECT id, uuidcol FROM " + tableName + " ORDER BY id"));
+    QVERIFY_SQL(qry, next());
+    QCOMPARE(qry.value(0).toInt(), 1);
+    QCOMPARE(qry.value(0).metaType().id(), QMetaType::Int);
+    QCOMPARE(qry.value(1).toUuid(), uuid1);
+    QCOMPARE(qry.value(1).metaType().id(), QMetaType::QUuid);
+    QVERIFY_SQL(qry, next());
+    QCOMPARE(qry.value(0).toInt(), 2);
+    QCOMPARE(qry.value(0).metaType().id(), QMetaType::Int);
+    QCOMPARE(qry.value(1).toUuid(), uuid2);
+    QCOMPARE(qry.value(1).metaType().id(), QMetaType::QUuid);
+}
+
+#if QT_REMOVAL_QT7_DEPRECATED_SINCE(6, 2)
+void tst_QSqlQuery::qmetatypeDeprecatedCopy()
+{
+    QMetaType mt = QMetaType::fromType<QSqlQuery>();
+    QSqlQuery query;
+
+    QTest::ignoreMessage(QtWarningMsg, "QMetaType: copy construction of type 'QSqlQuery' is deprecated");
+    void *copy = mt.create(&query);
+    mt.destroy(copy);
+}
+#endif
 
 QTEST_MAIN(tst_QSqlQuery)
 #include "tst_qsqlquery.moc"

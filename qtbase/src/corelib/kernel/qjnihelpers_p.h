@@ -22,8 +22,7 @@
 
 QT_BEGIN_NAMESPACE
 
-Q_DECLARE_JNI_CLASS(Activity, "android/app/Activity")
-Q_DECLARE_JNI_CLASS(Service, "android/app/Service")
+Q_DECLARE_JNI_CLASS(QtNative, "org/qtproject/qt/android/QtNative")
 
 namespace QtAndroidPrivate
 {
@@ -56,6 +55,34 @@ namespace QtAndroidPrivate
         virtual jobject onBind(jobject intent) = 0;
     };
 
+    class Q_CORE_EXPORT GenericMotionEventListener
+    {
+    public:
+        virtual ~GenericMotionEventListener();
+        virtual bool handleGenericMotionEvent(jobject event) = 0;
+    };
+
+    class Q_CORE_EXPORT KeyEventListener
+    {
+    public:
+        virtual ~KeyEventListener();
+        virtual bool handleKeyEvent(jobject event) = 0;
+    };
+
+    class Q_CORE_EXPORT AndroidDeadlockProtector
+    {
+    public:
+        AndroidDeadlockProtector(const QString &lockedBy);
+        ~AndroidDeadlockProtector();
+        bool acquire();
+
+    private:
+        bool m_acquired = false;
+        QString m_lockedBy;
+
+        inline static QStringList s_lockers;
+    };
+
     Q_CORE_EXPORT QtJniTypes::Activity activity();
     Q_CORE_EXPORT QtJniTypes::Service service();
     Q_CORE_EXPORT QtJniTypes::Context context();
@@ -77,6 +104,12 @@ namespace QtAndroidPrivate
     Q_CORE_EXPORT void registerNewIntentListener(NewIntentListener *listener);
     Q_CORE_EXPORT void unregisterNewIntentListener(NewIntentListener *listener);
 
+    Q_CORE_EXPORT void registerGenericMotionEventListener(GenericMotionEventListener *listener);
+    Q_CORE_EXPORT void unregisterGenericMotionEventListener(GenericMotionEventListener *listener);
+
+    Q_CORE_EXPORT void registerKeyEventListener(KeyEventListener *listener);
+    Q_CORE_EXPORT void unregisterKeyEventListener(KeyEventListener *listener);
+
     Q_CORE_EXPORT void handlePause();
     Q_CORE_EXPORT void handleResume();
     Q_CORE_EXPORT void registerResumePauseListener(ResumePauseListener *listener);
@@ -89,6 +122,9 @@ namespace QtAndroidPrivate
 
     Q_CORE_EXPORT bool acquireAndroidDeadlockProtector();
     Q_CORE_EXPORT void releaseAndroidDeadlockProtector();
+
+    Q_CORE_EXPORT bool isUncompressedNativeLibs();
+    Q_CORE_EXPORT QString resolveApkPath(const QString &fileName);
 }
 
 #define Q_JNI_FIND_AND_CHECK_CLASS(CLASS_NAME) \

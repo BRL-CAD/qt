@@ -1,5 +1,7 @@
 // Copyright (C) 2020 Klarälvdalens Datakonsult AB, a KDAB Group company, info@kdab.com, author Marc Mutz <marc.mutz@kdab.com>
 // SPDX-License-Identifier: LicenseRef-Qt-Commercial OR LGPL-3.0-only OR GPL-2.0-only OR GPL-3.0-only
+// Qt-Security score:critical reason:data-parser
+
 #ifndef QSTRINGTOKENIZER_H
 #define QSTRINGTOKENIZER_H
 
@@ -10,8 +12,6 @@
 QT_BEGIN_NAMESPACE
 
 template <typename, typename> class QStringBuilder;
-
-#define Q_STRINGTOKENIZER_USE_SENTINEL
 
 class QStringTokenizerBaseBase
 {
@@ -48,14 +48,10 @@ public:
 
     class iterator;
     friend class iterator;
-#ifdef Q_STRINGTOKENIZER_USE_SENTINEL
     class sentinel {
         friend constexpr bool operator==(sentinel, sentinel) noexcept { return true; }
         friend constexpr bool operator!=(sentinel, sentinel) noexcept { return false; }
     };
-#else
-    using sentinel = iterator;
-#endif
     class iterator {
         const QStringTokenizerBase *tokenizer;
         next_result current;
@@ -78,11 +74,6 @@ public:
         iterator& operator++() { advance(); return *this; }
         iterator  operator++(int) { auto tmp = *this; advance(); return tmp; }
 
-        friend constexpr bool operator==(const iterator &lhs, const iterator &rhs) noexcept
-        { return lhs.current.ok == rhs.current.ok && (!lhs.current.ok || (Q_ASSERT(lhs.tokenizer == rhs.tokenizer), lhs.current.state == rhs.current.state)); }
-        friend constexpr bool operator!=(const iterator &lhs, const iterator &rhs) noexcept
-        { return !operator==(lhs, rhs); }
-#ifdef Q_STRINGTOKENIZER_USE_SENTINEL
         friend constexpr bool operator==(const iterator &lhs, sentinel) noexcept
         { return !lhs.current.ok; }
         friend constexpr bool operator!=(const iterator &lhs, sentinel) noexcept
@@ -91,7 +82,6 @@ public:
         { return !rhs.current.ok; }
         friend constexpr bool operator!=(sentinel, const iterator &rhs) noexcept
         { return !operator==(sentinel{}, rhs); }
-#endif
     private:
         void advance() {
             Q_ASSERT(current.ok);
@@ -110,9 +100,7 @@ public:
 
     [[nodiscard]] iterator begin() const noexcept { return iterator{*this}; }
     [[nodiscard]] iterator cbegin() const noexcept { return begin(); }
-    template <bool = std::is_same<iterator, sentinel>::value> // ODR protection
     [[nodiscard]] constexpr sentinel end() const noexcept { return {}; }
-    template <bool = std::is_same<iterator, sentinel>::value> // ODR protection
     [[nodiscard]] constexpr sentinel cend() const noexcept { return {}; }
 
 private:
@@ -127,9 +115,9 @@ QT_END_INCLUDE_NAMESPACE
 namespace QtPrivate {
 namespace Tok {
 
-    constexpr qsizetype size(QChar) noexcept { return 1; }
+    constexpr qsizetype tokenSize(QChar) noexcept { return 1; }
     template <typename String>
-    constexpr qsizetype size(const String &s) noexcept { return static_cast<qsizetype>(s.size()); }
+    constexpr qsizetype tokenSize(const String &s) noexcept { return static_cast<qsizetype>(s.size()); }
 
     template <typename String> struct ViewForImpl {};
     template <> struct ViewForImpl<QStringView>   { using type = QStringView; };
@@ -400,7 +388,7 @@ auto QStringTokenizerBase<Haystack, Needle>::next(tokenizer_state state) const n
         if (state.end >= 0) {
             // token separator found => return intermediate element:
             result = m_haystack.sliced(state.start, state.end - state.start);
-            const auto ns = QtPrivate::Tok::size(m_needle);
+            const auto ns = QtPrivate::Tok::tokenSize(m_needle);
             state.start = state.end + ns;
             state.extra = (ns == 0 ? 1 : 0);
         } else {

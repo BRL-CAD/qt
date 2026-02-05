@@ -6,6 +6,12 @@ qt_internal_add_manual_test(embeddedwindows
         main.cpp
     LIBRARIES
         Qt::Gui
+    GUI
+)
+
+qt_internal_extend_target(embeddedwindows CONDITION WIN32
+    SOURCES
+        app.manifest
 )
 
 if(QT_FEATURE_xcb)
@@ -15,5 +21,4 @@ endif()
 if(APPLE)
     enable_language(OBJCXX)
     set_source_files_properties(main.cpp PROPERTIES LANGUAGE OBJCXX)
-    set_property(TARGET embeddedwindows PROPERTY PROPERTY MACOSX_BUNDLE TRUE)
 endif()

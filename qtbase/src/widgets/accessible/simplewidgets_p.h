@@ -27,11 +27,12 @@ class QAbstractButton;
 class QLineEdit;
 class QToolButton;
 class QGroupBox;
+class QMenu;
 class QMessageBox;
 class QProgressBar;
 
 #if QT_CONFIG(abstractbutton)
-class QAccessibleButton : public QAccessibleWidget
+class QAccessibleButton : public QAccessibleWidgetV2
 {
     Q_DECLARE_TR_FUNCTIONS(QAccessibleButton)
 public:
@@ -71,10 +72,13 @@ protected:
     QToolButton *toolButton() const;
 
     bool isSplitButton() const;
+#if QT_CONFIG(menu)
+    QMenu *menu() const;
+#endif
 };
 #endif // QT_CONFIG(toolbutton)
 
-class QAccessibleDisplay : public QAccessibleWidget, public QAccessibleImageInterface
+class QAccessibleDisplay : public QAccessibleWidgetV2, public QAccessibleImageInterface
 {
 public:
     explicit QAccessibleDisplay(QWidget *w, QAccessible::Role role = QAccessible::StaticText);
@@ -83,7 +87,7 @@ public:
     QAccessible::Role role() const override;
     QAccessible::State state() const override;
 
-    QList<QPair<QAccessibleInterface *, QAccessible::Relation>>
+    QList<std::pair<QAccessibleInterface *, QAccessible::Relation>>
     relations(QAccessible::Relation match = QAccessible::AllRelations) const override;
     void *interface_cast(QAccessible::InterfaceType t) override;
 
@@ -94,7 +98,7 @@ public:
 };
 
 #if QT_CONFIG(groupbox)
-class QAccessibleGroupBox : public QAccessibleWidget
+class QAccessibleGroupBox : public QAccessibleWidgetV2
 {
 public:
     explicit QAccessibleGroupBox(QWidget *w);
@@ -103,7 +107,7 @@ public:
     QAccessible::Role role() const override;
     QString text(QAccessible::Text t) const override;
 
-    QList<QPair<QAccessibleInterface *, QAccessible::Relation>>
+    QList<std::pair<QAccessibleInterface *, QAccessible::Relation>>
     relations(QAccessible::Relation match = QAccessible::AllRelations) const override;
 
     //QAccessibleActionInterface
@@ -117,7 +121,7 @@ private:
 #endif
 
 #if QT_CONFIG(lineedit)
-class QAccessibleLineEdit : public QAccessibleWidget, public QAccessibleTextInterface, public QAccessibleEditableTextInterface
+class QAccessibleLineEdit : public QAccessibleWidgetV2, public QAccessibleTextInterface, public QAccessibleEditableTextInterface
 {
 public:
     explicit QAccessibleLineEdit(QWidget *o, const QString &name = QString());
@@ -178,7 +182,7 @@ protected:
 #endif
 
 class QWindowContainer;
-class QAccessibleWindowContainer : public QAccessibleWidget
+class QAccessibleWindowContainer : public QAccessibleWidgetV2
 {
 public:
     QAccessibleWindowContainer(QWidget *w);
@@ -191,7 +195,7 @@ private:
 };
 
 #if QT_CONFIG(messagebox)
-class QAccessibleMessageBox : public QAccessibleWidget
+class QAccessibleMessageBox : public QAccessibleWidgetV2
 {
 public:
     explicit QAccessibleMessageBox(QWidget *widget);

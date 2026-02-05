@@ -22,23 +22,20 @@ QT_BEGIN_NAMESPACE
    If you can't live with those constraints, don't use these macros.
    Use the QT_NO_EXCEPTIONS macro to protect your code instead.
 */
-Q_NORETURN Q_DECL_COLD_FUNCTION Q_CORE_EXPORT void qTerminate() noexcept;
 #ifdef QT_NO_EXCEPTIONS
 #  define QT_TRY if (true)
 #  define QT_CATCH(A) else
 #  define QT_THROW(A) qt_noop()
 #  define QT_RETHROW qt_noop()
-#  define QT_TERMINATE_ON_EXCEPTION(expr) do { expr; } while (false)
 #else
 #  define QT_TRY try
 #  define QT_CATCH(A) catch (A)
 #  define QT_THROW(A) throw A
 #  define QT_RETHROW throw
-#  ifdef Q_COMPILER_NOEXCEPT
-#    define QT_TERMINATE_ON_EXCEPTION(expr) do { expr; } while (false)
-#  else
-#    define QT_TERMINATE_ON_EXCEPTION(expr) do { try { expr; } catch (...) { qTerminate(); } } while (false)
-#  endif
+#endif
+
+#if QT_CORE_REMOVED_SINCE(6, 9)
+Q_NORETURN Q_DECL_COLD_FUNCTION Q_CORE_EXPORT void qTerminate() noexcept;
 #endif
 
 QT_END_NAMESPACE

@@ -1,5 +1,6 @@
 // Copyright (C) 2016 The Qt Company Ltd.
 // SPDX-License-Identifier: LicenseRef-Qt-Commercial OR LGPL-3.0-only OR GPL-2.0-only OR GPL-3.0-only
+// Qt-Security score:significant reason:default
 
 #include <AppKit/AppKit.h>
 #include <ApplicationServices/ApplicationServices.h>
@@ -576,7 +577,8 @@ void QMacPrintEngine::setProperty(PrintEnginePropertyKey key, const QVariant &va
         QList<QVariant> margins(value.toList());
         Q_ASSERT(margins.size() == 4);
         d->m_pageLayout.setMargins(QMarginsF(margins.at(0).toReal(), margins.at(1).toReal(),
-                                             margins.at(2).toReal(), margins.at(3).toReal()));
+                                             margins.at(2).toReal(), margins.at(3).toReal()),
+                                   QPageLayout::OutOfBoundsPolicy::Clamp);
         break;
     }
     case PPK_QPageSize:
@@ -585,7 +587,7 @@ void QMacPrintEngine::setProperty(PrintEnginePropertyKey key, const QVariant &va
     case PPK_QPageMargins: {
         QPair<QMarginsF, QPageLayout::Unit> pair = value.value<QPair<QMarginsF, QPageLayout::Unit> >();
         d->m_pageLayout.setUnits(pair.second);
-        d->m_pageLayout.setMargins(pair.first);
+        d->m_pageLayout.setMargins(pair.first, QPageLayout::OutOfBoundsPolicy::Clamp);
         break;
     }
     case PPK_QPageLayout: {
@@ -595,7 +597,7 @@ void QMacPrintEngine::setProperty(PrintEnginePropertyKey key, const QVariant &va
             setProperty(PPK_FullPage, pageLayout.mode() == QPageLayout::FullPageMode);
             setProperty(PPK_Orientation, QVariant::fromValue(pageLayout.orientation()));
             d->m_pageLayout.setUnits(pageLayout.units());
-            d->m_pageLayout.setMargins(pageLayout.margins());
+            d->m_pageLayout.setMargins(pageLayout.margins(), QPageLayout::OutOfBoundsPolicy::Clamp);
         }
         break;
     }

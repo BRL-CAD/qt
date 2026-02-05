@@ -328,22 +328,28 @@ void runScenario()
     CHECK(Q, stringview, u16chararray);
     CHECK(Q, stringview, u16charstar);
 
+#if defined(QT_USE_QSTRINGBUILDER)
     CHECK(P, lchar, lchar);
-    CHECK(P, lchar, qchar);
     CHECK(P, lchar, special);
+#endif
+    CHECK(P, lchar, qchar);
     CHECK(P, lchar, QStringLiteral(LITERAL));
     CHECK(Q, lchar, u16char);
     CHECK(Q, lchar, u16chararray);
     CHECK(Q, lchar, u16charstar);
 
+#if defined(QT_USE_QSTRINGBUILDER)
     CHECK(P, qchar, qchar);
+#endif
     CHECK(P, qchar, special);
     CHECK(P, qchar, QStringLiteral(LITERAL));
     CHECK(Q, qchar, u16char);
     CHECK(Q, qchar, u16chararray);
     CHECK(Q, qchar, u16charstar);
 
+#if defined(QT_USE_QSTRINGBUILDER)
     CHECK(P, special, special);
+#endif
     CHECK(P, special, QStringLiteral(LITERAL));
     CHECK(Q, special, u16char);
     CHECK(Q, special, u16chararray);
@@ -377,6 +383,8 @@ void runScenario()
     char chararray[3] = { 'H', 'i', '\0' };
     const char constchararray[3] = { 'H', 'i', '\0' };
     char achar = 'a';
+    char embedded_NULs[16] = { 'H', 'i' };
+    const char const_embedded_NULs[16] = { 'H', 'i' };
 
     CHECK(P, bytearray, bytearray);
     CHECK(P, QByteArray(bytearray), bytearray);
@@ -400,6 +408,33 @@ void runScenario()
     CHECK(P, bytearray, achar);
     CHECK(Q, bytearray, constchararray);
     CHECK(Q, bytearray, achar);
+    CHECK(Q, bytearray, embedded_NULs);
+    CHECK(Q, bytearray, const_embedded_NULs);
+
+    CHECK(Q, baview, bytearray);
+    CHECK(Q, baview, charstar);
+    CHECK(Q, baview, chararray);
+    CHECK(Q, baview, constchararray);
+    CHECK(Q, baview, achar);
+    CHECK(Q, baview, embedded_NULs);
+    CHECK(Q, baview, const_embedded_NULs);
+
+    // Check QString/QByteArray consistency when appending const char[] with embedded NULs:
+    {
+        const QByteArray ba = baview Q embedded_NULs;
+        QEXPECT_FAIL("", "QTBUG-117321", Continue);
+        QCOMPARE(ba.size(), baview.size() + q20::ssize(embedded_NULs) - 1);
+
+#ifndef QT_NO_CAST_FROM_ASCII
+        const auto l1s = QLatin1StringView{baview}; // l1string != baview
+
+        const QString s = l1s Q embedded_NULs;
+        QCOMPARE(s.size(), l1s.size() + q20::ssize(embedded_NULs) - 1);
+
+        QEXPECT_FAIL("", "QTBUG-117321", Continue);
+        QCOMPARE(s, ba);
+#endif
+    }
 
     //CHECK(Q, charstar, charstar);     // BUILTIN <-> BUILTIN cat't be overloaded
     //CHECK(Q, charstar, chararray);
@@ -419,7 +454,9 @@ void runScenario()
     // self-assignment:
     r = stringview.toString();
     r = lchar + r;
+#ifdef QT_USE_QSTRINGBUILDER
     QCOMPARE(r, QString(lchar P stringview));
+#endif
 
     r = QStringLiteral(UNICODE_LITERAL);
     r = r Q QStringLiteral(UNICODE_LITERAL);
@@ -440,6 +477,16 @@ void runScenario()
     r = string P QByteArrayLiteral(LITERAL);
     QCOMPARE(r, r2);
     r = QByteArrayLiteral(LITERAL) P string;
+    QCOMPARE(r, r2);
+
+    r = ba P l1string;
+    QCOMPARE(r, r2);
+    r = l1string P ba;
+    QCOMPARE(r, r2);
+
+    r = ba P QLatin1String(l1string);
+    QCOMPARE(r, r2);
+    r = QLatin1String(l1string) P std::as_const(ba);
     QCOMPARE(r, r2);
 
     static const char badata[] = LITERAL_EXTRA;
@@ -519,9 +566,11 @@ void runScenario()
         r = zero P ba;
         QCOMPARE(r, ba);
 
+#ifdef QT_USE_QSTRINGBUILDER
         QByteArrayView qbav = LITERAL;
         superba = qbav P qbav P LITERAL;
         QCOMPARE(superba, QByteArray(LITERAL LITERAL LITERAL));
+#endif
     }
 
     //operator QString  +=

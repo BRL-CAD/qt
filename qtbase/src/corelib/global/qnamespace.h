@@ -10,6 +10,8 @@
 #endif
 
 #include <QtCore/qglobal.h>
+#include <QtCore/qcompare.h>
+#include <QtCore/qtclasshelpermacros.h>
 #include <QtCore/qtmetamacros.h>
 
 #if defined(__OBJC__) && !defined(__cplusplus)
@@ -50,6 +52,11 @@ namespace Qt {
         Unknown,
         Light,
         Dark,
+    };
+
+    enum class ContrastPreference {
+        NoPreference,
+        HighContrast,
     };
 
     enum MouseButton {
@@ -233,12 +240,20 @@ namespace Qt {
         WindowTransparentForInput = 0x00080000,
         WindowOverridesSystemGestures = 0x00100000,
         WindowDoesNotAcceptFocus = 0x00200000,
-        MaximizeUsingFullscreenGeometryHint = 0x00400000,
+#if QT_DEPRECATED_SINCE(6, 13)
+        MaximizeUsingFullscreenGeometryHint Q_DECL_ENUMERATOR_DEPRECATED_X(
+            "Use Qt::ExpandedClientAreaHint instead") = 0x00400000,
+#endif
+        ExpandedClientAreaHint = 0x00400000,
+        NoTitleBarBackgroundHint = 0x00800000,
 
         CustomizeWindowHint = 0x02000000,
         WindowStaysOnBottomHint = 0x04000000,
         WindowCloseButtonHint = 0x08000000,
-        MacWindowToolBarButtonHint = 0x10000000,
+#if QT_DEPRECATED_SINCE(6, 9)
+        MacWindowToolBarButtonHint Q_DECL_ENUMERATOR_DEPRECATED_X(
+            "This flag has been a no-op since Qt 5") = 0x10000000,
+#endif
         BypassGraphicsProxyWidget = 0x20000000,
         NoDropShadowWindowHint = 0x40000000,
         WindowFullscreenButtonHint = 0x80000000
@@ -422,7 +437,7 @@ namespace Qt {
     enum ApplicationAttribute
     {
         // AA_ImmediateWidgetCreation = 0,
-        AA_QtQuickUseDefaultSizePolicy = 1 QT_TECH_PREVIEW_API,
+        AA_QtQuickUseDefaultSizePolicy = 1,
         AA_DontShowIconsInMenus = 2,
         AA_NativeWindows = 3,
         AA_DontCreateNativeWidgetSiblings = 4,
@@ -431,7 +446,7 @@ namespace Qt {
         AA_MacDontSwapCtrlAndMeta = 7,
         AA_Use96Dpi = 8,
         AA_DisableNativeVirtualKeyboard = 9,
-        // AA_X11InitThreads = 10,
+        AA_DontUseNativeMenuWindows = 10,
         AA_SynthesizeTouchForUnhandledMouseEvents = 11,
         AA_SynthesizeMouseForUnhandledTouchEvents = 12,
 #if QT_DEPRECATED_SINCE(6, 0)
@@ -461,7 +476,7 @@ namespace Qt {
         AA_DisableShaderDiskCache = 27,
         AA_DontShowShortcutsInContextMenus = 28,
         AA_CompressTabletEvents = 29,
-        // AA_DisableWindowContextHelpButton = 30,
+        // AA_DisableWindowContextHelpButton = 30, (in Qt 5)
         AA_DisableSessionManager = 31,
 
         // Add new attributes before this line
@@ -1002,6 +1017,8 @@ namespace Qt {
         Key_MicVolumeUp   = 0x0100011d,
         Key_MicVolumeDown = 0x0100011e,
 
+        Key_Keyboard = 0x0100011f,
+
         Key_New      = 0x01000120,
         Key_Open     = 0x01000121,
         Key_Find     = 0x01000122,
@@ -1175,8 +1192,13 @@ namespace Qt {
         DragMoveCursor,
         DragLinkCursor,
         LastCursor = DragLinkCursor,
+#if QT_VERSION < QT_VERSION_CHECK(7, 0, 0)
         BitmapCursor = 24,
-        CustomCursor = 25
+        CustomCursor = 25,
+#else
+        BitmapCursor = 0x100,
+        CustomCursor = 0x101,
+#endif
     };
 
     enum TextFormat {
@@ -1355,6 +1377,11 @@ namespace Qt {
         PreventContextMenu
     };
 
+    enum class ContextMenuTrigger {
+        Press,
+        Release,
+    };
+
     enum InputMethodQuery {
         ImEnabled = 0x1,
         ImCursorRectangle = 0x2,
@@ -1501,8 +1528,16 @@ namespace Qt {
         ToolTipPropertyRole = 29,
         StatusTipPropertyRole = 30,
         WhatsThisPropertyRole = 31,
+        // QRangeModel support for QML's required property var modelData
+        RangeModelDataRole = 40,
+
         // Reserved
-        UserRole = 0x0100
+        UserRole = 0x0100,
+
+        // Used by Qt models
+        StandardItemFlagsRole = UserRole - 1,  // QStandardItemModel
+        FileInfoRole = UserRole - 4,           // QFileSystemModel
+        RemoteObjectsCacheRole = UserRole - 1, // QtRemoteObjects::QAbstractItemModelReplica
     };
 
     enum ItemFlag {
@@ -1590,10 +1625,7 @@ namespace Qt {
     };
     inline constexpr Initialization Uninitialized = Initialization::Uninitialized;
 
-    struct Disambiguated_t {
-        explicit Disambiguated_t() = default;
-    };
-    inline constexpr Disambiguated_t Disambiguated{};
+    inline QT_DEFINE_TAG(Disambiguated);
 
     enum CoordinateSystem {
         DeviceCoordinates,
@@ -1675,6 +1707,10 @@ namespace Qt {
         VeryCoarseTimer
     };
 
+    enum class TimerId {
+        Invalid = 0,
+    };
+
     enum ScrollPhase {
         NoScrollPhase = 0,
         ScrollBegin,
@@ -1726,6 +1762,7 @@ namespace Qt {
     Q_ENUM_NS(ScrollBarPolicy)
     Q_ENUM_NS(FocusPolicy)
     Q_ENUM_NS(ContextMenuPolicy)
+    Q_ENUM_NS(ContextMenuTrigger)
     Q_ENUM_NS(ArrowType)
     Q_ENUM_NS(ToolButtonStyle)
     Q_ENUM_NS(PenStyle)
@@ -1762,6 +1799,7 @@ namespace Qt {
     Q_ENUM_NS(CursorShape)
     Q_ENUM_NS(GlobalColor)
     Q_ENUM_NS(ColorScheme)
+    Q_ENUM_NS(ContrastPreference)
     Q_ENUM_NS(AspectRatioMode)
     Q_ENUM_NS(TransformationMode)
     Q_FLAG_NS(ImageConversionFlags)
@@ -1807,6 +1845,7 @@ namespace Qt {
 #endif
     Q_ENUM_NS(CursorMoveStyle)
     Q_ENUM_NS(TimerType)
+    Q_ENUM_NS(TimerId)
     Q_ENUM_NS(ScrollPhase)
     Q_ENUM_NS(MouseEventSource)
     Q_FLAG_NS(MouseEventFlags)
@@ -1904,22 +1943,19 @@ public:
         return combination;
     }
 #endif
-
-    friend constexpr bool operator==(QKeyCombination lhs, QKeyCombination rhs) noexcept
+    bool operator<(QKeyCombination) const = delete;
+private:
+    friend constexpr bool comparesEqual(const QKeyCombination &lhs,
+                                        const QKeyCombination &rhs) noexcept
     {
         return lhs.combination == rhs.combination;
     }
-
-    friend constexpr bool operator!=(QKeyCombination lhs, QKeyCombination rhs) noexcept
-    {
-        return lhs.combination != rhs.combination;
-    }
-
-    bool operator<(QKeyCombination) const = delete;
+    Q_DECLARE_EQUALITY_COMPARABLE_LITERAL_TYPE(QKeyCombination)
 };
 
 Q_DECLARE_TYPEINFO(QKeyCombination, Q_RELOCATABLE_TYPE);
 
+namespace Qt {
 constexpr QKeyCombination operator|(Qt::Modifier modifier, Qt::Key key) noexcept
 {
     return QKeyCombination(modifier, key);
@@ -2009,6 +2045,7 @@ constexpr QKeyCombination operator+(Qt::Key key, Qt::KeyboardModifiers modifiers
     return QKeyCombination(modifiers, key);
 }
 #endif
+}
 
 QT_END_NAMESPACE
 

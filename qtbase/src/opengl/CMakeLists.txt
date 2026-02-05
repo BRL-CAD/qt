@@ -7,6 +7,7 @@
 
 qt_internal_add_module(OpenGL
     SOURCES
+        compat/removed_api.cpp
         qopengl2pexvertexarray.cpp qopengl2pexvertexarray_p.h
         qopenglbuffer.cpp qopenglbuffer.h
         qopenglcustomshaderstage.cpp qopenglcustomshaderstage_p.h
@@ -35,10 +36,13 @@ qt_internal_add_module(OpenGL
         qtopenglglobal.h
     NO_UNITY_BUILD_SOURCES
         qopengltextureblitter.cpp       # qDebug()<< ambiguities
+    NO_PCH_SOURCES
+        compat/removed_api.cpp
     DEFINES
         QT_NO_CONTEXTLESS_CONNECT
         QT_NO_FOREACH
         QT_NO_USING_NAMESPACE
+        QT_USE_NODISCARD_FILE_OPEN
     LIBRARIES
         Qt::CorePrivate
         Qt::GuiPrivate
@@ -48,8 +52,11 @@ qt_internal_add_module(OpenGL
     PRIVATE_MODULE_INTERFACE
         Qt::CorePrivate
         Qt::GuiPrivate
-    GENERATE_CPP_EXPORTS
 )
+
+if (QT_FEATURE_opengles2)
+    set_source_files_properties(qopengltimerquery.h PROPERTIES SKIP_AUTOMOC TRUE)
+endif()
 
 ## Scopes:
 #####################################################################

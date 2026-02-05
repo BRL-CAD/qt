@@ -5,6 +5,7 @@
 #define QRESTACCESSSMANAGER_HTTPTESTSERVER_P_H
 
 #include <QtNetwork/qtcpserver.h>
+#include <QtNetwork/qhttpheaders.h>
 
 #include <QtCore/qmap.h>
 #include <QtCore/qurl.h>
@@ -19,8 +20,8 @@ struct HttpData {
     QByteArray body;
     QByteArray method;
     quint16 port = 0;
-    QPair<quint8, quint8> version;
-    QMap<QByteArray, QByteArray> headers;
+    std::pair<quint8, quint8> version;
+    QHttpHeaders headers;
 };
 
 struct ResponseControl

@@ -1,5 +1,6 @@
 // Copyright (C) 2016 The Qt Company Ltd.
 // SPDX-License-Identifier: LicenseRef-Qt-Commercial OR LGPL-3.0-only OR GPL-2.0-only OR GPL-3.0-only
+// Qt-Security score:significant reason:default
 
 #include <qplatformdefs.h>
 #include "qitemeditorfactory.h"
@@ -81,7 +82,6 @@ Q_SIGNALS:
     \class QItemEditorFactory
     \brief The QItemEditorFactory class provides widgets for editing item data
     in views and delegates.
-    \since 4.2
     \ingroup model-view
     \inmodule QtWidgets
 
@@ -336,7 +336,6 @@ void QItemEditorFactory::setDefaultFactory(QItemEditorFactory *factory)
     \class QItemEditorCreatorBase
     \brief The QItemEditorCreatorBase class provides an abstract base class that
     must be subclassed when implementing new item editor creators.
-    \since 4.2
     \ingroup model-view
     \inmodule QtWidgets
 
@@ -413,7 +412,6 @@ QItemEditorCreatorBase::~QItemEditorCreatorBase()
            item editor creator bases without subclassing
            QItemEditorCreatorBase.
 
-    \since 4.2
     \ingroup model-view
     \inmodule QtWidgets
 
@@ -464,7 +462,6 @@ QItemEditorCreatorBase::~QItemEditorCreatorBase()
     possibility to register widgets without having to subclass
     QItemEditorCreatorBase.
 
-    \since 4.2
     \ingroup model-view
     \inmodule QtWidgets
 

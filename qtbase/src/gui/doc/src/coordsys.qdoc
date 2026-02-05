@@ -31,8 +31,6 @@
     systems coincide by default. QPainter also supports coordinate
     transformations (e.g. rotation and scaling).
 
-    \tableofcontents
-
     \section1 Rendering
 
     \section2 Logical Representation
@@ -323,7 +321,9 @@
     still transformed to the viewport using the same linear algebraic
     approach.
 
-    \image coordinatesystem-transformations.png
+    \image coordinatesystem-transformations.png {Illustration showing
+           how coordinates are mapped using viewport, "window" and
+           transformation matrix}
 
     The viewport, "window" and transformation matrix determine how
     logical QPainter coordinates map to the paint device's physical

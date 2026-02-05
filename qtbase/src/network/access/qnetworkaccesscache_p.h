@@ -1,5 +1,6 @@
 // Copyright (C) 2016 The Qt Company Ltd.
 // SPDX-License-Identifier: LicenseRef-Qt-Commercial OR LGPL-3.0-only OR GPL-2.0-only OR GPL-3.0-only
+// Qt-Security score:significant reason:default
 
 #ifndef QNETWORKACCESSCACHE_P_H
 #define QNETWORKACCESSCACHE_P_H
@@ -19,6 +20,7 @@
 #include "QtCore/qobject.h"
 #include "QtCore/qbasictimer.h"
 #include "QtCore/qbytearray.h"
+#include <QtCore/qflags.h>
 #include "QtCore/qhash.h"
 #include "QtCore/qmetatype.h"
 
@@ -36,23 +38,25 @@ class QNetworkAccessCache: public QObject
 public:
     struct Node;
     typedef QHash<QByteArray, Node *> NodeHash;
-
     class CacheableObject
     {
         friend class QNetworkAccessCache;
         QByteArray key;
         bool expires;
         bool shareable;
-        qint64 expiryTimeoutSeconds;
+        qint64 expiryTimeoutSeconds = -1;
     public:
-        CacheableObject();
+        enum class Option {
+            Expires = 0x01,
+            Shareable = 0x02,
+        };
+        typedef QFlags<Option> Options; // #### QTBUG-127269
+
         virtual ~CacheableObject();
         virtual void dispose() = 0;
         inline QByteArray cacheKey() const { return key; }
-
     protected:
-        void setExpires(bool enable);
-        void setShareable(bool enable);
+        explicit CacheableObject(Options options);
     };
 
     ~QNetworkAccessCache();
@@ -64,9 +68,6 @@ public:
     CacheableObject *requestEntryNow(const QByteArray &key);
     void releaseEntry(const QByteArray &key);
     void removeEntry(const QByteArray &key);
-
-signals:
-    void entryReady(QNetworkAccessCache::CacheableObject *);
 
 protected:
     void timerEvent(QTimerEvent *) override;
@@ -82,8 +83,9 @@ private:
     void linkEntry(const QByteArray &key);
     bool unlinkEntry(const QByteArray &key);
     void updateTimer();
-    bool emitEntryReady(Node *node, QObject *target, const char *member);
 };
+
+Q_DECLARE_OPERATORS_FOR_FLAGS(QNetworkAccessCache::CacheableObject::Options)
 
 QT_END_NAMESPACE
 

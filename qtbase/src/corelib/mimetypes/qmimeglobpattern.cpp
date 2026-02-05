@@ -1,5 +1,6 @@
 // Copyright (C) 2016 The Qt Company Ltd.
 // SPDX-License-Identifier: LicenseRef-Qt-Commercial OR LGPL-3.0-only OR GPL-2.0-only OR GPL-3.0-only
+// Qt-Security score:critical reason:data-parser
 
 #include "qmimeglobpattern_p.h"
 
@@ -191,9 +192,9 @@ void QMimeAllGlobPatterns::addGlob(const QMimeGlobPattern &glob)
     const QString &pattern = glob.pattern();
     Q_ASSERT(!pattern.isEmpty());
 
-    // Store each patterns into either m_fastPatternDict (*.txt, *.html etc. with default weight 50)
-    // or for the rest, like core.*, *.tar.bz2, *~, into highWeightPatternOffset (>50)
-    // or lowWeightPatternOffset (<=50)
+    // Store each patterns into either m_fastPatternDict (*.txt, *.html
+    // etc. with default weight 50) or for the rest, like core.*, *.tar.bz2, *~,
+    // into highWeightPatternOffset (>50) or lowWeightPatternOffset (<=50).
 
     if (glob.weight() == 50 && isFastPattern(pattern) && !glob.isCaseSensitive()) {
         // The bulk of the patterns is *.foo with weight 50 --> those go into the fast patterns hash.
@@ -249,12 +250,11 @@ void QMimeAllGlobPatterns::matchingGlobs(const QString &fileName, QMimeGlobMatch
         const QStringList matchingMimeTypes = m_fastPatterns.value(simpleExtension);
         const QString simplePattern = "*."_L1 + simpleExtension;
         for (const QString &mime : matchingMimeTypes) {
-            if (filterFunc(mime)) {
+            if (filterFunc(mime))
                 result.addMatch(mime, 50, simplePattern, simpleExtension.size());
-            }
         }
-        // Can't return yet; *.tar.bz2 has to win over *.bz2, so we need the low-weight mimetypes anyway,
-        // at least those with weight 50.
+        // Can't return yet; *.tar.bz2 has to win over *.bz2, so we need the
+        // low-weight mimetypes anyway, at least those with weight 50.
     }
 
     // Finally, try the low weight matches (<=50)

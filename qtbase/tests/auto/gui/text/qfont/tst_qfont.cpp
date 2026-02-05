@@ -1,8 +1,6 @@
 // Copyright (C) 2016 The Qt Company Ltd.
 // SPDX-License-Identifier: LicenseRef-Qt-Commercial OR GPL-3.0-only
 
-#undef QT_NO_FOREACH // this file contains unported legacy Q_FOREACH uses
-
 #include <QTest>
 #include <QBuffer>
 #include <QtEndian>
@@ -22,6 +20,9 @@
 #include <qlist.h>
 #include <QtTest/private/qemulationdetector_p.h>
 #include <private/qcomparisontesthelper_p.h>
+#include <qpa/qplatformfontdatabase.h>
+#include <qpa/qplatformintegration.h>
+#include <QtGui/private/qguiapplication_p.h>
 
 using namespace Qt::StringLiterals;
 
@@ -30,6 +31,7 @@ class tst_QFont : public QObject
 Q_OBJECT
 
 private slots:
+    void initTestCase();
     void getSetCheck();
     void exactMatch();
     void compare();
@@ -62,7 +64,17 @@ private slots:
     void featureAccessors();
     void tagCompares_data();
     void tagCompares();
+
+    void variableAxes();
+
+private:
+    QString m_testFontVariable;
 };
+
+void tst_QFont::initTestCase()
+{
+    m_testFontVariable = QFINDTESTDATA("testfont_variable.ttf");
+}
 
 // Testing get/set functions
 void tst_QFont::getSetCheck()
@@ -150,6 +162,9 @@ void tst_QFont::italicOblique()
             QString style = *s_it;
 
             if (QFontDatabase::isSmoothlyScalable(family, style)) {
+                QFont f = QFontDatabase::font(family, style, 12);
+                bool wasItalic = f.italic();
+
                 if (style.contains("Oblique")) {
                     style.replace("Oblique", "Italic");
                 } else if (style.contains("Italic")) {
@@ -157,8 +172,8 @@ void tst_QFont::italicOblique()
                 } else {
                     continue;
                 }
-                QFont f = QFontDatabase::font(family, style, 12);
-                QVERIFY2(f.italic(), qPrintable(QString::asprintf("Failed for font \"%ls\"", qUtf16Printable(f.family()))));
+                f = QFontDatabase::font(family, style, 12);
+                QVERIFY2(f.italic() == wasItalic, qPrintable(QString::asprintf("Failed for font \"%ls\"", qUtf16Printable(f.family()))));
             }
         }
     }
@@ -560,7 +575,7 @@ QString getPlatformGenericFont(const char* genericName)
 static inline QByteArray msgNotAcceptableFont(const QString &defaultFamily, const QStringList &acceptableFamilies)
 {
     QString res = QString::fromLatin1("Font family '%1' is not one of the following acceptable results: ").arg(defaultFamily);
-    Q_FOREACH (const QString &family, acceptableFamilies)
+    for (const QString &family : acceptableFamilies)
         res += QLatin1String("\n ") + family;
     return res.toLocal8Bit();
 }
@@ -581,7 +596,7 @@ void tst_QFont::defaultFamily_data()
 void tst_QFont::defaultFamily()
 {
     QFETCH(QFont::StyleHint, styleHint);
-    QFETCH(QStringList, acceptableFamilies);
+    QFETCH(const QStringList, acceptableFamilies);
 
     QFont f;
     f.setStyleHint(styleHint);
@@ -591,7 +606,7 @@ void tst_QFont::defaultFamily()
     QVERIFY(QFontDatabase::hasFamily(familyForHint));
 
     bool isAcceptable = false;
-    Q_FOREACH (const QString& family, acceptableFamilies) {
+    for (const QString &family : acceptableFamilies) {
         if (!familyForHint.compare(family, Qt::CaseInsensitive)) {
             isAcceptable = true;
             break;
@@ -925,6 +940,35 @@ void tst_QFont::tagCompares()
 
     QVERIFY(comparesEqual(lhs, lhs));
     QCOMPARE(compareThreeWay(lhs, rhs), expectedOrder);
+}
+
+void tst_QFont::variableAxes()
+{
+    {
+        QPlatformFontDatabase *pfdb = QGuiApplicationPrivate::platformIntegration()->fontDatabase();
+        if (!pfdb->supportsVariableApplicationFonts())
+            QSKIP("Variable application fonts not supported on this platform");
+    }
+
+    int id = QFontDatabase::addApplicationFont(m_testFontVariable);
+    if (id == -1)
+        QSKIP("Application fonts are not supported on this system");
+    auto cleanup = qScopeGuard([&id] {
+        QFontDatabase::removeApplicationFont(id);
+    });
+
+    QString family = QFontDatabase::applicationFontFamilies(id).first();
+    QFontInfo fontInfo(QFont(family, 12));
+
+    QList<QFontVariableAxis> variableAxes = fontInfo.variableAxes();
+    QCOMPARE(variableAxes.size(), 1);
+
+    const QFontVariableAxis &variableAxis = variableAxes.first();
+    QCOMPARE(variableAxis.name(), QStringLiteral("Weight"));
+    QCOMPARE(variableAxis.tag(), QFont::Tag::fromString("wght"));
+    QCOMPARE(variableAxis.defaultValue(), 400.0);
+    QCOMPARE(variableAxis.minimumValue(), 400.0);
+    QCOMPARE(variableAxis.maximumValue(), 900.0);
 }
 
 QTEST_MAIN(tst_QFont)

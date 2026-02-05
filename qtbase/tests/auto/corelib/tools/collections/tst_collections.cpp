@@ -155,7 +155,15 @@ struct Dummy
     bool operator<(const Dummy &) const { return false; }
 };
 
-struct RecursiveList : public QList<RecursiveList> {};
+struct RecursiveList : public QList<RecursiveList>
+{
+    friend bool operator<(const RecursiveList &lhs, const RecursiveList &rhs)
+    {
+        using Base = QList<RecursiveList>;
+        // compare some non-QList members here
+        return static_cast<const Base &>(lhs) < static_cast<const Base &>(rhs);
+    }
+};
 struct RecursiveSet : public QSet<RecursiveSet> {};
 struct RecursiveMapV : public QMap<Dummy, RecursiveMapV> {};
 struct RecursiveMapK : public QMap<RecursiveMapK, Dummy> {};
@@ -178,8 +186,8 @@ struct NoCmpParamRecursiveMultiHashK : public QMultiHash<NoCmpParamRecursiveMult
 
 struct NoCmpRecursiveList : public QList<NoCmpRecursiveList>
 {
-    bool operator==(const RecursiveList &) const = delete;
-    bool operator<(const RecursiveList &) const = delete;
+    bool operator==(const NoCmpRecursiveList &) const = delete;
+    bool operator<(const NoCmpRecursiveList &) const = delete;
 };
 struct NoCmpRecursiveSet : public QSet<NoCmpRecursiveSet>
 {
@@ -530,7 +538,7 @@ void tst_Collections::list()
             list << "one" << "two" << "one" << "two";
             QVERIFY(!list.removeOne("three"));
             QVERIFY(list.removeOne("two"));
-            QCOMPARE(list, QList<QString>() << "one" << "one" << "two");;
+            QCOMPARE(list, QList<QString>() << "one" << "one" << "two");
             QVERIFY(list.removeOne("two"));
             QCOMPARE(list, QList<QString>() << "one" << "one");
             QVERIFY(!list.removeOne("two"));
@@ -642,14 +650,14 @@ QT_WARNING_POP
     {
         QList<int *> list;
         QVERIFY(list.value(0) == 0);
-        int i;
+        int i = 42;
         list.append(&i);
         QVERIFY(list.value(0) == &i);
     }
     {
         QList<const int *> list;
         QVERIFY(list.value(0) == 0);
-        int i;
+        int i = 42;
         list.append(&i);
         QVERIFY(list.value(0) == &i);
     }
@@ -1105,11 +1113,24 @@ void tst_Collections::byteArray()
     QVERIFY (true == hello.contains('e'));
     QVERIFY (hello.contains('e') != false);
 
-    QVERIFY(hello.indexOf('e') == 1);
-    QVERIFY(hello.indexOf('e', -10) == 1);
-    QVERIFY(hello.indexOf('l') == 2);
-    QVERIFY(hello.indexOf('l',2) == 2);
-    QVERIFY(hello.indexOf('l',3) == 3);
+    QCOMPARE(hello.indexOf('e'), 1);
+    QCOMPARE(hello.indexOf('e', -3), -1);   // searches "llo"
+    QCOMPARE(hello.indexOf('e', -4), 1);    // searches "ello"
+    QCOMPARE(hello.indexOf('e', -6), -1);   // overflows size search
+    QCOMPARE(hello.indexOf('l'), 2);
+    QCOMPARE(hello.indexOf('l', 2), 2);
+    QCOMPARE(hello.indexOf('l', 3), 3);
+    QCOMPARE(hello.indexOf('l', 4), -1);
+    QCOMPARE(hello.indexOf('l', 6), -1);
+
+    QCOMPARE(hello.lastIndexOf('e'), 1);
+    QCOMPARE(hello.lastIndexOf('e', -4), 1);    // searches "he"
+    QCOMPARE(hello.lastIndexOf('e', -5), -1);   // searches "h"
+    QCOMPARE(hello.lastIndexOf('e', -6), -1);   // overflows size search
+    QCOMPARE(hello.lastIndexOf('l'), 3);
+    QCOMPARE(hello.lastIndexOf('l', 1), -1);     // searches "he"
+    QCOMPARE(hello.lastIndexOf('l', 2), 2);      // searches "hel"
+    QCOMPARE(hello.lastIndexOf('l', 3), 3);      // searches "hell"
 
     QByteArray empty;
     QCOMPARE(empty.indexOf("x"), -1);
@@ -1852,11 +1873,24 @@ void tst_Collections::qstring()
     QVERIFY (true == hello.contains('e'));
     QVERIFY (hello.contains('e') != false);
 
-    QVERIFY(hello.indexOf('e') == 1);
-    QVERIFY(hello.indexOf('e', -10) == -1);
-    QVERIFY(hello.indexOf('l') == 2);
-    QVERIFY(hello.indexOf('l',2) == 2);
-    QVERIFY(hello.indexOf('l',3) == 3);
+    QCOMPARE(hello.indexOf('e'), 1);
+    QCOMPARE(hello.indexOf('e', -3), -1);   // searches "llo"
+    QCOMPARE(hello.indexOf('e', -4), 1);    // searches "ello"
+    QCOMPARE(hello.indexOf('e', -6), -1);   // overflows size search
+    QCOMPARE(hello.indexOf('l'), 2);
+    QCOMPARE(hello.indexOf('l', 2), 2);
+    QCOMPARE(hello.indexOf('l', 3), 3);
+    QCOMPARE(hello.indexOf('l', 4), -1);
+    QCOMPARE(hello.indexOf('l', 6), -1);
+
+    QCOMPARE(hello.lastIndexOf('e'), 1);
+    QCOMPARE(hello.lastIndexOf('e', -4), 1);    // searches "he"
+    QCOMPARE(hello.lastIndexOf('e', -5), -1);   // searches "h"
+    QCOMPARE(hello.lastIndexOf('e', -6), -1);   // overflows size search
+    QCOMPARE(hello.lastIndexOf('l'), 3);
+    QCOMPARE(hello.lastIndexOf('l', 1), -1);     // searches "he"
+    QCOMPARE(hello.lastIndexOf('l', 2), 2);      // searches "hel"
+    QCOMPARE(hello.lastIndexOf('l', 3), 3);      // searches "hell"
 
     QString empty;
     QCOMPARE(empty.indexOf("x"), -1);
@@ -2823,8 +2857,8 @@ void instantiateContainer()
     container.clear();
     container.contains(value);
     container.size();
-    container.empty();
-    container.isEmpty();
+    Q_UNUSED(container.empty());
+    Q_UNUSED(container.isEmpty());
     container.size();
 
     Q_UNUSED((container != constContainer));

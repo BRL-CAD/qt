@@ -28,7 +28,10 @@
 #if QT_CONFIG(menu)
 #include <QMenu>
 #endif
+#include <QtGui/private/qaccessiblehelper_p.h>
 #include <QtWidgets/private/qwidget_p.h>
+
+#include <qpa/qplatformwindow.h>
 
 QT_BEGIN_NAMESPACE
 
@@ -60,54 +63,10 @@ static QString buddyString(const QWidget *widget)
     return QString();
 }
 
-/* This function will return the offset of the '&' in the text that would be
-   preceding the accelerator character.
-   If this text does not have an accelerator, -1 will be returned. */
-static qsizetype qt_accAmpIndex(const QString &text)
-{
-#ifndef QT_NO_SHORTCUT
-    if (text.isEmpty())
-        return -1;
-
-    qsizetype fa = 0;
-    while ((fa = text.indexOf(u'&', fa)) != -1) {
-        ++fa;
-        if (fa < text.size()) {
-            // ignore "&&"
-            if (text.at(fa) == u'&') {
-
-                ++fa;
-                continue;
-            } else {
-                return fa - 1;
-                break;
-            }
-        }
-    }
-
-    return -1;
-#else
-    Q_UNUSED(text);
-    return -1;
-#endif
-}
-
-QString qt_accStripAmp(const QString &text)
-{
-    QString newText(text);
-    qsizetype ampIndex = qt_accAmpIndex(newText);
-    if (ampIndex != -1)
-        newText.remove(ampIndex, 1);
-
-    return newText.replace("&&"_L1, "&"_L1);
-}
-
 QString qt_accHotKey(const QString &text)
 {
 #ifndef QT_NO_SHORTCUT
-    qsizetype ampIndex = qt_accAmpIndex(text);
-    if (ampIndex != -1)
-        return QKeySequence(Qt::ALT).toString(QKeySequence::NativeText) + text.at(ampIndex + 1);
+    return QKeySequence::mnemonic(text).toString(QKeySequence::NativeText);
 #else
     Q_UNUSED(text);
 #endif
@@ -153,15 +112,24 @@ public:
 
 /*!
     Creates a QAccessibleWidget object for widget \a w.
-    \a role and \a name are optional parameters that set the object's
-    role and name properties.
+    \a role is an optional parameter that sets the object's role property.
 */
-QAccessibleWidget::QAccessibleWidget(QWidget *w, QAccessible::Role role, const QString &name)
+QAccessibleWidget::QAccessibleWidget(QWidget *w, QAccessible::Role role)
 : QAccessibleObject(w)
 {
     Q_ASSERT(widget());
     d = new QAccessibleWidgetPrivate();
     d->role = role;
+}
+
+/*!
+    Creates a QAccessibleWidget object for widget \a w.
+    \a role and \a name are optional parameters that set the object's
+    role and name properties.
+*/
+QAccessibleWidget::QAccessibleWidget(QWidget *w, QAccessible::Role role, const QString &name)
+    : QAccessibleWidget(w, role)
+{
     d->name = name;
 }
 
@@ -250,10 +218,10 @@ static inline bool isAncestor(const QObject *obj, const QObject *child)
 }
 
 /*! \reimp */
-QList<QPair<QAccessibleInterface *, QAccessible::Relation>>
+QList<std::pair<QAccessibleInterface *, QAccessible::Relation>>
 QAccessibleWidget::relations(QAccessible::Relation match /*= QAccessible::AllRelations*/) const
 {
-    QList<QPair<QAccessibleInterface *, QAccessible::Relation>> rels;
+    QList<std::pair<QAccessibleInterface *, QAccessible::Relation>> rels;
     if (match & QAccessible::Label) {
         const QAccessible::Relation rel = QAccessible::Label;
         if (QWidget *parent = widget()->parentWidget()) {
@@ -266,7 +234,7 @@ QAccessibleWidget::relations(QAccessible::Relation match /*= QAccessible::AllRel
                 if (QLabel *labelSibling = qobject_cast<QLabel*>(kid)) {
                     if (labelSibling->buddy() == widget()) {
                         QAccessibleInterface *iface = QAccessible::queryAccessibleInterface(labelSibling);
-                        rels.append(qMakePair(iface, rel));
+                        rels.emplace_back(iface, rel);
                     }
                 }
             }
@@ -275,7 +243,7 @@ QAccessibleWidget::relations(QAccessible::Relation match /*= QAccessible::AllRel
             QGroupBox *groupbox = qobject_cast<QGroupBox*>(parent);
             if (groupbox && !groupbox->title().isEmpty()) {
                 QAccessibleInterface *iface = QAccessible::queryAccessibleInterface(groupbox);
-                rels.append(qMakePair(iface, rel));
+                rels.emplace_back(iface, rel);
             }
 #endif
         }
@@ -295,7 +263,7 @@ QAccessibleWidget::relations(QAccessible::Relation match /*= QAccessible::AllRel
             const QAccessible::Relation rel = QAccessible::Controlled;
             QAccessibleInterface *iface = QAccessible::queryAccessibleInterface(allReceivers.at(i));
             if (iface)
-                rels.append(qMakePair(iface, rel));
+                rels.emplace_back(iface, rel);
         }
     }
 
@@ -353,9 +321,6 @@ int QAccessibleWidget::indexOfChild(const QAccessibleInterface *child) const
     return cl.indexOf(qobject_cast<QWidget *>(child->object()));
 }
 
-// from qwidget.cpp
-extern QString qt_setWindowTitle_helperHelper(const QString &, const QWidget*);
-
 /*! \reimp */
 QString QAccessibleWidget::text(QAccessible::Text t) const
 {
@@ -368,10 +333,10 @@ QString QAccessibleWidget::text(QAccessible::Text t) const
         } else if (!widget()->accessibleName().isEmpty()) {
             str = widget()->accessibleName();
         } else if (widget()->isWindow()) {
-            if (widget()->isMinimized())
-                str = qt_setWindowTitle_helperHelper(widget()->windowIconText(), widget());
-            else
-                str = qt_setWindowTitle_helperHelper(widget()->windowTitle(), widget());
+            if (QWindow *window = widget()->windowHandle()) {
+                if (QPlatformWindow *platformWindow = window->handle())
+                    str = platformWindow->windowTitle();
+            }
         } else {
             str = qt_accStripAmp(buddyString(widget()));
         }
@@ -382,6 +347,9 @@ QString QAccessibleWidget::text(QAccessible::Text t) const
         if (str.isEmpty())
             str = widget()->toolTip();
 #endif
+        break;
+    case QAccessible::Identifier:
+        str = widget()->accessibleIdentifier();
         break;
     case QAccessible::Help:
 #if QT_CONFIG(whatsthis)
@@ -406,6 +374,8 @@ QStringList QAccessibleWidget::actionNames() const
     if (widget()->isEnabled()) {
         if (widget()->focusPolicy() != Qt::NoFocus)
             names << setFocusAction();
+        if (widget()->contextMenuPolicy() == Qt::ActionsContextMenu && widget()->actions().size() > 0)
+            names << showMenuAction();
     }
     return names;
 }
@@ -420,6 +390,11 @@ void QAccessibleWidget::doAction(const QString &actionName)
         if (widget()->isWindow())
             widget()->activateWindow();
         widget()->setFocus();
+    } else if (actionName == showMenuAction()) {
+        QContextMenuEvent e(QContextMenuEvent::Other,
+            QPoint(), widget()->mapToGlobal(QPoint()),
+            QGuiApplication::keyboardModifiers());
+        QCoreApplication::sendEvent(widget(), &e);
     }
 }
 
@@ -479,6 +454,44 @@ void *QAccessibleWidget::interface_cast(QAccessible::InterfaceType t)
     if (t == QAccessible::ActionInterface)
        return static_cast<QAccessibleActionInterface*>(this);
     return nullptr;
+}
+
+// QAccessibleWidgetV2 implementation
+
+QAccessibleWidgetV2::QAccessibleWidgetV2(QWidget *object, QAccessible::Role role,
+                                         const QString &name)
+    : QAccessibleWidget(object, role, name)
+{
+}
+
+QAccessibleWidgetV2::QAccessibleWidgetV2(QWidget *object, QAccessible::Role role)
+    : QAccessibleWidget(object, role)
+{
+}
+
+QAccessibleWidgetV2::~QAccessibleWidgetV2() = default;
+
+/*! \reimp */
+void *QAccessibleWidgetV2::interface_cast(QAccessible::InterfaceType t)
+{
+    if (t == QAccessible::AttributesInterface)
+        return static_cast<QAccessibleAttributesInterface *>(this);
+    return QAccessibleWidget::interface_cast(t);
+}
+
+/*! \reimp */
+QList<QAccessible::Attribute> QAccessibleWidgetV2::attributeKeys() const
+{
+    return { QAccessible::Attribute::Locale };
+}
+
+/*! \reimp */
+QVariant QAccessibleWidgetV2::attributeValue(QAccessible::Attribute key) const
+{
+    if (key == QAccessible::Attribute::Locale)
+        return QVariant::fromValue(widget()->locale());
+
+    return QVariant();
 }
 
 QT_END_NAMESPACE

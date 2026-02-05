@@ -1,5 +1,6 @@
 // Copyright (C) 2020 The Qt Company Ltd.
 // SPDX-License-Identifier: LicenseRef-Qt-Commercial OR LGPL-3.0-only OR GPL-2.0-only OR GPL-3.0-only
+// Qt-Security score:significant reason:default
 
 #ifndef QITEMSELECTIONMODEL_H
 #define QITEMSELECTIONMODEL_H
@@ -42,27 +43,25 @@ public:
 
     inline bool contains(const QModelIndex &index) const
     {
-        return (parent() == index.parent()
-                && tl.row() <= index.row() && tl.column() <= index.column()
-                && br.row() >= index.row() && br.column() >= index.column());
+        return contains(index.row(), index.column(), index.parent());
     }
 
     inline bool contains(int row, int column, const QModelIndex &parentIndex) const
     {
-        return (parent() == parentIndex
-                && tl.row() <= row && tl.column() <= column
-                && br.row() >= row && br.column() >= column);
+        return (br.row() >= row && br.column() >= column &&
+                tl.row() <= row && tl.column() <= column &&
+                parent() == parentIndex);
     }
 
     bool intersects(const QItemSelectionRange &other) const;
     QItemSelectionRange intersected(const QItemSelectionRange &other) const;
 
-
+#if QT_CORE_REMOVED_SINCE(6, 8)
     inline bool operator==(const QItemSelectionRange &other) const
-        { return (tl == other.tl && br == other.br); }
+    { return comparesEqual(*this, other); }
     inline bool operator!=(const QItemSelectionRange &other) const
-        { return !operator==(other); }
-
+    { return !operator==(other); }
+#endif
     inline bool isValid() const
     {
         return (tl.isValid() && br.isValid() && tl.parent() == br.parent()
@@ -74,6 +73,12 @@ public:
     QModelIndexList indexes() const;
 
 private:
+    friend bool comparesEqual(const QItemSelectionRange &lhs,
+                              const QItemSelectionRange &rhs) noexcept
+    {
+        return comparesEqual(lhs.tl, rhs.tl) && comparesEqual(lhs.br, rhs.br);
+    }
+    Q_DECLARE_EQUALITY_COMPARABLE(QItemSelectionRange)
     QPersistentModelIndex tl, br;
 };
 Q_DECLARE_TYPEINFO(QItemSelectionRange, Q_RELOCATABLE_TYPE);

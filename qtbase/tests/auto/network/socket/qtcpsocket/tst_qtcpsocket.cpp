@@ -128,6 +128,7 @@ private slots:
     void readChunks();
     void waitForBytesWritten();
     void waitForBytesWrittenMinusOne();
+    void waitForBytesWrittenWriteInReadyReadSlot();
     void waitForReadyRead();
     void waitForReadyReadMinusOne();
     void flush();
@@ -1681,6 +1682,52 @@ void tst_QTcpSocket::waitForBytesWrittenMinusOne()
 }
 
 //----------------------------------------------------------------------------------
+void tst_QTcpSocket::waitForBytesWrittenWriteInReadyReadSlot()
+{
+    QFETCH_GLOBAL(bool, setProxy);
+    if (setProxy)
+        return;
+
+    SocketPair socketPair;
+    QVERIFY(socketPair.create());
+    QTcpSocket *client = socketPair.endPoints[0];
+    QTcpSocket *server = socketPair.endPoints[1];
+
+    QCOMPARE(client->state(), QTcpSocket::ConnectedState);
+    QCOMPARE(server->state(), QTcpSocket::ConnectedState);
+
+    server->write("ServerHello");
+    server->waitForBytesWritten();
+
+    // Make sure that the data from server has made it to client, but only read one byte from
+    // the OS buffer so that future polling for read will find more data ready.
+    client->setReadBufferSize(1);
+    QVERIFY(client->waitForReadyRead());
+
+    uint readyReadCount = 0;
+    connect(client, &QAbstractSocket::readyRead, [client, &readyReadCount]() {
+        // The commented out code is not necessary, but typically part of a real scenario
+        // client->readAll();
+        // client->write("response to whatever was read");
+        readyReadCount++;
+        client->flush();
+    });
+
+    client->write("ClientHello");
+
+    // Allow to fetch more data from the OS buffer ("new data", causes emission of readyRead())
+    client->setReadBufferSize(0);
+    QCOMPARE(readyReadCount, 0); // we missed the  one from the first waitForReadyRead()
+
+    // If there is incoming data, waitForBytesWritten() emits readyRead() even *before* writing
+    // data, so if the readyRead handler already flushes outgoing data, the subsequent attempt
+    // in waitForBytesWritten() to flush outgoing data will fail.
+    // This tests that that doesn't happen anymore.
+    QVERIFY(client->waitForBytesWritten());
+    QCOMPARE(readyReadCount, 1);
+}
+
+//----------------------------------------------------------------------------------
 void tst_QTcpSocket::waitForReadyRead()
 {
     QTcpSocket *socket = newSocket();
@@ -2583,7 +2630,7 @@ void tst_QTcpSocket::moveToThread0()
 
     {
         // Case 1: Moved after connecting, before waiting for connection.
-        QTcpSocket *socket = newSocket();;
+        QTcpSocket *socket = newSocket();
         socket->connectToHost(QtNetworkSettings::imapServerName(), 143);
         socket->moveToThread(0);
         QVERIFY(socket->waitForConnected(5000));

@@ -1,5 +1,6 @@
 // Copyright (C) 2016 The Qt Company Ltd.
 // SPDX-License-Identifier: LicenseRef-Qt-Commercial OR LGPL-3.0-only OR GPL-2.0-only OR GPL-3.0-only
+// Qt-Security score:significant reason:default
 
 #include "qsharedmemory.h"
 #include "qsharedmemory_p.h"
@@ -12,9 +13,14 @@
 #ifdef Q_OS_WIN
 #  include <qt_windows.h>
 #endif
+#include <errno.h>
 
 #ifndef MAX_PATH
-#  define MAX_PATH PATH_MAX
+#  ifdef PATH_MAX
+#    define MAX_PATH PATH_MAX
+#  else
+#    define MAX_PATH 1024
+#  endif
 #endif
 
 QT_BEGIN_NAMESPACE

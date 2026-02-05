@@ -10,9 +10,7 @@ function(qt_internal_setup_public_platform_target)
     )
 
     ## QtPlatform Target:
-    add_library(Platform INTERFACE)
-    add_library(Qt::Platform ALIAS Platform)
-    add_library(${INSTALL_CMAKE_NAMESPACE}::Platform ALIAS Platform)
+    qt_internal_add_platform_target(Platform)
     target_include_directories(Platform
         INTERFACE
         $<BUILD_INTERFACE:${build_interface_definition_dir}>
@@ -33,6 +31,9 @@ function(qt_internal_setup_public_platform_target)
     # in order to satisfy linker dependencies. Both of these libraries are part of
     # the NDK.
     if (ANDROID)
+        if(QT_FEATURE_android_16kb_pages)
+            target_link_options(Platform INTERFACE "-Wl,-z,max-page-size=16384")
+        endif()
         target_link_libraries(Platform INTERFACE log)
     endif()
 
@@ -49,15 +50,6 @@ function(qt_internal_setup_public_platform_target)
         target_compile_options(Platform INTERFACE "$<$<CXX_COMPILER_ID:Clang>:-fno-direct-access-external-data>")
     endif()
 
-    # Qt checks if a given platform supports 128 bit integers
-    # by checking if __SIZEOF_128__ is defined
-    # VXWORKS doesn't support 128 bit integers
-    # but it uses clang which defines __SIZEOF_128__
-    # which breaks the detection mechanism
-    if(VXWORKS)
-        target_compile_definitions(Platform INTERFACE "-DQT_NO_INT128")
-    endif()
-
     qt_set_msvc_cplusplus_options(Platform INTERFACE)
 
     # Propagate minimum C++ 17 via Platform to Qt consumers (apps), after the global features
@@ -72,6 +64,13 @@ function(qt_internal_setup_public_platform_target)
 
     # Generate a pkgconfig for Qt::Platform.
     qt_internal_generate_pkg_config_file(Platform)
+
+    qt_internal_add_sbom(Platform
+        SBOM_ENTITY_TYPE QT_MODULE
+        ATTRIBUTION_FILE_DIR_PATHS
+            "${PROJECT_SOURCE_DIR}/cmake/3rdparty/extra-cmake-modules"
+            "${PROJECT_SOURCE_DIR}/cmake/3rdparty/kwin"
+    )
 endfunction()
 
 function(qt_internal_get_platform_definition_include_dir install_interface build_interface)

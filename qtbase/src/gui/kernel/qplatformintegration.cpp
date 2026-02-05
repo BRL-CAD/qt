@@ -204,7 +204,7 @@ QPlatformServices *QPlatformIntegration::services() const
     prerequisite for dynamic OpenGL loading. Starting with Qt 5.7, the platform plugin
     is required to have this capability.
 
-    \value ApplicationIcon The platform supports setting the application icon. (since 5.5)
+    \value [since 5.5] ApplicationIcon The platform supports setting the application icon.
 
     \value TopStackedNativeChildWindows The platform supports native child windows via
     QWindowContainer without having to punch a transparent hole in the
@@ -496,6 +496,8 @@ class QPlatformTheme *QPlatformIntegration::createPlatformTheme(const QString &n
    Factory function for QOffscreenSurface. An offscreen surface will typically be implemented with a
    pixel buffer (pbuffer). If the platform doesn't support offscreen surfaces, an invisible window
    will be used by QOffscreenSurface instead.
+
+   If the platform has the OffscreenSurface capability, this should always return a valid pointer.
 */
 QPlatformOffscreenSurface *QPlatformIntegration::createPlatformOffscreenSurface(QOffscreenSurface *surface) const
 {

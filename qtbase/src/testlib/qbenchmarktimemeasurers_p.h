@@ -17,7 +17,7 @@
 
 #include <QtTest/private/qbenchmarkmeasurement_p.h>
 #include <QtCore/qelapsedtimer.h>
-#include <QtTest/private/cycle_p.h>
+#include <QtTest/private/cycle_include_p.h>
 
 QT_BEGIN_NAMESPACE
 
@@ -34,7 +34,7 @@ private:
     QElapsedTimer time;
 };
 
-#ifdef HAVE_TICK_COUNTER // defined in 3rdparty/cycle_p.h
+#ifdef HAVE_TICK_COUNTER // defined in 3rdparty/cycle/cycle_p.h
 
 class QBenchmarkTickMeasurer : public QBenchmarkMeasurerBase
 {

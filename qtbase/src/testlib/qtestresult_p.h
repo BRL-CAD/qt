@@ -17,12 +17,10 @@
 
 #include <QtTest/qttestglobal.h>
 #include <QtCore/qstringfwd.h>
-#include <QtCore/qxpfunctional.h>
 #include <QtCore/private/qglobal_p.h>
 
 QT_BEGIN_NAMESPACE
 
-class QTestResultPrivate;
 class QTestData;
 
 class Q_TESTLIB_EXPORT QTestResult
@@ -102,11 +100,24 @@ public:
     static void setCurrentAppName(const char *appName);
     static const char *currentAppName();
 
-    static bool reportResult(bool success, qxp::function_ref<const char *()> lhs,
-                             qxp::function_ref<const char *()> rhs,
+    static bool reportResult(bool success, const void *lhs, const void *rhs,
+                             const char *(*lhsFormatter)(const void *),
+                             const char *(*rhsFormatter)(const void *),
                              const char *lhsExpr, const char *rhsExpr,
                              QTest::ComparisonOperation op, const char *file, int line,
                              const char *failureMessage = nullptr);
+
+    static bool report3WayResult(bool success,
+                                 const char *failureMessage,
+                                 const void *lhs, const void *rhs,
+                                 const char *(*lhsFormatter)(const void *),
+                                 const char *(*rhsFormatter)(const void *),
+                                 const char *lhsExpression, const char *rhsExpression,
+                                 const char *(*actualOrderFormatter)(const void *),
+                                 const char *(*expectedOrderFormatter)(const void *),
+                                 const void *actualOrder, const void *expectedOrder,
+                                 const char *expectedExpression,
+                                 const char *file, int line);
 
 private:
     Q_DISABLE_COPY(QTestResult)

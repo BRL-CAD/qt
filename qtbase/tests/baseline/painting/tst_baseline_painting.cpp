@@ -19,6 +19,8 @@
 #include <QOpenGLPaintDevice>
 #endif
 
+#include <QFontDatabase>
+
 #include <algorithm>
 
 #ifndef GL_RGB10
@@ -55,6 +57,7 @@ private:
 private slots:
     void initTestCase();
     void init();
+    void cleanupTestCase();
 
     void testRasterARGB32PM_data();
     void testRasterARGB32PM();
@@ -122,11 +125,19 @@ void tst_Lancelot::initTestCase()
     std::sort(qpsFiles.begin(), qpsFiles.end());
     foreach (const QString& fileName, qpsFiles) {
         QFile file(scriptsDir + fileName);
-        file.open(QFile::ReadOnly);
+        QVERIFY(file.open(QFile::ReadOnly));
         QByteArray cont = file.readAll();
         scripts.insert(fileName, QString::fromUtf8(cont).split(QLatin1Char('\n'), Qt::SkipEmptyParts));
         scriptChecksums.insert(fileName, qChecksum(cont));
     }
+
+    QString underlineTestFont1 = QLatin1String(":/fonts/QtUnderlineTest-Regular.ttf");
+    int id = QFontDatabase::addApplicationFont(underlineTestFont1);
+    QVERIFY(id >= 0);
+
+    QString underlineTestFont2 = QLatin1String(":/fonts/QtUnderlineTest2-Regular.ttf");
+    id = QFontDatabase::addApplicationFont(underlineTestFont2);
+    QVERIFY(id >= 0);
 
 #ifndef QT_NO_OPENGL
     initOpenGL();
@@ -137,6 +148,11 @@ void tst_Lancelot::init()
 {
     // This gets called for every row. QSKIP if current item is blacklisted on the baseline server:
     QBASELINE_SKIP_IF_BLACKLISTED;
+}
+
+void tst_Lancelot::cleanupTestCase()
+{
+    QBaselineTest::finalizeAndDisconnect();
 }
 
 void tst_Lancelot::testRasterARGB32PM_data()
@@ -423,7 +439,7 @@ void tst_Lancelot::runTestSuite(GraphicsEngine engine, QImage::Format format, co
         QString tempStem(QDir::tempPath() + QLatin1String("/lancelot_XXXXXX_") + qpsFile.chopped(4));
 
         QTemporaryFile pdfFile(tempStem + QLatin1String(".pdf"));
-        pdfFile.open();
+        QVERIFY(pdfFile.open());
         QPdfWriter writer(&pdfFile);
         writer.setPdfVersion(QPdfWriter::PdfVersion_1_6);
         QPageSize pageSize(QSize(800, 800), QStringLiteral("LancePage"), QPageSize::ExactMatch);
@@ -435,7 +451,7 @@ void tst_Lancelot::runTestSuite(GraphicsEngine engine, QImage::Format format, co
 
         // Convert pdf to something we can read into a QImage, using macOS' sips utility
         QTemporaryFile pngFile(tempStem + QLatin1String(".png"));
-        pngFile.open(); // Just create the file name
+        QVERIFY(pngFile.open()); // Just create the file name
         pngFile.close();
         QProcess proc;
         const char *rawArgs = "-s format png -o";
@@ -473,17 +489,6 @@ void tst_Lancelot::paint(QPaintDevice *device, GraphicsEngine engine, QImage::Fo
     p.end();
 }
 
-#define main _realmain
-QTEST_MAIN(tst_Lancelot)
-#undef main
-
-int main(int argc, char *argv[])
-{
-    // Avoid rendering variations caused by QHash randomization
-    QHashSeed::setDeterministicGlobalSeed();
-
-    QBaselineTest::handleCmdLineArgs(&argc, &argv);
-    return _realmain(argc, argv);
-}
+QBASELINETEST_MAIN(tst_Lancelot);
 
 #include "tst_baseline_painting.moc"

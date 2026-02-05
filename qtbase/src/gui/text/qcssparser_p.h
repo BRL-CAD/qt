@@ -167,6 +167,14 @@ enum Property {
     TextDecorationColor,
     QtPlaceHolderTextColor,
     QtAccent,
+    QtStrokeWidth,
+    QtStrokeColor,
+    QtStrokeLineCap,
+    QtStrokeLineJoin,
+    QtStrokeMiterLimit,
+    QtStrokeDashArray,
+    QtStrokeDashOffset,
+    QtForeground,
     NumProperties
 };
 
@@ -223,6 +231,13 @@ enum KnownValue {
     Value_SmallCaps,
     Value_Uppercase,
     Value_Lowercase,
+    Value_SquareCap,
+    Value_FlatCap,
+    Value_RoundCap,
+    Value_MiterJoin,
+    Value_BevelJoin,
+    Value_RoundJoin,
+    Value_SvgMiterJoin,
 
     /* keep these in same order as QPalette::ColorRole */
     Value_FirstColorRole,
@@ -243,7 +258,12 @@ enum KnownValue {
     Value_Link,
     Value_LinkVisited,
     Value_AlternateBase,
-    Value_LastColorRole = Value_AlternateBase,
+    Value_NoRole,
+    Value_ToolTipBase,
+    Value_ToolTipText,
+    Value_PlaceholderText,
+    Value_Accent,
+    Value_LastColorRole = Value_Accent,
 
     Value_Disabled,
     Value_Active,
@@ -389,7 +409,7 @@ QT_CSS_DECLARE_TYPEINFO(BackgroundData, Q_RELOCATABLE_TYPE)
 
 struct LengthData {
     qreal number;
-    enum { None, Px, Ex, Em } unit;
+    enum { None, Px, Ex, Em, Percent } unit;
 };
 QT_CSS_DECLARE_TYPEINFO(LengthData, Q_PRIMITIVE_TYPE)
 
@@ -448,6 +468,8 @@ struct Q_GUI_EXPORT Declaration
 
     void borderImageValue(QString *image, int *cuts, TileMode *h, TileMode *v) const;
     bool borderCollapseValue() const;
+
+    QList<qreal> dashArray() const;
 };
 QT_CSS_DECLARE_TYPEINFO(Declaration, Q_RELOCATABLE_TYPE)
 
@@ -583,6 +605,19 @@ struct PageRule
 };
 QT_CSS_DECLARE_TYPEINFO(PageRule, Q_RELOCATABLE_TYPE)
 
+struct AnimationRule
+{
+    struct AnimationRuleSet
+    {
+        float keyFrame;
+        QList<Declaration> declarations;
+    };
+
+    QString animName;
+    QList<AnimationRuleSet> ruleSets;
+};
+QT_CSS_DECLARE_TYPEINFO(AnimationRule, Q_RELOCATABLE_TYPE)
+
 struct ImportRule
 {
     QString href;
@@ -604,6 +639,7 @@ struct StyleSheet
     QList<StyleRule> styleRules; // only contains rules that are not indexed
     QList<MediaRule> mediaRules;
     QList<PageRule> pageRules;
+    QList<AnimationRule> animationRules;
     QList<ImportRule> importRules;
     StyleSheetOrigin origin;
     int depth; // applicable only for inline style sheets
@@ -735,6 +771,7 @@ public:
     bool parsePage(PageRule *pageRule);
     bool parsePseudoPage(QString *selector);
     bool parseNextOperator(Value *value);
+    bool parseAnimation(AnimationRule *animationRule);
     bool parseCombinator(BasicSelector::Relation *relation);
     bool parseProperty(Declaration *decl);
     bool parseRuleset(StyleRule *styleRule);
@@ -767,6 +804,7 @@ public:
     inline bool testImport() { return testTokenAndEndsWith(ATKEYWORD_SYM, QLatin1StringView("import")); }
     inline bool testMedia() { return testTokenAndEndsWith(ATKEYWORD_SYM, QLatin1StringView("media")); }
     inline bool testPage() { return testTokenAndEndsWith(ATKEYWORD_SYM, QLatin1StringView("page")); }
+    inline bool testAnimation() { return testTokenAndEndsWith(ATKEYWORD_SYM, QLatin1StringView("keyframes")); }
     inline bool testCombinator() { return test(PLUS) || test(GREATER) || test(TILDE) || test(S); }
     inline bool testProperty() { return test(IDENT); }
     bool testTerm();
@@ -832,6 +870,7 @@ struct Q_GUI_EXPORT ValueExtractor
     bool extractIcon(QIcon *icon, QSize *size);
 
     void lengthValues(const Declaration &decl, int *m);
+    QTextLength textLength(const Declaration &decl);
 
 private:
     void extractFont();

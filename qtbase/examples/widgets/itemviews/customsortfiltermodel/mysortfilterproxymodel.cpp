@@ -15,16 +15,18 @@ MySortFilterProxyModel::MySortFilterProxyModel(QObject *parent)
 //! [1]
 void MySortFilterProxyModel::setFilterMinimumDate(QDate date)
 {
+    beginFilterChange();
     minDate = date;
-    invalidateFilter();
+    endFilterChange(QSortFilterProxyModel::Direction::Rows);
 }
 //! [1]
 
 //! [2]
 void MySortFilterProxyModel::setFilterMaximumDate(QDate date)
 {
+    beginFilterChange();
     maxDate = date;
-    invalidateFilter();
+    endFilterChange(QSortFilterProxyModel::Direction::Rows);
 }
 //! [2]
 

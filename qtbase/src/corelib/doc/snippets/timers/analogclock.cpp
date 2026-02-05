@@ -5,6 +5,8 @@
 
 #include "analogclock.h"
 
+//! [analogclock-qtimer]
+
 //! [0]
 AnalogClock::AnalogClock(QWidget *parent)
 //! [0] //! [2]
@@ -24,6 +26,8 @@ AnalogClock::AnalogClock(QWidget *parent)
 //! [7]
 }
 //! [7]
+
+//! [analogclock-qtimer]
 
 void AnalogClock::paintEvent(QPaintEvent *)
 {

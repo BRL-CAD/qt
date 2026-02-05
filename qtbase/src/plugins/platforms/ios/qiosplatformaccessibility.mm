@@ -11,8 +11,16 @@
 #include "qioswindow.h"
 #include "quiaccessibilityelement.h"
 
+QT_NAMESPACE_ALIAS_OBJC_CLASS(QMacAccessibilityElement);
+
 QIOSPlatformAccessibility::QIOSPlatformAccessibility()
-{}
+{
+    m_focusObserver = QMacNotificationObserver(
+            nil, UIAccessibilityElementFocusedNotification, [&](NSNotification *notification) {
+                id element = notification.userInfo[UIAccessibilityFocusedElementKey];
+                m_focusElement = static_cast<QMacAccessibilityElement *>(element);
+            });
+}
 
 QIOSPlatformAccessibility::~QIOSPlatformAccessibility()
 {}
@@ -43,6 +51,12 @@ void QIOSPlatformAccessibility::notifyAccessibilityUpdate(QAccessibleEvent *even
     if (!isActive() || !accessibleInterface)
         return;
     switch (event->type()) {
+    case QAccessible::Announcement: {
+        auto *announcementEvent = static_cast<QAccessibleAnnouncementEvent *>(event);
+        UIAccessibilityPostNotification(UIAccessibilityAnnouncementNotification,
+                                        announcementEvent->message().toNSString());
+        break;
+    }
     case QAccessible::Focus: {
         auto *element = [QMacAccessibilityElement elementWithId:event->uniqueId()];
         Q_ASSERT(element);
@@ -51,6 +65,13 @@ void QIOSPlatformAccessibility::notifyAccessibilityUpdate(QAccessibleEvent *even
         // specifies that the optional argument to UIAccessibilityPostNotification is the
         // accessibility element for VoiceOver to move to after processing the notification.
         UIAccessibilityPostNotification(UIAccessibilityLayoutChangedNotification, element);
+        break;
+    }
+    case QAccessible::DescriptionChanged:
+    case QAccessible::NameChanged: {
+        auto *element = [QMacAccessibilityElement elementWithId:event->uniqueId()];
+        if (element == m_focusElement)
+            UIAccessibilityPostNotification(UIAccessibilityLayoutChangedNotification, element);
         break;
     }
     case QAccessible::ObjectCreated:

@@ -34,10 +34,13 @@ macro(qt_find_apple_system_frameworks)
         qt_internal_find_apple_system_framework(FWGameController GameController)
         qt_internal_find_apple_system_framework(FWCoreBluetooth CoreBluetooth)
         qt_internal_find_apple_system_framework(FWAVFoundation AVFoundation)
+        qt_internal_find_apple_system_framework(FWPhotos Photos)
         qt_internal_find_apple_system_framework(FWContacts Contacts)
         qt_internal_find_apple_system_framework(FWEventKit EventKit)
         qt_internal_find_apple_system_framework(FWHealthKit HealthKit)
         qt_internal_find_apple_system_framework(FWUniformTypeIdentifiers UniformTypeIdentifiers)
+        qt_internal_find_apple_system_framework(FWNetwork Network)
+        qt_internal_find_apple_system_framework(FWOpenGL OpenGL)
     endif()
 endmacro()
 
@@ -93,7 +96,6 @@ function(qt_copy_framework_headers target)
     foreach(type IN ITEMS PUBLIC PRIVATE QPA RHI SSG)
         set(in_files_${type} "")
         set(fw_output_header_dir "${output_dir_${type}}")
-        list(APPEND out_dirs "${fw_output_header_dir}")
         foreach(hdr IN LISTS arg_${type})
             get_filename_component(in_file_path ${hdr} ABSOLUTE)
             get_filename_component(in_file_name ${hdr} NAME)
@@ -102,6 +104,7 @@ function(qt_copy_framework_headers target)
             list(APPEND in_files_${type} "${in_file_path}")
         endforeach()
         if(in_files_${type})
+            list(APPEND out_dirs "${fw_output_header_dir}")
             list(APPEND copy_commands
                 COMMAND ${CMAKE_COMMAND} -E copy ${in_files_${type}} "${fw_output_header_dir}")
             list(APPEND in_files ${in_files_${type}})
@@ -117,18 +120,32 @@ function(qt_copy_framework_headers target)
         "${output_dir}/${fw_versioned_header_dir}"
     )
 
+    set(copy_fw_sync_headers_marker_file
+        "${CMAKE_CURRENT_BINARY_DIR}/${target}_fw_sync_headers_marker_file"
+    )
+
+    set(copy_fw_sync_headers_marker_file_command
+        "${CMAKE_COMMAND}" -E touch "${copy_fw_sync_headers_marker_file}"
+    )
+
     if(CMAKE_GENERATOR MATCHES "^Ninja")
         add_custom_command(
-            OUTPUT "${output_dir}/${fw_versioned_header_dir}"
+            OUTPUT
+                "${output_dir}/${fw_versioned_header_dir}"
+                "${copy_fw_sync_headers_marker_file}"
             DEPENDS ${target}_sync_headers
             COMMAND ${copy_fw_sync_headers_command}
+            COMMAND ${copy_fw_sync_headers_marker_file_command}
             VERBATIM
         )
         add_custom_target(${target}_copy_fw_sync_headers
             DEPENDS "${output_dir}/${fw_versioned_header_dir}")
     else()
         add_custom_target(${target}_copy_fw_sync_headers
-            COMMAND ${copy_fw_sync_headers_command})
+            COMMAND ${copy_fw_sync_headers_command}
+            COMMAND ${copy_fw_sync_headers_marker_file_command}
+            DEPENDS ${target}_sync_headers
+        )
     endif()
 
     if(out_files)
@@ -155,7 +172,7 @@ function(qt_internal_generate_fake_framework_header target)
     file(GENERATE OUTPUT "${fake_header}" CONTENT "// ignore this file\n"
         CONDITION "$<CONFIG:${main_config}>")
     target_sources(${target} PRIVATE "${fake_header}")
-    set_source_files_properties("${fake_header}" PROPERTIES GENERATED ON)
+    _qt_internal_set_source_file_generated(SOURCES "${fake_header}")
     set_property(TARGET ${target} APPEND PROPERTY PUBLIC_HEADER "${fake_header}")
 endfunction()
 
@@ -185,6 +202,8 @@ endfunction()
 #    <out_var>_version framework version, e.g. 'A', 'B' etc.
 #    <out_var>_bundle_version framework bundle version, same as the PROJECT_VERSION, e.g. '6.0.0'.
 #    <out_var>_header_dir top-level header directory, e.g. 'QtCore.framework/Headers'.
+#    <out_var>_versioned_binary_dir versioned directory that contains the framework binary,
+#        e.g. 'QtCore.framework/Versions/A'
 #    <out_var>_versioned_header_dir header directory for specific framework version,
 #        e.g. 'QtCore.framework/Versions/A/Headers'
 #    <out_var>_private_header_dir header directory for the specific framework version and
@@ -193,6 +212,12 @@ endfunction()
 #       version, framework bundle version and tailing module name, e.g.
 #       'QtCore.framework/Versions/A/Headers/6.0.0/Core'
 function(qt_internal_get_framework_info out_var target)
+    # Avoid "INTERFACE_LIBRARY targets may only have whitelisted properties" error on CMake < 3.17.
+    get_target_property(target_type ${target} TYPE)
+    if("${target_type}" STREQUAL "INTERFACE_LIBRARY")
+        return()
+    endif()
+
     get_target_property(${out_var}_version ${target} FRAMEWORK_VERSION)
     get_target_property(${out_var}_bundle_version ${target} MACOSX_FRAMEWORK_BUNDLE_VERSION)
 
@@ -208,11 +233,14 @@ function(qt_internal_get_framework_info out_var target)
     set(${out_var}_name "${module}")
     set(${out_var}_dir "${${out_var}_name}.framework")
     set(${out_var}_header_dir "${${out_var}_dir}/Headers")
+
     if(UIKIT)
-        # iOS frameworks do not version their headers
+        # iOS frameworks do not have a Versions sub-directory
+        set(${out_var}_versioned_binary_dir "${${out_var}_dir}")
         set(${out_var}_versioned_header_dir "${${out_var}_header_dir}")
     else()
-        set(${out_var}_versioned_header_dir "${${out_var}_dir}/Versions/${${out_var}_version}/Headers")
+        set(${out_var}_versioned_binary_dir "${${out_var}_dir}/Versions/${${out_var}_version}")
+        set(${out_var}_versioned_header_dir "${${out_var}_versioned_binary_dir}/Headers")
     endif()
     set(${out_var}_private_header_dir "${${out_var}_versioned_header_dir}/${${out_var}_bundle_version}")
     set(${out_var}_private_module_header_dir "${${out_var}_private_header_dir}/${module}")
@@ -222,6 +250,7 @@ function(qt_internal_get_framework_info out_var target)
     set(${out_var}_header_dir "${${out_var}_header_dir}" PARENT_SCOPE)
     set(${out_var}_version "${${out_var}_version}" PARENT_SCOPE)
     set(${out_var}_bundle_version "${${out_var}_bundle_version}" PARENT_SCOPE)
+    set(${out_var}_versioned_binary_dir "${${out_var}_versioned_binary_dir}" PARENT_SCOPE)
     set(${out_var}_versioned_header_dir "${${out_var}_versioned_header_dir}" PARENT_SCOPE)
     set(${out_var}_private_header_dir "${${out_var}_private_header_dir}" PARENT_SCOPE)
     set(${out_var}_private_module_header_dir "${${out_var}_private_module_header_dir}" PARENT_SCOPE)

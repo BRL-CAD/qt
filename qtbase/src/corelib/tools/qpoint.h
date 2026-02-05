@@ -4,7 +4,10 @@
 #ifndef QPOINT_H
 #define QPOINT_H
 
+#include <QtCore/qcheckedint_impl.h>
+#include <QtCore/qcompare.h>
 #include <QtCore/qnamespace.h>
+#include <QtCore/qnumeric.h>
 
 #include <QtCore/q20type_traits.h>
 #include <QtCore/q23utility.h>
@@ -17,7 +20,10 @@ QT_BEGIN_NAMESPACE
 
 QT_ENABLE_P0846_SEMANTICS_FOR(get)
 
+class QDataStream;
+class QLine;
 class QPointF;
+class QRect;
 
 class QPoint
 {
@@ -49,26 +55,26 @@ public:
     constexpr inline QPoint &operator/=(qreal divisor);
 
     constexpr static inline int dotProduct(const QPoint &p1, const QPoint &p2)
-    { return p1.xp * p2.xp + p1.yp * p2.yp; }
+    { return int(p1.xp * p2.xp + p1.yp * p2.yp); }
 
-    friend constexpr inline bool operator==(const QPoint &p1, const QPoint &p2) noexcept
+private:
+    friend constexpr bool comparesEqual(const QPoint &p1, const QPoint &p2) noexcept
     { return p1.xp == p2.xp && p1.yp == p2.yp; }
-    friend constexpr inline bool operator!=(const QPoint &p1, const QPoint &p2) noexcept
-    { return p1.xp != p2.xp || p1.yp != p2.yp; }
+    Q_DECLARE_EQUALITY_COMPARABLE_LITERAL_TYPE(QPoint)
     friend constexpr inline QPoint operator+(const QPoint &p1, const QPoint &p2) noexcept
     { return QPoint(p1.xp + p2.xp, p1.yp + p2.yp); }
     friend constexpr inline QPoint operator-(const QPoint &p1, const QPoint &p2) noexcept
     { return QPoint(p1.xp - p2.xp, p1.yp - p2.yp); }
     friend constexpr inline QPoint operator*(const QPoint &p, float factor)
-    { return QPoint(qRound(p.xp * factor), qRound(p.yp * factor)); }
+    { return QPoint(QtPrivate::qSaturateRound(p.x() * factor), QtPrivate::qSaturateRound(p.y() * factor)); }
     friend constexpr inline QPoint operator*(const QPoint &p, double factor)
-    { return QPoint(qRound(p.xp * factor), qRound(p.yp * factor)); }
+    { return QPoint(QtPrivate::qSaturateRound(p.x() * factor), QtPrivate::qSaturateRound(p.y() * factor)); }
     friend constexpr inline QPoint operator*(const QPoint &p, int factor) noexcept
     { return QPoint(p.xp * factor, p.yp * factor); }
     friend constexpr inline QPoint operator*(float factor, const QPoint &p)
-    { return QPoint(qRound(p.xp * factor), qRound(p.yp * factor)); }
+    { return QPoint(QtPrivate::qSaturateRound(p.x() * factor), QtPrivate::qSaturateRound(p.y() * factor)); }
     friend constexpr inline QPoint operator*(double factor, const QPoint &p)
-    { return QPoint(qRound(p.xp * factor), qRound(p.yp * factor)); }
+    { return QPoint(QtPrivate::qSaturateRound(p.x() * factor), QtPrivate::qSaturateRound(p.y() * factor)); }
     friend constexpr inline QPoint operator*(int factor, const QPoint &p) noexcept
     { return QPoint(p.xp * factor, p.yp * factor); }
     friend constexpr inline QPoint operator+(const QPoint &p) noexcept
@@ -76,17 +82,27 @@ public:
     friend constexpr inline QPoint operator-(const QPoint &p) noexcept
     { return QPoint(-p.xp, -p.yp); }
     friend constexpr inline QPoint operator/(const QPoint &p, qreal c)
-    { return QPoint(qRound(p.xp / c), qRound(p.yp / c)); }
+    {
+        Q_ASSERT(!qFuzzyIsNull(c));
+        return QPoint(QtPrivate::qSaturateRound(p.x() / c), QtPrivate::qSaturateRound(p.y() / c));
+    }
 
+public:
 #if defined(Q_OS_DARWIN) || defined(Q_QDOC)
     [[nodiscard]] Q_CORE_EXPORT CGPoint toCGPoint() const noexcept;
 #endif
     [[nodiscard]] constexpr inline QPointF toPointF() const noexcept;
 
 private:
-    friend class QTransform;
-    int xp;
-    int yp;
+    using Representation = QtPrivate::QCheckedIntegers::QCheckedInt<int>;
+
+    friend class QRect;
+    friend class QLine;
+    constexpr QPoint(Representation xpos, Representation ypos) noexcept
+        : xp(xpos), yp(ypos) {}
+
+    Representation xp;
+    Representation yp;
 
     template <std::size_t I,
               typename P,
@@ -95,9 +111,9 @@ private:
     friend constexpr decltype(auto) get(P &&p) noexcept
     {
         if constexpr (I == 0)
-            return q23::forward_like<P>(p.xp);
+            return q23::forward_like<P>(p.xp).as_underlying();
         else if constexpr (I == 1)
-            return q23::forward_like<P>(p.yp);
+            return q23::forward_like<P>(p.yp).as_underlying();
     }
 };
 
@@ -126,37 +142,37 @@ constexpr inline bool QPoint::isNull() const noexcept
 
 constexpr inline int QPoint::x() const noexcept
 {
-    return xp;
+    return xp.value();
 }
 
 constexpr inline int QPoint::y() const noexcept
 {
-    return yp;
+    return yp.value();
 }
 
 constexpr inline void QPoint::setX(int xpos) noexcept
 {
-    xp = xpos;
+    xp.setValue(xpos);
 }
 
 constexpr inline void QPoint::setY(int ypos) noexcept
 {
-    yp = ypos;
+    yp.setValue(ypos);
 }
 
 inline int constexpr QPoint::manhattanLength() const
 {
-    return qAbs(x()) + qAbs(y());
+    return (qAbs(xp) + qAbs(yp)).value();
 }
 
 constexpr inline int &QPoint::rx() noexcept
 {
-    return xp;
+    return xp.as_underlying();
 }
 
 constexpr inline int &QPoint::ry() noexcept
 {
-    return yp;
+    return yp.as_underlying();
 }
 
 constexpr inline QPoint &QPoint::operator+=(const QPoint &p)
@@ -175,15 +191,15 @@ constexpr inline QPoint &QPoint::operator-=(const QPoint &p)
 
 constexpr inline QPoint &QPoint::operator*=(float factor)
 {
-    xp = qRound(xp * factor);
-    yp = qRound(yp * factor);
+    xp.setValue(QtPrivate::qSaturateRound(x() * factor));
+    yp.setValue(QtPrivate::qSaturateRound(y() * factor));
     return *this;
 }
 
 constexpr inline QPoint &QPoint::operator*=(double factor)
 {
-    xp = qRound(xp * factor);
-    yp = qRound(yp * factor);
+    xp.setValue(QtPrivate::qSaturateRound(x() * factor));
+    yp.setValue(QtPrivate::qSaturateRound(y() * factor));
     return *this;
 }
 
@@ -196,8 +212,9 @@ constexpr inline QPoint &QPoint::operator*=(int factor)
 
 constexpr inline QPoint &QPoint::operator/=(qreal c)
 {
-    xp = qRound(xp / c);
-    yp = qRound(yp / c);
+    Q_ASSERT(!qFuzzyIsNull(c));
+    xp.setValue(qRound(int(xp) / c));
+    yp.setValue(qRound(int(yp) / c));
     return *this;
 }
 
@@ -241,19 +258,22 @@ public:
         return p1.xp * p2.xp + p1.yp * p2.yp;
     }
 
-    QT_WARNING_PUSH
-    QT_WARNING_DISABLE_FLOAT_COMPARE
-    friend constexpr inline bool operator==(const QPointF &p1, const QPointF &p2)
+private:
+    friend constexpr bool qFuzzyCompare(const QPointF &p1, const QPointF &p2) noexcept
     {
-        return ((!p1.xp || !p2.xp) ? qFuzzyIsNull(p1.xp - p2.xp) : qFuzzyCompare(p1.xp, p2.xp))
-            && ((!p1.yp || !p2.yp) ? qFuzzyIsNull(p1.yp - p2.yp) : qFuzzyCompare(p1.yp, p2.yp));
+        return QtPrivate::fuzzyCompare(p1.xp, p2.xp)
+            && QtPrivate::fuzzyCompare(p1.yp, p2.yp);
     }
-    friend constexpr inline bool operator!=(const QPointF &p1, const QPointF &p2)
+    friend constexpr bool qFuzzyIsNull(const QPointF &point) noexcept
     {
-        return !(p1 == p2);
+        return qFuzzyIsNull(point.xp) && qFuzzyIsNull(point.yp);
     }
-    QT_WARNING_POP
-
+    friend constexpr bool comparesEqual(const QPointF &p1, const QPointF &p2) noexcept
+    { return qFuzzyCompare(p1, p2); }
+    Q_DECLARE_EQUALITY_COMPARABLE_LITERAL_TYPE(QPointF)
+    friend constexpr bool comparesEqual(const QPointF &p1, const QPoint &p2) noexcept
+    { return comparesEqual(p1, p2.toPointF()); }
+    Q_DECLARE_EQUALITY_COMPARABLE_LITERAL_TYPE(QPointF, QPoint)
     friend constexpr inline QPointF operator+(const QPointF &p1, const QPointF &p2)
     { return QPointF(p1.xp + p2.xp, p1.yp + p2.yp); }
     friend constexpr inline QPointF operator-(const QPointF &p1, const QPointF &p2)
@@ -272,6 +292,7 @@ public:
         return QPointF(p.xp / divisor, p.yp / divisor);
     }
 
+public:
     constexpr QPoint toPoint() const;
 
 #if defined(Q_OS_DARWIN) || defined(Q_QDOC)
@@ -393,7 +414,7 @@ constexpr QPointF QPoint::toPointF() const noexcept { return *this; }
 
 constexpr inline QPoint QPointF::toPoint() const
 {
-    return QPoint(qRound(xp), qRound(yp));
+    return QPoint(QtPrivate::qSaturateRound(xp), QtPrivate::qSaturateRound(yp));
 }
 
 #ifndef QT_NO_DEBUG_STREAM

@@ -21,20 +21,43 @@
 
 QT_BEGIN_NAMESPACE
 
-QSvgTinyDocument::QSvgTinyDocument(QtSvg::Options options)
+using namespace Qt::StringLiterals;
+
+QSvgTinyDocument::QSvgTinyDocument(QtSvg::Options options, QtSvg::AnimatorType type)
     : QSvgStructureNode(0)
     , m_widthPercent(false)
     , m_heightPercent(false)
-    , m_time(0)
     , m_animated(false)
-    , m_animationDuration(0)
     , m_fps(30)
     , m_options(options)
 {
+    bool animationEnabled = !m_options.testFlag(QtSvg::DisableAnimations);
+    switch (type) {
+        case QtSvg::AnimatorType::Automatic:
+            if (animationEnabled)
+                m_animator.reset(new QSvgAnimator);
+            break;
+        case QtSvg::AnimatorType::Controlled:
+            if (animationEnabled)
+                m_animator.reset(new QSvgAnimationController);
+    }
 }
 
 QSvgTinyDocument::~QSvgTinyDocument()
 {
+}
+
+static bool hasSvgHeader(const QByteArray &buf)
+{
+    QTextStream s(buf); // Handle multi-byte encodings
+    QString h = s.readAll();
+    QStringView th = QStringView(h).trimmed();
+    bool matched = false;
+    if (th.startsWith("<svg"_L1) || th.startsWith("<!DOCTYPE svg"_L1))
+        matched = true;
+    else if (th.startsWith("<?xml"_L1) || th.startsWith("<!--"_L1))
+        matched = th.contains("<!DOCTYPE svg"_L1) || th.contains("<svg"_L1);
+    return matched;
 }
 
 #ifndef QT_NO_COMPRESS
@@ -124,8 +147,9 @@ static QByteArray qt_inflateSvgzDataFrom(QIODevice *device, bool doCheckContent)
 
         if (doCheckContent) {
             // Quick format check, equivalent to QSvgIOHandler::canRead()
-            QByteArray buf = destination.left(16);
-            if (!buf.contains("<?xml") && !buf.contains("<svg") && !buf.contains("<!--") && !buf.contains("<!DOCTYPE svg")) {
+            const qsizetype destinationContents = std::min(destination.size(), static_cast<qsizetype>(zlibStream.total_out));
+            Q_ASSERT(destinationContents == static_cast<qsizetype>(zlibStream.total_out));
+            if (!hasSvgHeader(QByteArray::fromRawData(destination.constData(), destinationContents))) {
                 inflateEnd(&zlibStream);
                 qCWarning(lcSvgHandler, "Error while inflating gzip file: SVG format check failed");
                 return QByteArray();
@@ -153,7 +177,8 @@ static QByteArray qt_inflateSvgzDataFrom(QIODevice *)
 }
 #endif
 
-QSvgTinyDocument *QSvgTinyDocument::load(const QString &fileName, QtSvg::Options options)
+QSvgTinyDocument *QSvgTinyDocument::load(const QString &fileName, QtSvg::Options options,
+                                         QtSvg::AnimatorType type)
 {
     QFile file(fileName);
     if (!file.open(QFile::ReadOnly)) {
@@ -168,10 +193,10 @@ QSvgTinyDocument *QSvgTinyDocument::load(const QString &fileName, QtSvg::Options
     }
 
     QSvgTinyDocument *doc = nullptr;
-    QSvgHandler handler(&file, options);
+    QSvgHandler handler(&file, options, type);
     if (handler.ok()) {
         doc = handler.document();
-        doc->m_animationDuration = handler.animationDuration();
+        doc->m_animator->setAnimationDuration(handler.animationDuration());
     } else {
         qCWarning(lcSvgHandler, "Cannot read file '%s', because: %s (line %d)",
                  qPrintable(fileName), qPrintable(handler.errorString()), handler.lineNumber());
@@ -180,7 +205,8 @@ QSvgTinyDocument *QSvgTinyDocument::load(const QString &fileName, QtSvg::Options
     return doc;
 }
 
-QSvgTinyDocument *QSvgTinyDocument::load(const QByteArray &contents, QtSvg::Options options)
+QSvgTinyDocument *QSvgTinyDocument::load(const QByteArray &contents, QtSvg::Options options,
+                                         QtSvg::AnimatorType type)
 {
     QByteArray svg;
     // Check for gzip magic number and inflate if appropriate
@@ -197,26 +223,27 @@ QSvgTinyDocument *QSvgTinyDocument::load(const QByteArray &contents, QtSvg::Opti
     QBuffer buffer;
     buffer.setData(svg);
     buffer.open(QIODevice::ReadOnly);
-    QSvgHandler handler(&buffer, options);
+    QSvgHandler handler(&buffer, options, type);
 
     QSvgTinyDocument *doc = nullptr;
     if (handler.ok()) {
         doc = handler.document();
-        doc->m_animationDuration = handler.animationDuration();
+        doc->m_animator->setAnimationDuration(handler.animationDuration());
     } else {
         delete handler.document();
     }
     return doc;
 }
 
-QSvgTinyDocument *QSvgTinyDocument::load(QXmlStreamReader *contents, QtSvg::Options options)
+QSvgTinyDocument *QSvgTinyDocument::load(QXmlStreamReader *contents, QtSvg::Options options,
+                                         QtSvg::AnimatorType type)
 {
-    QSvgHandler handler(contents, options);
+    QSvgHandler handler(contents, options, type);
 
     QSvgTinyDocument *doc = nullptr;
     if (handler.ok()) {
         doc = handler.document();
-        doc->m_animationDuration = handler.animationDuration();
+        doc->m_animator->setAnimationDuration(handler.animationDuration());
     } else {
         delete handler.document();
     }
@@ -225,9 +252,6 @@ QSvgTinyDocument *QSvgTinyDocument::load(QXmlStreamReader *contents, QtSvg::Opti
 
 void QSvgTinyDocument::draw(QPainter *p, const QRectF &bounds)
 {
-    if (m_time == 0)
-        m_time = QDateTime::currentMSecsSinceEpoch();
-
     if (displayMode() == QSvgNode::NoneMode)
         return;
 
@@ -258,15 +282,13 @@ void QSvgTinyDocument::draw(QPainter *p, const QString &id,
         qCDebug(lcSvgHandler, "Couldn't find node %s. Skipping rendering.", qPrintable(id));
         return;
     }
-    if (m_time == 0)
-        m_time = QDateTime::currentMSecsSinceEpoch();
 
     if (node->displayMode() == QSvgNode::NoneMode)
         return;
 
     p->save();
 
-    const QRectF elementBounds = node->transformedBounds();
+    const QRectF elementBounds = node->bounds();
 
     mapSourceToTarget(p, bounds, elementBounds);
     QTransform originalTransform = p->worldTransform();
@@ -374,7 +396,7 @@ QSvgPaintStyleProperty *QSvgTinyDocument::namedStyle(const QString &id) const
 
 void QSvgTinyDocument::restartAnimation()
 {
-    m_time = QDateTime::currentMSecsSinceEpoch();
+    m_animator->restartAnimation();
 }
 
 bool QSvgTinyDocument::animated() const
@@ -466,7 +488,7 @@ QRectF QSvgTinyDocument::boundsOnElement(const QString &id) const
     const QSvgNode *node = scopeNode(id);
     if (!node)
         node = this;
-    return node->transformedBounds();
+    return node->bounds();
 }
 
 bool QSvgTinyDocument::elementExists(const QString &id) const
@@ -499,26 +521,65 @@ QTransform QSvgTinyDocument::transformForElement(const QString &id) const
 
 int QSvgTinyDocument::currentFrame() const
 {
-    double runningPercentage = qMin(currentElapsed() / double(m_animationDuration), 1.);
-
-    int totalFrames = m_fps * m_animationDuration;
-
+    const double runningPercentage = qMin(currentElapsed() / double(animationDuration()), 1.);
+    const int totalFrames = m_fps * animationDuration() / 1000;
     return int(runningPercentage * totalFrames);
 }
 
 void QSvgTinyDocument::setCurrentFrame(int frame)
 {
-    int totalFrames = m_fps * m_animationDuration;
-    double framePercentage = frame/double(totalFrames);
-    double timeForFrame = m_animationDuration * framePercentage; //in S
-    timeForFrame *= 1000; //in ms
-    int timeToAdd = int(timeForFrame - currentElapsed());
-    m_time += timeToAdd;
+    const int totalFrames = m_fps * animationDuration() / 1000;
+    if (totalFrames == 0)
+        return;
+
+    const int timeForFrame = frame * animationDuration() / totalFrames; //in ms
+    const int timeToAdd = timeForFrame - currentElapsed();
+    m_animator->setAnimatorTime(timeToAdd);
 }
 
 void QSvgTinyDocument::setFramesPerSecond(int num)
 {
     m_fps = num;
+}
+
+QSharedPointer<QSvgAbstractAnimator> QSvgTinyDocument::animator() const
+{
+    return m_animator;
+}
+
+bool QSvgTinyDocument::isLikelySvg(QIODevice *device, bool *isCompressed)
+{
+    constexpr int bufSize = 4096;
+    char buf[bufSize];
+    char inflateBuf[bufSize];
+    bool useInflateBuf = false;
+    int readLen = device->peek(buf, bufSize);
+    if (readLen < 8)
+        return false;
+#ifndef QT_NO_COMPRESS
+    if (quint8(buf[0]) == 0x1f && quint8(buf[1]) == 0x8b) {
+        // Indicates gzip compressed content, i.e. svgz
+        z_stream zlibStream;
+        zlibStream.avail_in = readLen;
+        zlibStream.next_out = reinterpret_cast<Bytef *>(inflateBuf);
+        zlibStream.avail_out = bufSize;
+        zlibStream.next_in = reinterpret_cast<Bytef *>(buf);
+        zlibStream.zalloc = Z_NULL;
+        zlibStream.zfree = Z_NULL;
+        zlibStream.opaque = Z_NULL;
+        if (inflateInit2(&zlibStream, MAX_WBITS + 16) != Z_OK)
+            return false;
+        int zlibResult = inflate(&zlibStream, Z_NO_FLUSH);
+        inflateEnd(&zlibStream);
+        if ((zlibResult != Z_OK && zlibResult != Z_STREAM_END) || zlibStream.total_out < 8)
+            return false;
+        readLen = zlibStream.total_out;
+        if (isCompressed)
+            *isCompressed = true;
+        useInflateBuf = true;
+    }
+#endif
+    return hasSvgHeader(QByteArray::fromRawData(useInflateBuf ? inflateBuf : buf, readLen));
 }
 
 QT_END_NAMESPACE

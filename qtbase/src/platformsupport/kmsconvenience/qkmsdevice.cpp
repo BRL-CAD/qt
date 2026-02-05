@@ -19,7 +19,7 @@ QT_BEGIN_NAMESPACE
 
 using namespace Qt::StringLiterals;
 
-Q_LOGGING_CATEGORY(qLcKmsDebug, "qt.qpa.eglfs.kms")
+Q_STATIC_LOGGING_CATEGORY(qLcKmsDebug, "qt.qpa.eglfs.kms")
 
 enum OutputConfiguration {
     OutputConfigOff,
@@ -1044,14 +1044,15 @@ void QKmsScreenConfig::loadConfig()
     m_devicePath = object.value("device"_L1).toString();
     m_separateScreens = object.value("separateScreens"_L1).toBool(m_separateScreens);
 
-    const QString vdOriString = object.value("virtualDesktopLayout"_L1).toString();
+    const auto vdOriString = object.value("virtualDesktopLayout"_L1).toStringView();
     if (!vdOriString.isEmpty()) {
         if (vdOriString == "horizontal"_L1)
             m_virtualDesktopLayout = VirtualDesktopLayoutHorizontal;
         else if (vdOriString == "vertical"_L1)
             m_virtualDesktopLayout = VirtualDesktopLayoutVertical;
         else
-            qCWarning(qLcKmsDebug) << "Unknown virtualDesktopOrientation value" << vdOriString;
+            qCWarning(qLcKmsDebug, "Unknown virtualDesktopOrientation value %ls",
+                      qUtf16Printable(vdOriString.toString()));
     }
 
     const QJsonArray outputs = object.value("outputs"_L1).toArray();

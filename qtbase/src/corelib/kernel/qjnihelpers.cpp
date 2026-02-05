@@ -12,11 +12,22 @@
 #include <QtCore/private/qcoreapplication_p.h>
 #include <QtCore/private/qlocking_p.h>
 
+#if QT_CONFIG(regularexpression)
+#include <QtCore/qregularexpression.h>
+#endif
+
 #include <android/log.h>
 #include <deque>
 #include <memory>
 
 QT_BEGIN_NAMESPACE
+
+Q_DECLARE_JNI_CLASS(QtLoader, "org/qtproject/qt/android/QtLoader")
+Q_DECLARE_JNI_CLASS(QtInputDelegate, "org/qtproject/qt/android/QtInputDelegate");
+Q_DECLARE_JNI_CLASS(MotionEvent, "android/view/MotionEvent");
+Q_DECLARE_JNI_CLASS(KeyEvent, "android/view/KeyEvent");
+
+using namespace Qt::StringLiterals;
 
 namespace QtAndroidPrivate {
     // *Listener virtual function implementations.
@@ -141,6 +152,68 @@ void QtAndroidPrivate::handleNewIntent(JNIEnv *env, jobject intent)
     }
 }
 
+QtAndroidPrivate::GenericMotionEventListener::~GenericMotionEventListener() {}
+namespace {
+struct GenericMotionEventListeners {
+    QMutex mutex;
+    QList<QtAndroidPrivate::GenericMotionEventListener *> listeners;
+};
+}
+Q_GLOBAL_STATIC(GenericMotionEventListeners, g_genericMotionEventListeners)
+
+static jboolean dispatchGenericMotionEvent(JNIEnv *, jclass, QtJniTypes::MotionEvent event)
+{
+    jboolean ret = JNI_FALSE;
+    QMutexLocker locker(&g_genericMotionEventListeners()->mutex);
+    for (auto *listener : std::as_const(g_genericMotionEventListeners()->listeners))
+        ret |= listener->handleGenericMotionEvent(event.object());
+    return ret;
+}
+Q_DECLARE_JNI_NATIVE_METHOD(dispatchGenericMotionEvent);
+
+QtAndroidPrivate::KeyEventListener::~KeyEventListener() {}
+namespace {
+struct KeyEventListeners {
+    QMutex mutex;
+    QList<QtAndroidPrivate::KeyEventListener *> listeners;
+};
+}
+Q_GLOBAL_STATIC(KeyEventListeners, g_keyEventListeners)
+
+static jboolean dispatchKeyEvent(JNIEnv *, jclass, QtJniTypes::KeyEvent event)
+{
+    jboolean ret = JNI_FALSE;
+    QMutexLocker locker(&g_keyEventListeners()->mutex);
+    for (auto *listener : std::as_const(g_keyEventListeners()->listeners))
+        ret |= listener->handleKeyEvent(event.object());
+    return ret;
+}
+Q_DECLARE_JNI_NATIVE_METHOD(dispatchKeyEvent);
+
+void QtAndroidPrivate::registerGenericMotionEventListener(QtAndroidPrivate::GenericMotionEventListener *listener)
+{
+    QMutexLocker locker(&g_genericMotionEventListeners()->mutex);
+    g_genericMotionEventListeners()->listeners.push_back(listener);
+}
+
+void QtAndroidPrivate::unregisterGenericMotionEventListener(QtAndroidPrivate::GenericMotionEventListener *listener)
+{
+    QMutexLocker locker(&g_genericMotionEventListeners()->mutex);
+    g_genericMotionEventListeners()->listeners.removeOne(listener);
+}
+
+void QtAndroidPrivate::registerKeyEventListener(QtAndroidPrivate::KeyEventListener *listener)
+{
+    QMutexLocker locker(&g_keyEventListeners()->mutex);
+    g_keyEventListeners()->listeners.push_back(listener);
+}
+
+void QtAndroidPrivate::unregisterKeyEventListener(QtAndroidPrivate::KeyEventListener *listener)
+{
+    QMutexLocker locker(&g_keyEventListeners()->mutex);
+    g_keyEventListeners()->listeners.removeOne(listener);
+}
+
 namespace {
     class ResumePauseListeners
     {
@@ -178,6 +251,28 @@ void QtAndroidPrivate::handleResume()
     const QList<QtAndroidPrivate::ResumePauseListener *> &listeners = g_resumePauseListeners()->listeners;
     for (int i=0; i<listeners.size(); ++i)
         listeners.at(i)->handleResume();
+}
+
+bool QtAndroidPrivate::isUncompressedNativeLibs()
+{
+    const static bool isUncompressed = QtJniTypes::QtLoader::callStaticMethod<bool>(
+                "isUncompressedNativeLibs");
+    return isUncompressed;
+}
+
+QString QtAndroidPrivate::resolveApkPath(const QString &fileName)
+{
+#if QT_CONFIG(regularexpression)
+    const static QRegularExpression inApkRegex("(.+\\.apk)!\\/.+"_L1);
+    auto match = inApkRegex.matchView(fileName);
+    if (match.hasMatch())
+        return match.captured(1);
+#else
+    if (int index = fileName.lastIndexOf(u".apk!/"); index > 0)
+        return fileName.mid(0, index + 4);
+#endif
+
+    return {};
 }
 
 jint QtAndroidPrivate::initJNI(JavaVM *vm, JNIEnv *env)
@@ -245,8 +340,19 @@ jint QtAndroidPrivate::initJNI(JavaVM *vm, JNIEnv *env)
         return JNI_ERR;
 
     QJniEnvironment qJniEnv;
+    using namespace QtJniTypes;
+    if (!QtInputDelegate::registerNativeMethods(
+                { Q_JNI_NATIVE_METHOD(dispatchGenericMotionEvent),
+                  Q_JNI_NATIVE_METHOD(dispatchKeyEvent) })) {
+        qCritical() << "Failed to register natives methods for"
+                    << Traits<QtInputDelegate>::className();
+        return JNI_ERR;
+    }
+
+#if QT_CONFIG(permissions)
     if (!registerPermissionNatives(qJniEnv))
         return JNI_ERR;
+#endif
 
     if (!registerNativeInterfaceNatives(qJniEnv))
         return JNI_ERR;
@@ -346,6 +452,28 @@ bool QtAndroidPrivate::acquireAndroidDeadlockProtector()
 void QtAndroidPrivate::releaseAndroidDeadlockProtector()
 {
     g_androidDeadlockProtector.storeRelease(0);
+}
+
+QtAndroidPrivate::AndroidDeadlockProtector::AndroidDeadlockProtector(const QString &lockedBy)
+    : m_lockedBy(lockedBy)
+{ }
+
+QtAndroidPrivate::AndroidDeadlockProtector::~AndroidDeadlockProtector() {
+    if (m_acquired) {
+        QtAndroidPrivate::releaseAndroidDeadlockProtector();
+        s_lockers.removeOne(m_lockedBy);
+    }
+}
+
+bool QtAndroidPrivate::AndroidDeadlockProtector::acquire() {
+    m_acquired = QtAndroidPrivate::acquireAndroidDeadlockProtector();
+    if (m_acquired) {
+        s_lockers.append(m_lockedBy);
+    } else {
+        qWarning("Failed to acquire deadlock protector for '%s' while already locked by '%s'.",
+                 qPrintable(m_lockedBy), qPrintable(s_lockers.join(u',')));
+    }
+    return m_acquired;
 }
 
 QT_END_NAMESPACE

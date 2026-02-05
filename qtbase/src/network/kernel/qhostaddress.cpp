@@ -1,6 +1,7 @@
 // Copyright (C) 2017 The Qt Company Ltd.
 // Copyright (C) 2016 Intel Corporation.
 // SPDX-License-Identifier: LicenseRef-Qt-Commercial OR LGPL-3.0-only OR GPL-2.0-only OR GPL-3.0-only
+// Qt-Security score:critical reason:data-parser
 
 #include "qhostaddress.h"
 #include "qhostaddress_p.h"
@@ -28,11 +29,14 @@
 
 QT_BEGIN_NAMESPACE
 
-QHostAddressPrivate::QHostAddressPrivate()
-    : a(0), protocol(QHostAddress::UnknownNetworkLayerProtocol)
-{
-    memset(&a6, 0, sizeof(a6));
-}
+#if QT_VERSION < QT_VERSION_CHECK(7, 0, 0)
+const QAbstractSocket::NetworkLayerProtocol QHostAddress::IPv4Protocol;
+const QAbstractSocket::NetworkLayerProtocol QHostAddress::IPv6Protocol;
+const QAbstractSocket::NetworkLayerProtocol QHostAddress::AnyIPProtocol;
+const QAbstractSocket::NetworkLayerProtocol QHostAddress::UnknownNetworkLayerProtocol;
+#endif
+
+QT_DEFINE_QESDP_SPECIALIZATION_DTOR(QHostAddressPrivate)
 
 void QHostAddressPrivate::setAddress(quint32 a_)
 {
@@ -134,13 +138,6 @@ bool QHostAddressPrivate::parse(const QString &ipString)
     }
 
     return false;
-}
-
-void QHostAddressPrivate::clear()
-{
-    a = 0;
-    protocol = QHostAddress::UnknownNetworkLayerProtocol;
-    memset(&a6, 0, sizeof(a6));
 }
 
 AddressClassification QHostAddressPrivate::classify() const
@@ -450,6 +447,18 @@ QHostAddress::QHostAddress(const QHostAddress &address)
 }
 
 /*!
+    \fn QHostAddress::QHostAddress(QHostAddress &&other)
+
+    \since 6.8
+
+    Move-constructs a new QHostAddress from \a other.
+
+    \note The moved-from object \a other is placed in a partially-formed state,
+    in which the only valid operations are destruction and assignment of a new
+    value.
+*/
+
+/*!
     Constructs a QHostAddress object for \a address.
 */
 QHostAddress::QHostAddress(SpecialAddress address)
@@ -491,9 +500,7 @@ QHostAddress &QHostAddress::operator=(SpecialAddress address)
 /*!
     \fn void QHostAddress::swap(QHostAddress &other)
     \since 5.6
-
-    Swaps this host address with \a other. This operation is very fast
-    and never fails.
+    \memberswap{host address}
 */
 
 /*!
@@ -960,7 +967,7 @@ bool QHostAddress::isInSubnet(const QHostAddress &subnet, int netmask) const
     prefix and the int (second) member contains the netmask (prefix
     length).
 */
-bool QHostAddress::isInSubnet(const QPair<QHostAddress, int> &subnet) const
+bool QHostAddress::isInSubnet(const std::pair<QHostAddress, int> &subnet) const
 {
     return isInSubnet(subnet.first, subnet.second);
 }
@@ -990,7 +997,7 @@ bool QHostAddress::isInSubnet(const QPair<QHostAddress, int> &subnet) const
 
     \sa isInSubnet()
 */
-QPair<QHostAddress, int> QHostAddress::parseSubnet(const QString &subnet)
+std::pair<QHostAddress, int> QHostAddress::parseSubnet(const QString &subnet)
 {
     // We support subnets in the form:
     //   ddd.ddd.ddd.ddd/nn
@@ -1007,7 +1014,7 @@ QPair<QHostAddress, int> QHostAddress::parseSubnet(const QString &subnet)
     //
     //  where nn can be an IPv4-style netmask for the IPv4 forms
 
-    const QPair<QHostAddress, int> invalid = qMakePair(QHostAddress(), -1);
+    const std::pair<QHostAddress, int> invalid = std::pair(QHostAddress(), -1);
     if (subnet.isEmpty())
         return invalid;
 
@@ -1050,7 +1057,7 @@ QPair<QHostAddress, int> QHostAddress::parseSubnet(const QString &subnet)
             return invalid;     // failed to parse the IP
 
         clearBits(net.d->a6.c, netmask, 128);
-        return qMakePair(net, netmask);
+        return std::pair(net, netmask);
     }
 
     if (netmask > 32)
@@ -1088,7 +1095,7 @@ QPair<QHostAddress, int> QHostAddress::parseSubnet(const QString &subnet)
         addr &= mask;
     }
 
-    return qMakePair(QHostAddress(addr), netmask);
+    return std::pair(QHostAddress(addr), netmask);
 }
 
 /*!
@@ -1179,7 +1186,7 @@ bool QHostAddress::isSiteLocal() const
     4193 says that, in practice, "applications may treat these addresses like
     global scoped addresses." Only routers need care about the distinction.
 
-    \sa isLoopback(), isGlobal(), isMulticast(), isLinkLocal(), isUniqueLocalUnicast(), isPrivateUse()
+    \sa isLoopback(), isGlobal(), isMulticast(), isLinkLocal(), isPrivateUse()
 */
 bool QHostAddress::isUniqueLocalUnicast() const
 {
@@ -1245,8 +1252,7 @@ QDebug operator<<(QDebug d, const QHostAddress &address)
 
 /*!
     \since 5.0
-    \relates QHostAddress
-    Returns a hash of the host address \a key, using \a seed to seed the calculation.
+    \qhashold{QHostAddress}
 */
 size_t qHash(const QHostAddress &key, size_t seed) noexcept
 {

@@ -1,31 +1,26 @@
 // Copyright (C) 2022 The Qt Company Ltd.
 // SPDX-License-Identifier: LicenseRef-Qt-Commercial OR LGPL-3.0-only OR GPL-2.0-only OR GPL-3.0-only
+// Qt-Security score:critical reason:data-parser
 
-#include <qdebug.h>
-#include "qplatformdefs.h"
 #include "qsettings.h"
-
 #include "qsettings_p.h"
-#include "qcache.h"
-#include "qfile.h"
-#include "qdir.h"
-#include "qfileinfo.h"
-#include "qmutex.h"
-#include "private/qlocking_p.h"
-#include "private/qtools_p.h"
-#include "qlibraryinfo.h"
-#include "qtemporaryfile.h"
-#include "qstandardpaths.h"
-#include <qdatastream.h>
-#include "private/qstringconverter_p.h"
 
-#ifndef QT_NO_GEOM_VARIANT
-#include "qsize.h"
+#include "qcache.h"
+#include "qcoreapplication.h"
+#include "qdatastream.h"
+#include "qdir.h"
+#include "qfile.h"
+#include "qfileinfo.h"
+#include "qlibraryinfo.h"
+#include "private/qlocking_p.h"
+#include "qmutex.h"
 #include "qpoint.h"
 #include "qrect.h"
-#endif // !QT_NO_GEOM_VARIANT
-
-#include "qcoreapplication.h"
+#include "qsize.h"
+#include "qstandardpaths.h"
+#include "private/qstringconverter_p.h"
+#include "qtemporaryfile.h"
+#include "private/qtools_p.h"
 
 #ifndef QT_BOOTSTRAPPED
 #include "qsavefile.h"
@@ -129,12 +124,12 @@ bool QConfFile::isWritable() const
 {
     QFileInfo fileInfo(name);
 
-#ifndef QT_NO_TEMPORARYFILE
+#if QT_CONFIG(temporaryfile)
     if (fileInfo.exists()) {
 #endif
         QFile file(name);
         return file.open(QFile::ReadWrite);
-#ifndef QT_NO_TEMPORARYFILE
+#if QT_CONFIG(temporaryfile)
     } else {
         // Create the directories to the file.
         QDir dir(fileInfo.absolutePath());
@@ -401,7 +396,6 @@ QString QSettingsPrivate::variantToString(const QVariant &v)
                 result.prepend(u'@');
             break;
         }
-#ifndef QT_NO_GEOM_VARIANT
         case QMetaType::QRect: {
             QRect r = qvariant_cast<QRect>(v);
             result = QString::asprintf("@Rect(%d %d %d %d)", r.x(), r.y(), r.width(), r.height());
@@ -417,7 +411,6 @@ QString QSettingsPrivate::variantToString(const QVariant &v)
             result = QString::asprintf("@Point(%d %d)", p.x(), p.y());
             break;
         }
-#endif // !QT_NO_GEOM_VARIANT
 
         default: {
 #ifndef QT_NO_DATASTREAM
@@ -480,7 +473,6 @@ QVariant QSettingsPrivate::stringToVariant(const QString &s)
 #else
                 Q_ASSERT(!"QSettings: Cannot load custom types without QDataStream support");
 #endif
-#ifndef QT_NO_GEOM_VARIANT
             } else if (s.startsWith("@Rect("_L1)) {
                 QStringList args = QSettingsPrivate::splitArgs(s, 5);
                 if (args.size() == 4)
@@ -493,7 +485,6 @@ QVariant QSettingsPrivate::stringToVariant(const QString &s)
                 QStringList args = QSettingsPrivate::splitArgs(s, 6);
                 if (args.size() == 2)
                     return QVariant(QPoint(args[0].toInt(), args[1].toInt()));
-#endif
             } else if (s == "@Invalid()"_L1) {
                 return QVariant();
             }
@@ -1554,7 +1545,8 @@ bool QConfFileSettingsPrivate::readIniLine(QByteArrayView data, qsizetype &dataP
                                            qsizetype &lineStart, qsizetype &lineLen,
                                            qsizetype &equalsPos)
 {
-    using namespace SettingsImpl;
+    constexpr auto Space = SettingsImpl::Space;
+    constexpr auto Special = SettingsImpl::Special;
     qsizetype dataLen = data.size();
     bool inQuotes = false;
 
@@ -1933,8 +1925,6 @@ void QConfFileSettingsPrivate::ensureSectionParsed(QConfFile *confFile,
     If all you need is a non-persistent memory-based structure,
     consider using QMap<QString, QVariant> instead.
 
-    \tableofcontents section1
-
     \section1 Basic Usage
 
     When creating a QSettings object, you must pass the name of your
@@ -2020,10 +2010,13 @@ void QConfFileSettingsPrivate::ensureSectionParsed(QConfFile *confFile,
 
     \section1 Section and Key Syntax
 
-    Setting keys can contain any Unicode characters. The Windows
-    registry and INI files use case-insensitive keys, whereas the
-    CFPreferences API on \macos and iOS uses case-sensitive keys. To
-    avoid portability problems, follow these simple rules:
+    Setting keys can contain any Unicode characters. The file format and
+    operating system will determine if they are sensitive to case or not. On
+    Windows, the registry and INI files will use case-insensitive keys, while
+    user-specified formats registered with registerFormat() may be either. On
+    Unix systems, keys are always case-sensitive.
+
+    To avoid portability problems, follow these simple rules:
 
     \list 1
     \li Always refer to the same key using the same case. For example,
@@ -2474,11 +2467,11 @@ void QConfFileSettingsPrivate::ensureSectionParsed(QConfFile *confFile,
         "%General" section, \e not in the "General" section.
 
     \li In line with most implementations today, QSettings will assume that
-        \e values in the INI file are utf-8 encoded. This means that \e values
-        will be decoded as utf-8 encoded entries and written back as utf-8.
+        \e values in the INI file are UTF-8 encoded. This means that \e values
+        will be decoded as UTF-8 encoded entries and written back as UTF-8.
         To retain backward compatibility with older Qt versions, \e keys in the
         INI file are written in %-encoded format, but can be read in both
-        %-encoded and utf-8 formats.
+        %-encoded and UTF-8 formats.
 
     \endlist
 
@@ -2489,7 +2482,7 @@ void QConfFileSettingsPrivate::ensureSectionParsed(QConfFile *confFile,
     however fully readable by a Qt 6 based application (unless a ini codec
     different from utf8 had been set). But INI files written with Qt 6
     will only be readable by older Qt versions if you set the "iniCodec" to
-    a utf-8 textcodec.
+    a UTF-8 textcodec.
 
     \sa registerFormat(), setPath()
 */
@@ -3185,10 +3178,11 @@ bool QSettings::isWritable() const
   Sets the value of setting \a key to \a value. If the \a key already
   exists, the previous value is overwritten.
 
-  Note that the Windows registry and INI files use case-insensitive
-  keys, whereas the CFPreferences API on \macos and iOS uses
-  case-sensitive keys. To avoid portability problems, see the
+//! [key-case-sensitivity]
+  Key lookup will either be sensitive or insensitive to case depending on
+  file format and operating system. To avoid portability problems, see the
   \l{Section and Key Syntax} rules.
+//! [key-case-sensitivity]
 
   Example:
 
@@ -3226,10 +3220,7 @@ void QSettings::setValue(QAnyStringView key, const QVariant &value)
 
     \snippet code/src_corelib_io_qsettings.cpp 25
 
-    Note that the Windows registry and INI files use case-insensitive
-    keys, whereas the CFPreferences API on \macos and iOS uses
-    case-sensitive keys. To avoid portability problems, see the
-    \l{Section and Key Syntax} rules.
+    \include qsettings.cpp key-case-sensitivity
 
     \note In Qt versions prior to 6.4, this function took QString, not
     QAnyStringView.
@@ -3264,10 +3255,7 @@ void QSettings::remove(QAnyStringView key)
     If a group is set using beginGroup(), \a key is taken to be
     relative to that group.
 
-    Note that the Windows registry and INI files use case-insensitive
-    keys, whereas the CFPreferences API on \macos and iOS uses
-    case-sensitive keys. To avoid portability problems, see the
-    \l{Section and Key Syntax} rules.
+    \include qsettings.cpp key-case-sensitivity
 
     \note In Qt versions prior to 6.4, this function took QString, not
     QAnyStringView.
@@ -3331,10 +3319,7 @@ bool QSettings::event(QEvent *event)
     If no default value is specified, a default QVariant is
     returned.
 
-    Note that the Windows registry and INI files use case-insensitive
-    keys, whereas the CFPreferences API on \macos and iOS uses
-    case-sensitive keys. To avoid portability problems, see the
-    \l{Section and Key Syntax} rules.
+    \include qsettings.cpp key-case-sensitivity
 
     Example:
 
@@ -3492,11 +3477,12 @@ void QSettings::setPath(Format format, Scope scope, const QString &path)
     The \a readFunc and \a writeFunc parameters are pointers to
     functions that read and write a set of key/value pairs. The
     QIODevice parameter to the read and write functions is always
-    opened in binary mode (i.e., without the QIODevice::Text flag).
+    opened in binary mode (i.e., without the \l QIODeviceBase::Text flag).
 
-    The \a caseSensitivity parameter specifies whether keys are case
-    sensitive or not. This makes a difference when looking up values
-    using QSettings. The default is case sensitive.
+    The \a caseSensitivity parameter specifies whether keys are case-sensitive
+    or not. This makes a difference when looking up values using QSettings. The
+    default is case-sensitive. The parameter must be \c{Qt::CaseSensitive} on
+    Unix systems.
 
     By default, if you use one of the constructors that work in terms
     of an organization name and an application name, the file system

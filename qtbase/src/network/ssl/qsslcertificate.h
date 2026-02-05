@@ -1,5 +1,6 @@
 // Copyright (C) 2020 The Qt Company Ltd.
 // SPDX-License-Identifier: LicenseRef-Qt-Commercial OR LGPL-3.0-only OR GPL-2.0-only OR GPL-3.0-only
+// Qt-Security score:significant reason:default
 
 
 #ifndef QSSLCERTIFICATE_H
@@ -31,6 +32,8 @@ class QSslCertificate;
 Q_NETWORK_EXPORT size_t qHash(const QSslCertificate &key, size_t seed = 0) noexcept;
 
 class QSslCertificatePrivate;
+QT_DECLARE_QESDP_SPECIALIZATION_DTOR(QSslCertificatePrivate)
+
 class Q_NETWORK_EXPORT QSslCertificate
 {
 public:
@@ -56,6 +59,7 @@ public:
     explicit QSslCertificate(QIODevice *device, QSsl::EncodingFormat format = QSsl::Pem);
     explicit QSslCertificate(const QByteArray &data = QByteArray(), QSsl::EncodingFormat format = QSsl::Pem);
     QSslCertificate(const QSslCertificate &other);
+    QSslCertificate(QSslCertificate &&other) noexcept = default;
     ~QSslCertificate();
     QSslCertificate &operator=(QSslCertificate &&other) noexcept { swap(other); return *this; }
     QSslCertificate &operator=(const QSslCertificate &other);
@@ -104,6 +108,8 @@ public:
         QIODevice *device, QSsl::EncodingFormat format = QSsl::Pem);
     static QList<QSslCertificate> fromData(
         const QByteArray &data, QSsl::EncodingFormat format = QSsl::Pem);
+    static QList<QSslCertificate> fromFile(
+        const QString &filePath, QSsl::EncodingFormat format = QSsl::Pem);
 
 #ifndef QT_NO_SSL
     static QList<QSslError> verify(const QList<QSslCertificate> &certificateChain, const QString &hostName = QString());

@@ -28,14 +28,14 @@ class NativeWindow
 public:
 #if defined(Q_OS_MACOS)
     using Handle = NSView*;
-#elif defined(Q_OS_IOS)
+#elif defined(QT_PLATFORM_UIKIT)
     using Handle = UIView*;
 #elif defined(Q_OS_WIN)
     using Handle = HWND;
 #elif QT_CONFIG(xcb)
     using Handle = xcb_window_t;
 #elif defined(ANDROID)
-    using Handle = QtJniTypes::View;;
+    using Handle = QtJniTypes::View;
 #endif
 
     NativeWindow();
@@ -53,7 +53,7 @@ private:
     Handle m_handle = {};
 };
 
-#if defined(Q_OS_MACOS) || defined(Q_OS_IOS)
+#if defined(Q_OS_MACOS) || defined(QT_PLATFORM_UIKIT)
 
 @interface View : VIEW_BASE
 @end
@@ -133,7 +133,7 @@ NativeWindow::NativeWindow()
         RegisterClass(&wc);
         return wc.lpszClassName;
     }();
-    m_handle = CreateWindowEx(0, className, nullptr, WS_POPUP,
+    m_handle = CreateWindowEx(0, className, nullptr, WS_POPUP | WS_CLIPCHILDREN,
                 CW_USEDEFAULT, CW_USEDEFAULT, CW_USEDEFAULT, CW_USEDEFAULT,
                 nullptr, nullptr, GetModuleHandle(nullptr), nullptr);
 }

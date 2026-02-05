@@ -1,39 +1,6 @@
 // Copyright (C) 2018 The Qt Company Ltd.
-// SPDX-License-Identifier: LicenseRef-Qt-Commercial OR LGPL-3.0-only OR GPL-2.0-only OR GPL-3.0-only
-
-/****************************************************************************
- **
- ** Copyright (c) 2007-2008, Apple, Inc.
- **
- ** All rights reserved.
- **
- ** Redistribution and use in source and binary forms, with or without
- ** modification, are permitted provided that the following conditions are met:
- **
- **   * Redistributions of source code must retain the above copyright notice,
- **     this list of conditions and the following disclaimer.
- **
- **   * Redistributions in binary form must reproduce the above copyright notice,
- **     this list of conditions and the following disclaimer in the documentation
- **     and/or other materials provided with the distribution.
- **
- **   * Neither the name of Apple, Inc. nor the names of its contributors
- **     may be used to endorse or promote products derived from this software
- **     without specific prior written permission.
- **
- ** THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
- ** "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
- ** LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
- ** A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT OWNER OR
- ** CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL,
- ** EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO,
- ** PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR
- ** PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF
- ** LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING
- ** NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS
- ** SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
- **
- ****************************************************************************/
+// Copyright (c) 2007-2008, Apple, Inc.
+// SPDX-License-Identifier: BSD-3-Clause
 
 #include <AppKit/AppKit.h>
 
@@ -192,9 +159,8 @@ QT_USE_NAMESPACE
     inLaunch = false;
 
     if (qEnvironmentVariableIsEmpty("QT_MAC_DISABLE_FOREGROUND_APPLICATION_TRANSFORM")) {
-        auto frontmostApplication = NSWorkspace.sharedWorkspace.frontmostApplication;
         auto currentApplication = NSRunningApplication.currentApplication;
-        if (frontmostApplication != currentApplication) {
+        if (!currentApplication.active) {
             // Move the application to front to avoid launching behind the terminal.
             // Ignoring other apps is necessary (we must ignore the terminal), but makes
             // Qt apps play slightly less nice with other apps when launching from Finder
@@ -202,23 +168,48 @@ QT_USE_NAMESPACE
             // being non-active here because another application stole activation in the
             // time it took us to launch from Finder, and being non-active because we were
             // launched from Terminal or something that doesn't activate us at all.
+            auto frontmostApplication = NSWorkspace.sharedWorkspace.frontmostApplication;
             qCDebug(lcQpaApplication) << "Launched with" << frontmostApplication
                 << "as frontmost application. Activating" << currentApplication << "instead.";
             [NSApplication.sharedApplication activateIgnoringOtherApps:YES];
         }
 
-        // Qt windows are typically shown in main(), at which point the application
-        // is not active yet. When the application is activated, either externally
-        // or via the override above, it will only bring the main and key windows
-        // forward, which differs from the behavior if these windows had been shown
-        // once the application was already active. To work around this, we explicitly
-        // activate the current application again, bringing all windows to the front.
-        [currentApplication activateWithOptions:NSApplicationActivateAllWindows];
+        if (QOperatingSystemVersion::current() >= QOperatingSystemVersion::MacOSSonoma) {
+            // Qt windows are typically shown in main(), at which point the application
+            // is not active yet. When the application is activated, either externally
+            // or via the override above, it will only bring the main and key windows
+            // forward, which differs from the behavior if these windows had been shown
+            // once the application was already active. To work around this, we explicitly
+            // activate the current application again, bringing all windows to the front.
+            // We only do this on Sonoma and up, as earlier macOS versions have a bug where
+            // the app will deactivate as part of activating, even if it's active app,
+            // which in turn results in losing key window status for the key window.
+            // FIXME: Consider bringing our windows to the front via orderFront instead,
+            // or deferring the orderFront during setVisible until the app is active.
+            [currentApplication activateWithOptions:NSApplicationActivateAllWindows];
+        }
     }
 
     QCocoaMenuBar::insertWindowMenu();
 }
 
+/*!
+    Tells the delegate to open the specified files
+
+    Sent by the system when the user drags a file to the app's icon
+    in places like Finder or the Dock, or opens a file via the "Open
+    With" menu in Finder.
+
+    These actions can happen when the application is not running,
+    in which case the call comes in between willFinishLaunching
+    and didFinishLaunching. In this case we don't pass on the
+    incoming file paths as file open events, as the paths are
+    also part of the command line arguments, and Qt applications
+    normally expect to handle file opening via those.
+
+    \note The app must register itself as a handler for each file
+    type via the CFBundleDocumentTypes key in the Info.plist.
+ */
 - (void)application:(NSApplication *)sender openFiles:(NSArray *)filenames
 {
     Q_UNUSED(filenames);
@@ -235,6 +226,8 @@ QT_USE_NAMESPACE
                 continue;
         }
         QWindowSystemInterface::handleFileOpenEvent(qtFileName);
+        // FIXME: We're supposed to call [NSApp replyToOpenOrPrint:] here, but we
+        //  don't know if the open operation succeeded, failed, or was cancelled.
     }
 
     if ([reflectionDelegate respondsToSelector:_cmd])
@@ -287,6 +280,17 @@ QT_USE_NAMESPACE
     }
 }
 
+/*!
+    Returns a Boolean value that indicates if the app responds
+    to reopen AppleEvents.
+
+    These events are sent whenever the Finder reactivates an already
+    running application because someone double-clicked it again or used
+    the dock to activate it.
+
+    We pass the activation on to Qt, and return YES, to let AppKit
+    follow its normal flow.
+ */
 - (BOOL)applicationShouldHandleReopen:(NSApplication *)theApplication hasVisibleWindows:(BOOL)flag
 {
     if ([reflectionDelegate respondsToSelector:_cmd])
@@ -334,16 +338,81 @@ QT_USE_NAMESPACE
         [self doesNotRecognizeSelector:invocationSelector];
 }
 
+/*!
+    Callback for when the application is asked to pick up a user activity
+    from another app (also known as Handoff, which is part of the bigger
+    Continuity story for Apple operating systems).
+
+    This is normally managed by two apps by the same vendor explicitly
+    initiating a custom NSUserActivity and picking it up in another app
+    on the same or another device, which we don't have APIs for.
+
+    This is also how the system supports Universal Links, where a web page
+    can deep-link into an app. In this case the app needs to claim and
+    validate an associated domain. The resulting link will be delivered
+    as a special NSUserActivityTypeBrowsingWeb activity type, which we
+    treat as QDesktopServices::handleUrl().
+
+    Finally, for NS/UIDocument based apps (which Qt is not), the system
+    automatically handles document hand-off if the application includes
+    the NSUbiquitousDocumentUserActivityType key in its Info.plist.
+ */
+- (BOOL)application:(NSApplication *)application continueUserActivity:(NSUserActivity *)userActivity
+          restorationHandler:(void(^)(NSArray<id<NSUserActivityRestoring>> *restorableObjects))restorationHandler
+{
+    // Check if eg. user has installed an app delegate capable of handling this
+    if ([reflectionDelegate respondsToSelector:_cmd]
+        && [reflectionDelegate application:application continueUserActivity:userActivity
+                         restorationHandler:restorationHandler] == YES) {
+        return YES;
+    }
+
+    if (!QGuiApplication::instance())
+        return NO;
+
+    if ([userActivity.activityType isEqualToString:NSUserActivityTypeBrowsingWeb]) {
+        QCocoaIntegration *cocoaIntegration = QCocoaIntegration::instance();
+        Q_ASSERT(cocoaIntegration);
+        return cocoaIntegration->services()->handleUrl(QUrl::fromNSURL(userActivity.webpageURL));
+    }
+
+    return NO;
+}
+
+/*!
+    Callback for when the app is asked to open custom URL schemes.
+
+    We register a handler for events of type kInternetEventClass with the
+    NSAppleEventManager during application start.
+
+    The application must include the schemes in the CFBundleURLTypes
+    key of the Info.plist.
+
+    \note This callback is not used for http/https URLs, see
+    continueUserActivity above for how we handle that.
+ */
 - (void)getUrl:(NSAppleEventDescriptor *)event withReplyEvent:(NSAppleEventDescriptor *)replyEvent
 {
     Q_UNUSED(replyEvent);
+
     NSString *urlString = [[event paramDescriptorForKeyword:keyDirectObject] stringValue];
+    const QString qurlString = QString::fromNSString(urlString);
+
+    if (event.eventClass == kInternetEventClass && event.eventID == kAEGetURL) {
+        // 'GURL' (Get URL) event this application should handle
+        if (!QGuiApplication::instance())
+            return;
+        QCocoaIntegration *cocoaIntegration = QCocoaIntegration::instance();
+        Q_ASSERT(cocoaIntegration);
+        if (cocoaIntegration->services()->handleUrl(QUrl(qurlString)))
+            return;
+    }
+
     // The string we get from the requesting application might not necessarily meet
     // QUrl's requirement for a IDN-compliant host. So if we can't parse into a QUrl,
     // then we pass the string on to the application as the name of a file (and
     // QFileOpenEvent::file is not guaranteed to be the path to a local, open'able
     // file anyway).
-    const QString qurlString = QString::fromNSString(urlString);
     if (const QUrl url(qurlString); url.isValid())
         QWindowSystemInterface::handleFileOpenEvent(url);
     else
@@ -408,7 +477,6 @@ QT_USE_NAMESPACE
     if (!platformItem || platformItem->menu())
         return;
 
-    QScopedScopeLevelCounter scopeLevelCounter(QGuiApplicationPrivate::instance()->threadData.loadRelaxed());
     QGuiApplicationPrivate::modifier_buttons = QAppleKeyMapper::fromCocoaModifiers([NSEvent modifierFlags]);
 
     static QMetaMethod activatedSignal = QMetaMethod::fromSignal(&QCocoaMenuItem::activated);

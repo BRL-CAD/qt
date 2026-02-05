@@ -1,16 +1,18 @@
 // Copyright (C) 2022 The Qt Company Ltd.
 // SPDX-License-Identifier: LicenseRef-Qt-Commercial OR LGPL-3.0-only OR GPL-2.0-only OR GPL-3.0-only
+// Qt-Security score:critical reason:data-parser
 
 #include "qloggingregistry_p.h"
 
 #include <QtCore/qfile.h>
 #include <QtCore/qlibraryinfo.h>
 #include <QtCore/private/qlocking_p.h>
+#include <QtCore/qscopedvaluerollback.h>
 #include <QtCore/qstandardpaths.h>
 #include <QtCore/qstringtokenizer.h>
-#include <QtCore/qtextstream.h>
 #include <QtCore/qdir.h>
 #include <QtCore/qcoreapplication.h>
+#include <qplatformdefs.h>
 
 #if QT_CONFIG(settings)
 #include <QtCore/qsettings.h>
@@ -27,13 +29,13 @@ QT_BEGIN_NAMESPACE
 using namespace Qt::StringLiterals;
 
 Q_GLOBAL_STATIC(QLoggingRegistry, qtLoggingRegistry)
+alignas(QLoggingCategory) static unsigned char defaultLoggingCategory[sizeof(QLoggingCategory)];
 
 /*!
     \internal
     Constructs a logging rule with default values.
 */
-QLoggingRule::QLoggingRule() :
-    enabled(false)
+QLoggingRule::QLoggingRule()
 {
 }
 
@@ -41,9 +43,7 @@ QLoggingRule::QLoggingRule() :
     \internal
     Constructs a logging rule.
 */
-QLoggingRule::QLoggingRule(QStringView pattern, bool enabled) :
-    messageType(-1),
-    enabled(enabled)
+QLoggingRule::QLoggingRule(QStringView pattern, bool enabled) : enabled(enabled)
 {
     parse(pattern);
 }
@@ -153,10 +153,10 @@ void QLoggingRule::parse(QStringView pattern)
     \internal
     Parses configuration from \a content.
 */
-void QLoggingSettingsParser::setContent(QStringView content)
+void QLoggingSettingsParser::setContent(QStringView content, char16_t separator)
 {
     _rules.clear();
-    for (auto line : qTokenize(content, u'\n'))
+    for (auto line : qTokenize(content, separator))
         parseNextLine(line);
 }
 
@@ -164,12 +164,40 @@ void QLoggingSettingsParser::setContent(QStringView content)
     \internal
     Parses configuration from \a stream.
 */
-void QLoggingSettingsParser::setContent(QTextStream &stream)
+void QLoggingSettingsParser::setContent(FILE *stream)
 {
     _rules.clear();
-    QString line;
-    while (stream.readLineInto(&line))
-        parseNextLine(qToStringViewIgnoringNull(line));
+
+    constexpr size_t ChunkSize = 240;
+    QByteArray buffer(ChunkSize, Qt::Uninitialized);
+    auto readline = [&](FILE *stream) {
+        // Read one line into the buffer
+
+        // fgets() always writes the terminating null into the buffer, so we'll
+        // allow it to write to the QByteArray's null (thus the off by 1).
+        Q_ASSERT(buffer.size() + 1 == int(buffer.size() + 1));
+        char *s = fgets(buffer.begin(), int(buffer.size() + 1), stream);
+        if (!s)
+            return QByteArrayView{};
+
+        qsizetype len = strlen(s);
+        while (len == buffer.size()) {
+            // need to grow the buffer
+            buffer.resizeForOverwrite(buffer.size() + ChunkSize);
+            s = fgets(buffer.end() - ChunkSize, ChunkSize + 1, stream);
+            if (!s)
+                break;
+            len += strlen(s);
+        }
+        QByteArrayView result(buffer.constBegin(), len);
+        if (result.endsWith('\n'))
+            result.chop(1);
+        return result;
+    };
+
+    QByteArrayView line;
+    while (!(line = readline(stream)).isNull())
+        parseNextLine(QString::fromUtf8(line));
 }
 
 /*!
@@ -230,6 +258,14 @@ void QLoggingSettingsParser::parseNextLine(QStringView line)
 QLoggingRegistry::QLoggingRegistry()
     : categoryFilter(defaultCategoryFilter)
 {
+    using U = QLoggingCategory::UnregisteredInitialization;
+    Q_ASSERT_X(!self, "QLoggingRegistry", "Singleton recreated");
+    self = this;
+
+    // can't use std::construct_at here - private constructor
+    auto cat = new (defaultLoggingCategory) QLoggingCategory(U{}, defaultCategoryName);
+    categories.emplace(cat, QtDebugMsg);
+
 #if defined(Q_OS_ANDROID)
     // Unless QCoreApplication has been constructed we can't be sure that
     // we are on Qt's main thread. If we did allow logging here, we would
@@ -250,24 +286,43 @@ static bool qtLoggingDebug()
             debugMsg("QT_LOGGING_DEBUG environment variable is set.");
         return debug;
     }();
-    return debugEnv;
+    return Q_UNLIKELY(debugEnv);
 }
 
 static QList<QLoggingRule> loadRulesFromFile(const QString &filePath)
 {
+    Q_ASSERT(!filePath.isEmpty());
     if (qtLoggingDebug()) {
         debugMsg("Checking \"%s\" for rules",
                  QDir::toNativeSeparators(filePath).toUtf8().constData());
     }
 
-    QFile file(filePath);
-    if (file.open(QIODevice::ReadOnly | QIODevice::Text)) {
-        QTextStream stream(&file);
+    // We bypass QFile here because QFile is a QObject.
+    if (Q_UNLIKELY(filePath.at(0) == u':')) {
+        if (qtLoggingDebug()) {
+            warnMsg("Attempted to load config rules from Qt resource path \"%ls\"",
+                    qUtf16Printable(filePath));
+        }
+        return {};
+    }
+
+#ifdef Q_OS_WIN
+    // text mode: let the runtime do CRLF translation
+    FILE *f = _wfopen(reinterpret_cast<const wchar_t *>(filePath.constBegin()), L"rtN");
+#else
+    FILE *f = QT_FOPEN(QFile::encodeName(filePath).constBegin(), "re");
+#endif
+    if (f) {
         QLoggingSettingsParser parser;
-        parser.setContent(stream);
+        parser.setContent(f);
+        fclose(f);
         if (qtLoggingDebug())
-            debugMsg("Loaded %td rules", static_cast<ptrdiff_t>(parser.rules().size()));
+            debugMsg("Loaded %td rules from \"%ls\"", static_cast<ptrdiff_t>(parser.rules().size()),
+                     qUtf16Printable(filePath));
         return parser.rules();
+    } else if (int err = errno; err != ENOENT) {
+        warnMsg("Failed to load file \"%ls\": %ls", qUtf16Printable(filePath),
+                qUtf16Printable(qt_error_string(err)));
     }
     return QList<QLoggingRule>();
 }
@@ -281,23 +336,21 @@ void QLoggingRegistry::initializeRules()
 {
     if (qtLoggingDebug()) {
         debugMsg("Initializing the rules database ...");
-        debugMsg("Checking %s environment variable", "QTLOGGING_CONF");
+        debugMsg("Checking %s environment variable", "QT_LOGGING_CONF");
     }
     QList<QLoggingRule> er, qr, cr;
     // get rules from environment
-    const QByteArray rulesFilePath = qgetenv("QT_LOGGING_CONF");
-    if (!rulesFilePath.isEmpty())
-        er = loadRulesFromFile(QFile::decodeName(rulesFilePath));
+    if (QString rulesFilePath = qEnvironmentVariable("QT_LOGGING_CONF"); !rulesFilePath.isEmpty())
+        er = loadRulesFromFile(rulesFilePath);
 
     if (qtLoggingDebug())
         debugMsg("Checking %s environment variable", "QT_LOGGING_RULES");
 
-    const QByteArray rulesSrc = qgetenv("QT_LOGGING_RULES").replace(';', '\n');
+    const QString rulesSrc = qEnvironmentVariable("QT_LOGGING_RULES");
     if (!rulesSrc.isEmpty()) {
-        QTextStream stream(rulesSrc);
         QLoggingSettingsParser parser;
         parser.setImplicitRulesSection(true);
-        parser.setContent(stream);
+        parser.setContent(rulesSrc, u';');
 
         if (qtLoggingDebug())
             debugMsg("Loaded %td rules", static_cast<ptrdiff_t>(parser.rules().size()));
@@ -305,20 +358,19 @@ void QLoggingRegistry::initializeRules()
         er += parser.rules();
     }
 
-    const QString configFileName = QStringLiteral("qtlogging.ini");
+    const QString configFileName = u"QtProject/qtlogging.ini"_s;
+    QStringView baseConfigFileName = QStringView(configFileName).sliced(strlen("QtProject"));
+    Q_ASSERT(baseConfigFileName.startsWith(u'/'));
 
-#if !defined(QT_BOOTSTRAPPED)
     // get rules from Qt data configuration path
-    const QString qtConfigPath
-            = QDir(QLibraryInfo::path(QLibraryInfo::DataPath)).absoluteFilePath(configFileName);
-    qr = loadRulesFromFile(qtConfigPath);
-#endif
+    qr = loadRulesFromFile(QLibraryInfo::path(QLibraryInfo::DataPath) + baseConfigFileName);
 
     // get rules from user's/system configuration
-    const QString envPath = QStandardPaths::locate(QStandardPaths::GenericConfigLocation,
-                                                   QString::fromLatin1("QtProject/") + configFileName);
-    if (!envPath.isEmpty())
-        cr = loadRulesFromFile(envPath);
+    // locateAll() returns the user's file (most overriding) first
+    const QStringList configPaths =
+            QStandardPaths::locateAll(QStandardPaths::GenericConfigLocation, configFileName);
+    for (qsizetype i = configPaths.size(); i > 0; --i)
+        cr += loadRulesFromFile(configPaths[i - 1]);
 
     const QMutexLocker locker(&registryMutex);
 
@@ -340,11 +392,9 @@ void QLoggingRegistry::registerCategory(QLoggingCategory *cat, QtMsgType enableF
 {
     const auto locker = qt_scoped_lock(registryMutex);
 
-    const auto oldSize = categories.size();
-    auto &e = categories[cat];
-    if (categories.size() != oldSize) {
+    auto r = categories.tryEmplace(cat, enableForLevel);
+    if (r.inserted) {
         // new entry
-        e = enableForLevel;
         (*categoryFilter)(cat);
     }
 }
@@ -370,7 +420,7 @@ void QLoggingRegistry::unregisterCategory(QLoggingCategory *cat)
 void QLoggingRegistry::registerEnvironmentOverrideForCategory(const char *categoryName,
                                                               const char *environment)
 {
-    qtCategoryEnvironmentOverrides.insert(categoryName, environment);
+    qtCategoryEnvironmentOverrides.insert_or_assign(categoryName, environment);
 }
 
 /*!
@@ -427,7 +477,23 @@ QLoggingRegistry::installFilter(QLoggingCategory::CategoryFilter filter)
 
 QLoggingRegistry *QLoggingRegistry::instance()
 {
+    Q_CONSTINIT thread_local bool recursionGuard = false;
+    if (recursionGuard)
+        return nullptr;
+    QScopedValueRollback<bool> rollback(recursionGuard, true);
     return qtLoggingRegistry();
+}
+
+QLoggingCategory *QLoggingRegistry::defaultCategory()
+{
+    // Initialize the defaultLoggingCategory global static, if necessary. Note
+    // how it remains initialized forever, even if the QLoggingRegistry
+    // instance() is destroyed.
+    instance();
+
+    // std::launder() to be on the safe side, but it's unnecessary because the
+    // object is never recreated.
+    return std::launder(reinterpret_cast<QLoggingCategory *>(defaultLoggingCategory));
 }
 
 /*!
@@ -438,7 +504,7 @@ QLoggingRegistry *QLoggingRegistry::instance()
 */
 void QLoggingRegistry::defaultCategoryFilter(QLoggingCategory *cat)
 {
-    const QLoggingRegistry *reg = QLoggingRegistry::instance();
+    const QLoggingRegistry *reg = self;
     Q_ASSERT(reg->categories.contains(cat));
     QtMsgType enableForLevel = reg->categories.value(cat);
 
@@ -462,7 +528,7 @@ void QLoggingRegistry::defaultCategoryFilter(QLoggingCategory *cat)
             if (it == reg->qtCategoryEnvironmentOverrides.end())
                 debug = false;
             else
-                debug = qEnvironmentVariableIntValue(it.value());
+                debug = qEnvironmentVariableIntValue(it->second);
         }
     }
 

@@ -1,6 +1,8 @@
 // Copyright (C) 2021 The Qt Company Ltd.
 // SPDX-License-Identifier: LicenseRef-Qt-Commercial OR GPL-3.0-only
 
+#include "../qstringview/arrays_of_unknown_bounds.h"
+
 #include <QAnyStringView>
 #include <QChar>
 #include <QDebug>
@@ -12,6 +14,7 @@
 #  include <private/qt_winrtbase_p.h>
 #endif
 #include <private/qxmlstream_p.h>
+#include <private/qcomparisontesthelper_p.h>
 
 #include <QTest>
 
@@ -26,6 +29,10 @@
 // for negative testing (can't convert from)
 #include <deque>
 #include <list>
+
+#ifndef QTEST_THROW_ON_FAIL
+# error This test requires QTEST_THROW_ON_FAIL being active.
+#endif
 
 #ifdef __cpp_char8_t
 #  define ONLY_IF_CHAR_8_T(expr) expr
@@ -45,14 +52,6 @@
 #  define ONLY_WIN(expr) expr
 #else
 #  define ONLY_WIN(expr) QSKIP("This is a Windows-only test")
-#endif
-
-#ifdef __cpp_impl_three_way_comparison
-#  define ONLY_3WAY(expr) expr
-#else
-#  define ONLY_3WAY(expr) \
-    QSKIP("This test requires C++20 spaceship operator (<=>) " \
-          "support enabled in the standard library.")
 #endif
 
 using namespace Qt::StringLiterals;
@@ -86,6 +85,11 @@ static_assert(!CanConvert<ImplicitlyConvertibleTo<QLatin1StringView>>);
 static_assert(CanConvert<QChar>);
 
 static_assert(CanConvert<QChar[123]>);
+static_assert(CanConvert<const QChar[123]>);
+#ifndef Q_OS_INTEGRITY // ¯\_(ツ)_/¯
+static_assert(CanConvert<      QChar[]>);
+static_assert(CanConvert<const QChar[]>);
+#endif
 
 static_assert(CanConvert<      QString >);
 static_assert(CanConvert<const QString >);
@@ -99,6 +103,11 @@ static_assert(CanConvert<const QString&>);
 static_assert(CanConvert<ushort>);
 
 static_assert(CanConvert<ushort[123]>);
+static_assert(CanConvert<const ushort[123]>);
+#ifndef Q_OS_INTEGRITY // ¯\_(ツ)_/¯
+static_assert(CanConvert<      ushort[]>);
+static_assert(CanConvert<const ushort[]>);
+#endif
 
 static_assert(CanConvert<      ushort*>);
 static_assert(CanConvert<const ushort*>);
@@ -117,6 +126,13 @@ static_assert(!CanConvert<std::list<ushort>>);
 //
 
 static_assert(CanConvert<char8_t>);
+
+static_assert(CanConvert<      char8_t[123]>);
+static_assert(CanConvert<const char8_t[123]>);
+#ifndef Q_OS_INTEGRITY // ¯\_(ツ)_/¯
+static_assert(CanConvert<      char8_t[]>);
+static_assert(CanConvert<const char8_t[]>);
+#endif
 
 static_assert(CanConvert<      char8_t*>);
 static_assert(CanConvert<const char8_t*>);
@@ -150,6 +166,13 @@ static_assert(!CanConvert<std::list<char8_t>>);
 
 static_assert(CanConvert<char16_t>);
 
+static_assert(CanConvert<      char16_t[123]>);
+static_assert(CanConvert<const char16_t[123]>);
+#ifndef Q_OS_INTEGRITY // ¯\_(ツ)_/¯
+static_assert(CanConvert<      char16_t[]>);
+static_assert(CanConvert<const char16_t[]>);
+#endif
+
 static_assert(CanConvert<      char16_t*>);
 static_assert(CanConvert<const char16_t*>);
 
@@ -179,6 +202,13 @@ static_assert(CanConvert<QtPrivate::XmlStringRef>);
 // Qt Policy: char32_t isn't supported
 
 static_assert(CanConvert<char32_t>); // ... except here
+
+static_assert(!CanConvert<      char32_t[123]>);
+static_assert(!CanConvert<const char32_t[123]>);
+#ifndef Q_OS_INTEGRITY // ¯\_(ツ)_/¯
+static_assert(!CanConvert<      char32_t[]>);
+static_assert(!CanConvert<const char32_t[]>);
+#endif
 
 static_assert(!CanConvert<      char32_t*>);
 static_assert(!CanConvert<const char32_t*>);
@@ -212,7 +242,14 @@ constexpr bool CanConvertFromWCharT =
 #endif
         ;
 
-static_assert(CanConvert<wchar_t> == CanConvertFromWCharT); // ### FIXME: should work everywhere
+static_assert(CanConvert<wchar_t>);
+
+static_assert(CanConvert<      wchar_t[123]> == CanConvertFromWCharT);
+static_assert(CanConvert<const wchar_t[123]> == CanConvertFromWCharT);
+#ifndef Q_OS_INTEGRITY // ¯\_(ツ)_/¯
+static_assert(CanConvert<      wchar_t[]>    == CanConvertFromWCharT);
+static_assert(CanConvert<const wchar_t[]>    == CanConvertFromWCharT);
+#endif
 
 static_assert(CanConvert<      wchar_t*> == CanConvertFromWCharT);
 static_assert(CanConvert<const wchar_t*> == CanConvertFromWCharT);
@@ -333,10 +370,22 @@ private Q_SLOTS:
     void fromQLatin1StringView() const { fromQStringOrByteArray<QLatin1StringView>(); }
 
     void fromCharArray() const { fromArray<char>(); }
+    void fromCharArrayOfUnknownSize() const
+    {
+        from_array_of_unknown_size<QAnyStringView>();
+        from_array_of_unknown_size<QUtf8StringView>();
+    }
     void fromChar8Array() const { ONLY_IF_CHAR_8_T(fromArray<char8_t>()); }
+    void fromChar8ArrayOfUnknownSize() const
+    {
+        ONLY_IF_CHAR_8_T(from_u8array_of_unknown_size<QAnyStringView>());
+        ONLY_IF_CHAR_8_T(from_u8array_of_unknown_size<QUtf8StringView>());
+    }
     void fromChar16Array() const { fromArray<char16_t>(); }
+    void fromChar16ArrayOfUnknownSize() const { from_u16array_of_unknown_size<QAnyStringView>(); }
     void fromQCharArray() const { fromArray<QChar>(); }
     void fromWCharTArray() const { ONLY_WIN(fromArray<wchar_t>()); }
+    void fromWCharTArrayOfUnknownSize() const { ONLY_WIN(from_warray_of_unknown_size<QAnyStringView>()); }
 
     void fromQCharStar() const
     {
@@ -361,22 +410,22 @@ private Q_SLOTS:
     void fromChar16T() const { fromCharacter(u'ä', 1); }
     void fromUShort() const { fromCharacter(ushort(0xE4), 1); }
     void fromChar32T() const {
-        fromCharacter(U'ä', 1);
-        if (QTest::currentTestFailed())
-            return;
-        fromCharacter(U'\x1F0A0', 2); // U+1F0A0: PLAYING CARD BACK
+        fromCharacter(U'ä', 1, true);
+        fromCharacter(U'\x1F0A0', 2, true); // U+1F0A0: PLAYING CARD BACK
     }
     void fromWCharT() const {
-        ONLY_WIN(fromCharacter(L'ä', 1)); // should work on Unix, too (char32_t does)
+        fromCharacter(L'ä', 1, sizeof(L'ä') == sizeof(char32_t));
+#ifndef Q_OS_WIN // sizedof(wchar_t) == 2 on Windows, so L'\x1F0A0' would be out-of-range
+        fromCharacter(L'\x1F0A0', 2, true); // U+1F0A0: PLAYING CARD BACK
+#endif
     }
     void fromQChar() const { fromCharacter(QChar(u'ä'), 1); }
-    void fromQLatin1Char() const { fromCharacter(QLatin1Char('\xE4'), 1); }
+    void fromQLatin1Char() const { fromCharacter(QLatin1Char('\xE4'), 1, true); }
     void fromQCharSpecialCharacter() const {
-        fromCharacter(QChar::ReplacementCharacter, 1);
-        if (QTest::currentTestFailed())
-            return;
-        fromCharacter(QChar::LastValidCodePoint, 1);
+        fromCharacter(QChar::ReplacementCharacter, 1, true);
+        fromCharacter(QChar::LastValidCodePoint, 1, true);
     }
+    void fromCharacterSpecial() const;
 
     void fromChar16TStar() const { fromLiteral(u"Hello, World!"); }
     void fromWCharTStar() const { ONLY_WIN(fromLiteral(L"Hello, World!")); }
@@ -401,8 +450,11 @@ private Q_SLOTS:
 
     void fromQStringBuilder_QString_QString() const { fromQStringBuilder(u"1"_s % u"2"_s, u"12"); }
 
+    void comparisonCompiles();
+    void comparison_data();
     void comparison();
-    void compare3way();
+
+    void arg() const;
 
 private:
     template <typename StringBuilder>
@@ -414,7 +466,7 @@ private:
     template <typename Char>
     void fromLiteral(const Char *arg) const;
     template <typename Char>
-    void fromCharacter(Char arg, qsizetype expectedSize) const;
+    void fromCharacter(Char arg, qsizetype expectedSize, bool expectConversion = false) const;
     template <typename Char>
     void fromRange() const;
     template <typename Char, typename Container>
@@ -616,6 +668,18 @@ void tst_QAnyStringView::asciiLiteralIsLatin1() const
     }
 }
 
+void tst_QAnyStringView::fromCharacterSpecial() const
+{
+    // Treating 'ä' as a UTF-8 sequence doesn't make sense, as it would be
+    // invalid. And this is not how legacy Qt APIs handled it, either:
+    QCOMPARE_NE(QAnyStringView('\xE4').tag(), QAnyStringView::Tag::Utf8);
+    QCOMPARE_NE(QAnyStringView(u8' ').tag(), QAnyStringView::Tag::Utf8);
+
+    // Latin1 is expected, but UTF-16 is harmless (atm, QL1C is converted to
+    // QChar, thus UTF-16). We only care that it's not UTF-8, anyway:
+    QCOMPARE_NE(QAnyStringView(QLatin1Char('\xE4')).tag(), QAnyStringView::Tag::Utf8);
+}
+
 template <typename StringBuilder>
 void tst_QAnyStringView::fromQStringBuilder(StringBuilder &&sb, QStringView expected) const
 {
@@ -659,20 +723,10 @@ void tst_QAnyStringView::fromQStringOrByteArray() const
     QVERIFY(!QAnyStringView(empty).isNull());
 
     conversion_tests(QStringOrByteArray(Strings::oneChar));
-    if (QTest::currentTestFailed())
-        return;
     conversion_tests(QStringOrByteArray(Strings::twoChars));
-    if (QTest::currentTestFailed())
-        return;
     conversion_tests(QStringOrByteArray(Strings::threeChars));
-    if (QTest::currentTestFailed())
-        return;
     conversion_tests(QStringOrByteArray(Strings::regularString));
-    if (QTest::currentTestFailed())
-        return;
     conversion_tests(QStringOrByteArray(Strings::regularLongString));
-    if (QTest::currentTestFailed())
-        return;
     conversion_tests(QStringOrByteArray(Strings::stringWithNulls, Strings::stringWithNullsLength));
 }
 
@@ -696,8 +750,11 @@ void tst_QAnyStringView::fromLiteral(const Char *arg) const
     conversion_tests(arg);
 }
 
+template <typename T>
+const void *as_const_void_star(T *p) { return p; }
+
 template<typename Char>
-void tst_QAnyStringView::fromCharacter(Char arg, qsizetype expectedSize) const
+void tst_QAnyStringView::fromCharacter(Char arg, qsizetype expectedSize, bool expectConversion) const
 {
     // Need to re-create a new QASV(arg) each time, QASV(Char).data() dangles
     // after the end of the Full Expression:
@@ -706,6 +763,11 @@ void tst_QAnyStringView::fromCharacter(Char arg, qsizetype expectedSize) const
                   "If this fails, we may be creating a temporary QString/QByteArray");
 
     QCOMPARE(QAnyStringView(arg).size(), expectedSize);
+
+    if (expectConversion)
+        QCOMPARE_NE(QAnyStringView(arg).data(), as_const_void_star(std::addressof(arg)));
+    else
+        QCOMPARE_EQ(QAnyStringView(arg).data(), as_const_void_star(std::addressof(arg)));
 
     // QCOMPARE(QAnyStringView(arg), arg); // not all pairs compile, so do it manually:
 
@@ -758,18 +820,10 @@ void tst_QAnyStringView::fromRange() const
 
     doTest(reinterpret_cast<const Char *>(std::begin(Strings::regularString)),
            reinterpret_cast<const Char *>(std::end(Strings::regularString)));
-    if (QTest::currentTestFailed())
-        return;
-
     doTest(reinterpret_cast<const Char *>(std::begin(Strings::regularLongString)),
            reinterpret_cast<const Char *>(std::end(Strings::regularLongString)));
-    if (QTest::currentTestFailed())
-        return;
-
     doTest(reinterpret_cast<const Char *>(std::begin(Strings::stringWithNulls)),
            reinterpret_cast<const Char *>(std::end(Strings::stringWithNulls)));
-    if (QTest::currentTestFailed())
-        return;
 }
 
 template <typename Char, typename Container>
@@ -784,8 +838,6 @@ void tst_QAnyStringView::fromContainer() const
 
     std::copy(s.begin(), s.end(), std::back_inserter(c));
     conversion_tests(std::move(c));
-    if (QTest::currentTestFailed())
-        return;
 
     // repeat with nulls
     c = {};
@@ -882,46 +934,155 @@ void tst_QAnyStringView::conversion_tests(String string) const
     }
 }
 
-void tst_QAnyStringView::comparison()
+void tst_QAnyStringView::comparisonCompiles()
 {
-    const QAnyStringView aa = u"aa";
-    const QAnyStringView upperAa = u"AA";
-    const QAnyStringView bb = u"bb";
-
-    QVERIFY(aa == aa);
-    QVERIFY(aa != bb);
-    QVERIFY(aa < bb);
-    QVERIFY(bb > aa);
-
-    QCOMPARE(QAnyStringView::compare(aa, aa), 0);
-    QVERIFY(QAnyStringView::compare(aa, upperAa) != 0);
-    QCOMPARE(QAnyStringView::compare(aa, upperAa, Qt::CaseInsensitive), 0);
-    QVERIFY(QAnyStringView::compare(aa, bb) < 0);
-    QVERIFY(QAnyStringView::compare(bb, aa) > 0);
+    QTestPrivate::testAllComparisonOperatorsCompile<QAnyStringView>();
+    QTestPrivate::testAllComparisonOperatorsCompile<QAnyStringView, char16_t>();
+    QTestPrivate::testAllComparisonOperatorsCompile<QAnyStringView, QChar>();
+    QTestPrivate::testAllComparisonOperatorsCompile<QAnyStringView, const char16_t *>();
+    QTestPrivate::testAllComparisonOperatorsCompile<QAnyStringView, const char *>();
+    QTestPrivate::testAllComparisonOperatorsCompile<QAnyStringView, QByteArray>();
+    QTestPrivate::testAllComparisonOperatorsCompile<QAnyStringView, QByteArrayView>();
+    QTestPrivate::testAllComparisonOperatorsCompile<QAnyStringView, QString>();
+    QTestPrivate::testAllComparisonOperatorsCompile<QAnyStringView, QStringView>();
+    QTestPrivate::testAllComparisonOperatorsCompile<QAnyStringView, QUtf8StringView>();
+    QTestPrivate::testAllComparisonOperatorsCompile<QAnyStringView, QLatin1StringView>();
 }
 
-void tst_QAnyStringView::compare3way()
+void tst_QAnyStringView::comparison_data()
 {
-#define COMPARE_3WAY(lhs, rhs, res) \
-    do { \
-        const auto qt_3way_cmp_res = (lhs) <=> (rhs); \
-        static_assert(std::is_same_v<decltype(qt_3way_cmp_res), decltype(res)>); \
-        QCOMPARE(std::is_eq(qt_3way_cmp_res), std::is_eq(res)); \
-        QCOMPARE(std::is_lt(qt_3way_cmp_res), std::is_lt(res)); \
-        QCOMPARE(std::is_gt(qt_3way_cmp_res), std::is_gt(res)); \
-    } while (false)
+    QTest::addColumn<QAnyStringView>("lhs");
+    QTest::addColumn<QAnyStringView>("rhs");
+    QTest::addColumn<int>("csr"); // case sensitive result
+    QTest::addColumn<int>("cir"); // case insensitive result
 
-    ONLY_3WAY(
-    const QAnyStringView aa = u"aa";
-    const QAnyStringView upperAa = u"AA";
-    const QAnyStringView bb = u"bb";
-    COMPARE_3WAY(aa, aa, std::strong_ordering::equal);
-    COMPARE_3WAY(aa, bb, std::strong_ordering::less);
-    COMPARE_3WAY(bb, aa, std::strong_ordering::greater);
-    COMPARE_3WAY(upperAa, aa, std::strong_ordering::less);
-    COMPARE_3WAY(aa, upperAa, std::strong_ordering::greater);
-    );
-#undef COMPARE_3WAY
+    auto row = [&](QAnyStringView l, QAnyStringView r, int csr, int cir) {
+        QTest::addRow("%s_vs_%s", qPrintable(l.toString()), qPrintable(r.toString()))
+                << l << r << csr << cir;
+    };
+    row(u"aa", u"aa", 0, 0);
+    row(u"aa", u"AA", 1, 0);
+    row(u"ab", u"b", -1, -1);
+    row(u"ab", u"aBb", 1, -1);
+    row(u"ab", u"B", 1, -1);
+}
+
+static int sign(int x)
+{
+    return x == 0 ? 0 : (x < 0 ? -1 : 1);
+}
+
+void tst_QAnyStringView::comparison()
+{
+    QFETCH(const QAnyStringView, lhs);
+    QFETCH(const QAnyStringView, rhs);
+    QFETCH(const int, csr);
+    QFETCH(const int, cir);
+
+    QCOMPARE(sign(QAnyStringView::compare(lhs, rhs)), csr);
+    QCOMPARE(sign(QAnyStringView::compare(lhs, rhs, Qt::CaseInsensitive)), cir);
+
+    const Qt::strong_ordering ordering = [&csr] {
+        if (csr == 0)
+            return Qt::strong_ordering::equal;
+        else if (csr < 0)
+            return Qt::strong_ordering::less;
+        else
+            return Qt::strong_ordering::greater;
+    }();
+    QT_TEST_ALL_COMPARISON_OPS(lhs, rhs, ordering);
+
+    const QString rhs_str = rhs.toString();
+    QT_TEST_ALL_COMPARISON_OPS(lhs, rhs_str, ordering);
+
+    const QStringView rhs_sv(rhs_str);
+    QT_TEST_ALL_COMPARISON_OPS(lhs, rhs_sv, ordering);
+
+    if (!rhs_str.contains(QChar(u'\0'))) {
+        const char16_t *utfData = reinterpret_cast<const char16_t*>(rhs_str.constData());
+        QT_TEST_ALL_COMPARISON_OPS(lhs, utfData, ordering);
+    }
+
+    if (rhs_str.size() == 1) {
+        const QChar ch = rhs_str.front();
+        QT_TEST_ALL_COMPARISON_OPS(lhs, ch, ordering);
+    }
+
+    if (rhs.isLatin1()) {
+        const QLatin1StringView rhs_l1 = rhs.asLatin1StringView();
+        QT_TEST_ALL_COMPARISON_OPS(lhs, rhs_l1, ordering);
+    }
+
+    const QByteArray rhs_u8 = rhs_str.toUtf8();
+
+    const QUtf8StringView rhs_u8sv(rhs_u8.data(), rhs_u8.size());
+    QT_TEST_ALL_COMPARISON_OPS(lhs, rhs_u8sv, ordering);
+
+    QT_TEST_ALL_COMPARISON_OPS(lhs, rhs_u8, ordering);
+    const QByteArrayView rhs_u8view{rhs_u8.begin(), rhs_u8.size()};
+    QT_TEST_ALL_COMPARISON_OPS(lhs, rhs_u8view, ordering);
+    if (!rhs_str.contains(QChar(u'\0'))) {
+        const char *rhs_u8data = rhs_u8.constData();
+        QT_TEST_ALL_COMPARISON_OPS(lhs, rhs_u8data, ordering);
+    }
+}
+
+void tst_QAnyStringView::arg() const
+{
+    // nullness checks
+    QCOMPARE(QAnyStringView().arg(QStringView()), "");
+    QCOMPARE(QAnyStringView(u"%1").arg(QStringView()), "");
+
+#define CHECK1IMPL(pattern, arg1, expected) \
+    do { \
+        auto p = QAnyStringView(pattern); \
+        QCOMPARE(p.arg(QLatin1StringView(arg1)), expected); \
+        QCOMPARE(p.arg(u"" arg1), expected); \
+        QCOMPARE(p.arg(QStringLiteral(arg1)), expected); \
+        QCOMPARE(p.arg(QString(QLatin1StringView(arg1))), expected); \
+    } while (false) \
+    /*end*/
+#define CHECK1(pattern, arg1, expected) \
+    do { \
+        CHECK1IMPL("" pattern, arg1, expected); \
+        CHECK1IMPL(u8"" pattern, arg1, expected); \
+        CHECK1IMPL(pattern ""_L1, arg1, expected); \
+        CHECK1IMPL(u"" pattern, arg1, expected); \
+    } while (false) \
+    /*end*/
+#define CHECK2(pattern, arg1, arg2, expected) \
+    do { \
+        auto p = QAnyStringView(pattern); \
+        QCOMPARE(p.arg(QLatin1StringView(arg1), QLatin1StringView(arg2)), expected); \
+        QCOMPARE(p.arg(u"" arg1, QLatin1StringView(arg2)), expected); \
+        QCOMPARE(p.arg(QLatin1StringView(arg1), u"" arg2), expected); \
+        QCOMPARE(p.arg(u"" arg1, u"" arg2), expected); \
+    } while (false) \
+    /*end*/
+
+    CHECK1("", "World", "");
+    CHECK1("%1", "World", "World");
+    CHECK1("!%1?", "World", "!World?");
+    CHECK1("%1%1", "World", "WorldWorld");
+    CHECK1("%1%2", "World", "World%2");
+    CHECK1("%2%1", "World", "%2World");
+
+    CHECK2("", "Hello", "World", "");
+    CHECK2("%1", "Hello", "World", "Hello");
+    CHECK2("!%1, %2?", "Hello", "World", "!Hello, World?");
+    CHECK2("%1%1", "Hello", "World", "HelloHello");
+    CHECK2("%1%2", "Hello", "World", "HelloWorld");
+    CHECK2("%2%1", "Hello", "World", "WorldHello");
+
+#undef CHECK2
+#undef CHECK1
+
+    QCOMPARE_EQ(QAnyStringView(u8"ä %2 %2—%1 %3 ").arg(QLatin1Char('c'), QChar::CarriageReturn, u8"Ç"),
+                u"ä \r \r—c Ç "_s);
+    QCOMPARE_EQ(QUtf8StringView(u8"ä %2 %2—%1 %3 ").arg(QLatin1Char('c'), QChar::CarriageReturn, "Ç"),
+                u"ä \r \r—c Ç "_s);
+    QCOMPARE_EQ(QUtf8StringView(u8"ä %2 %2—%1 %3 ").arg(QLatin1Char('c'), QChar::CarriageReturn, "Ç"_ba),
+                u"ä \r \r—c Ç "_s);
 }
 
 QTEST_APPLESS_MAIN(tst_QAnyStringView)

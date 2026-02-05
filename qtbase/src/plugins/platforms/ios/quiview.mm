@@ -10,6 +10,7 @@
 #include "qiosscreen.h"
 #include "qioswindow.h"
 #include "qiosinputcontext.h"
+#include "quiwindow.h"
 #ifndef Q_OS_TVOS
 #include "qiosmenu.h"
 #endif
@@ -19,6 +20,7 @@
 #include <QtGui/private/qguiapplication_p.h>
 #include <QtGui/private/qwindow_p.h>
 #include <QtGui/private/qapplekeymapper_p.h>
+#include <QtGui/private/qpointingdevice_p.h>
 #include <qpa/qwindowsysteminterface_p.h>
 
 Q_LOGGING_CATEGORY(lcQpaTablet, "qt.qpa.input.tablet")
@@ -57,25 +59,8 @@ inline ulong getTimeStamp(UIEvent *event)
     UIPanGestureRecognizer *m_scrollGestureRecognizer;
     CGPoint m_lastScrollCursorPos;
     CGPoint m_lastScrollDelta;
-}
-
-+ (void)load
-{
-#ifndef Q_OS_TVOS
-    if (QOperatingSystemVersion::current() < QOperatingSystemVersion(QOperatingSystemVersion::IOS, 11)) {
-        // iOS 11 handles this though [UIView safeAreaInsetsDidChange], but there's no signal for
-        // the corresponding top and bottom layout guides that we use on earlier versions. Note
-        // that we use the _will_ change version of the notification, because we want to react
-        // to the change as early was possible. But since the top and bottom layout guides have
-        // not been updated at this point we use asynchronous delivery of the event, so that the
-        // event is processed by QtGui just after iOS has updated the layout margins.
-        [[NSNotificationCenter defaultCenter] addObserverForName:UIApplicationWillChangeStatusBarFrameNotification
-            object:nil queue:[NSOperationQueue mainQueue] usingBlock:^(NSNotification *) {
-                for (QWindow *window : QGuiApplication::allWindows())
-                    QWindowSystemInterface::handleSafeAreaMarginsChanged<QWindowSystemInterface::AsynchronousDelivery>(window);
-            }
-        ];
-    }
+#if QT_CONFIG(tabletevent)
+    UIHoverGestureRecognizer *m_hoverGestureRecognizer;
 #endif
 }
 
@@ -91,7 +76,16 @@ inline ulong getTimeStamp(UIEvent *event)
 {
     if (self = [self initWithFrame:window->geometry().toCGRect()]) {
         self.platformWindow = window;
+
+        if (isQtApplication())
+            self.hidden = YES;
+
         m_accessibleElements = [[NSMutableArray<UIAccessibilityElement *> alloc] init];
+
+#ifndef Q_OS_TVOS
+        self.multipleTouchEnabled = YES;
+#endif
+
         m_scrollGestureRecognizer = [[UIPanGestureRecognizer alloc]
                                       initWithTarget:self
                                       action:@selector(handleScroll:)];
@@ -108,6 +102,14 @@ inline ulong getTimeStamp(UIEvent *event)
         m_lastScrollCursorPos = CGPointZero;
         [self addGestureRecognizer:m_scrollGestureRecognizer];
 
+#if QT_CONFIG(tabletevent)
+        m_hoverGestureRecognizer = [[UIHoverGestureRecognizer alloc]
+                                     initWithTarget:self
+                                     action:@selector(handleHover:)];
+        [self addGestureRecognizer:m_hoverGestureRecognizer];
+#endif
+
+        // Set up layer
         if ([self.layer isKindOfClass:CAMetalLayer.class]) {
             QWindow *window = self.platformWindow->window();
             if (QColorSpace colorSpace = window->format().colorSpace(); colorSpace.isValid()) {
@@ -118,17 +120,8 @@ inline ulong getTimeStamp(UIEvent *event)
                 qCDebug(lcQpaWindow) << "Set" << self << "color space to" << metalLayer.colorspace;
             }
         }
-    }
-
-    return self;
-}
-
-- (instancetype)initWithFrame:(CGRect)frame
-{
-    if ((self = [super initWithFrame:frame])) {
 #if QT_CONFIG(opengl)
-        if ([self.layer isKindOfClass:[CAEAGLLayer class]]) {
-            // Set up EAGL layer
+        else if ([self.layer isKindOfClass:[CAEAGLLayer class]]) {
             CAEAGLLayer *eaglLayer = static_cast<CAEAGLLayer *>(self.layer);
             eaglLayer.opaque = TRUE;
             eaglLayer.drawableProperties = @{
@@ -138,37 +131,13 @@ inline ulong getTimeStamp(UIEvent *event)
         }
 #endif
 
-        if (isQtApplication())
-            self.hidden = YES;
-
-#ifndef Q_OS_TVOS
-        self.multipleTouchEnabled = YES;
+#if defined(Q_OS_VISIONOS)
+        // Although the "Drawing sharp layer-based content in visionOS" docs
+        // claim that by default a CALayer rasterizes at a 2x scale this does
+        // not seem to be the case in practice. So we explicitly set the view's
+        // scale factor based on the screen, where we hard-code it to 2.0.
+        self.contentScaleFactor = self.platformWindow->screen()->devicePixelRatio();
 #endif
-
-        if (qEnvironmentVariableIntValue("QT_IOS_DEBUG_WINDOW_MANAGEMENT")) {
-            static CGFloat hue = 0.0;
-            CGFloat lastHue = hue;
-            for (CGFloat diff = 0; diff < 0.1 || diff > 0.9; diff = fabs(hue - lastHue))
-                hue = drand48();
-
-            #define colorWithBrightness(br) \
-                [UIColor colorWithHue:hue saturation:0.5 brightness:br alpha:1.0].CGColor
-
-            self.layer.borderColor = colorWithBrightness(1.0);
-            self.layer.borderWidth = 1.0;
-        }
-
-        if (qEnvironmentVariableIsSet("QT_IOS_DEBUG_WINDOW_SAFE_AREAS")) {
-            UIView *safeAreaOverlay = [[UIView alloc] initWithFrame:CGRectZero];
-            [safeAreaOverlay setBackgroundColor:[UIColor colorWithRed:0.3 green:0.7 blue:0.9 alpha:0.3]];
-            [self addSubview:safeAreaOverlay];
-
-            safeAreaOverlay.translatesAutoresizingMaskIntoConstraints = NO;
-            [safeAreaOverlay.topAnchor constraintEqualToAnchor:self.safeAreaLayoutGuide.topAnchor].active = YES;
-            [safeAreaOverlay.leftAnchor constraintEqualToAnchor:self.safeAreaLayoutGuide.leftAnchor].active = YES;
-            [safeAreaOverlay.rightAnchor constraintEqualToAnchor:self.safeAreaLayoutGuide.rightAnchor].active = YES;
-            [safeAreaOverlay.bottomAnchor constraintEqualToAnchor:self.safeAreaLayoutGuide.bottomAnchor].active = YES;
-        }
     }
 
     return self;
@@ -197,6 +166,7 @@ inline ulong getTimeStamp(UIEvent *event)
     return description;
 }
 
+#if !defined(Q_OS_VISIONOS)
 - (void)willMoveToWindow:(UIWindow *)newWindow
 {
     // UIKIt will normally set the scale factor of a view to match the corresponding
@@ -206,6 +176,7 @@ inline ulong getTimeStamp(UIEvent *event)
 
     // FIXME: Allow the scale factor to be customized through QSurfaceFormat.
 }
+#endif
 
 - (void)didAddSubview:(UIView *)subview
 {
@@ -353,9 +324,11 @@ inline ulong getTimeStamp(UIEvent *event)
 
     qImDebug() << self << "resigned first responder";
 
-    UIResponder *newResponder = FirstResponderCandidate::currentCandidate();
-    if ([self responderShouldTriggerWindowDeactivation:newResponder])
-        QWindowSystemInterface::handleFocusWindowChanged(nullptr, Qt::ActiveWindowFocusReason);
+    if (qGuiApp) {
+        UIResponder *newResponder = FirstResponderCandidate::currentCandidate();
+        if ([self responderShouldTriggerWindowDeactivation:newResponder])
+            QWindowSystemInterface::handleFocusWindowChanged(nullptr, Qt::ActiveWindowFocusReason);
+    }
 
     return YES;
 }
@@ -384,12 +357,12 @@ inline ulong getTimeStamp(UIEvent *event)
     [super traitCollectionDidChange: previousTraitCollection];
 
     QPointingDevice *touchDevice = QIOSIntegration::instance()->touchDevice();
-    QPointingDevice::Capabilities touchCapabilities = touchDevice->capabilities();
+    auto *devicePriv = QPointingDevicePrivate::get(touchDevice);
 
-    touchCapabilities.setFlag(QPointingDevice::Capability::Pressure,
-                              (self.traitCollection.forceTouchCapability == UIForceTouchCapabilityAvailable));
-
-    touchDevice->setCapabilities(touchCapabilities);
+    auto capabilities = touchDevice->capabilities();
+    capabilities.setFlag(QPointingDevice::Capability::Pressure,
+        (self.traitCollection.forceTouchCapability == UIForceTouchCapabilityAvailable));
+    devicePriv->setCapabilities(capabilities);
 }
 
 -(BOOL)pointInside:(CGPoint)point withEvent:(UIEvent *)event
@@ -399,6 +372,39 @@ inline ulong getTimeStamp(UIEvent *event)
     return [super pointInside:point withEvent:event];
 }
 
+#if QT_CONFIG(tabletevent)
+- (void)handlePencilEventForLocationInView:(CGPoint)locationInView withState:(QEventPoint::State)state withTimestamp:(ulong)timeStamp
+    withForce:(CGFloat)force withMaximumPossibleForce:(CGFloat)maximumPossibleForce withZOffset:(CGFloat)zOffset
+    withAzimuthUnitVector:(CGVector)azimuth withAltitudeAngleRadian:(CGFloat)altitudeAngleRadian
+{
+    QIOSIntegration *iosIntegration = QIOSIntegration::instance();
+
+    QPointF localViewPosition = QPointF::fromCGPoint(locationInView);
+    QPoint localViewPositionI = localViewPosition.toPoint();
+    QPointF globalScreenPosition = self.platformWindow->mapToGlobal(localViewPositionI) +
+            (localViewPosition - localViewPositionI);
+    qreal pressure = 0;
+    if (force != 0 && maximumPossibleForce != 0)
+        pressure = force / maximumPossibleForce;
+    // azimuth unit vector: +x to the right, +y going downwards
+    // altitudeAngleRadian given in radians, pi / 2 is with the stylus perpendicular to the iPad, smaller values mean more tilted, but never negative.
+    // Convert to degrees with zero being perpendicular.
+    qreal altitudeAngle = 90 - qRadiansToDegrees(altitudeAngleRadian);
+    qreal xTilt = qBound(-60.0, altitudeAngle * azimuth.dx, 60.0);
+    qreal yTilt = qBound(-60.0, altitudeAngle * azimuth.dy, 60.0);
+
+    qCDebug(lcQpaTablet) << ":" << timeStamp << localViewPosition << pressure << state << "azimuth" << azimuth.dx << azimuth.dy
+                << "altitude" << altitudeAngleRadian << "xTilt" << xTilt << "yTilt" << yTilt;
+    QWindowSystemInterface::handleTabletEvent(self.platformWindow->window(), timeStamp,
+            // device, local, global
+            iosIntegration->pencilDevice(), localViewPosition, globalScreenPosition,
+            // buttons
+            state == QEventPoint::State::Released ? Qt::NoButton : Qt::LeftButton,
+            // pressure, xTilt, yTilt, tangentialPressure, rotation, z, modifiers
+            pressure, xTilt, yTilt, 0, 0, zOffset, Qt::NoModifier);
+}
+#endif
+
 - (void)handleTouches:(NSSet *)touches withEvent:(UIEvent *)event withState:(QEventPoint::State)state withTimestamp:(ulong)timeStamp
 {
     QIOSIntegration *iosIntegration = QIOSIntegration::instance();
@@ -407,31 +413,11 @@ inline ulong getTimeStamp(UIEvent *event)
 #if QT_CONFIG(tabletevent)
     if (m_activePencilTouch && [touches containsObject:m_activePencilTouch]) {
         NSArray<UITouch *> *cTouches = [event coalescedTouchesForTouch:m_activePencilTouch];
-        int i = 0;
         for (UITouch *cTouch in cTouches) {
-            QPointF localViewPosition = QPointF::fromCGPoint([cTouch preciseLocationInView:self]);
-            QPoint localViewPositionI = localViewPosition.toPoint();
-            QPointF globalScreenPosition = self.platformWindow->mapToGlobal(localViewPositionI) +
-                    (localViewPosition - localViewPositionI);
-            qreal pressure = cTouch.force / cTouch.maximumPossibleForce;
-            // azimuth unit vector: +x to the right, +y going downwards
-            CGVector azimuth = [cTouch azimuthUnitVectorInView: self];
-            // azimuthAngle given in radians, zero when the stylus points towards +x axis; converted to degrees with 0 pointing straight up
-            qreal azimuthAngle = qRadiansToDegrees([cTouch azimuthAngleInView: self]) + 90;
-            // altitudeAngle given in radians, pi / 2 is with the stylus perpendicular to the iPad, smaller values mean more tilted, but never negative.
-            // Convert to degrees with zero being perpendicular.
-            qreal altitudeAngle = 90 - qRadiansToDegrees(cTouch.altitudeAngle);
-            qCDebug(lcQpaTablet) << i << ":" << timeStamp << localViewPosition << pressure << state << "azimuth" << azimuth.dx << azimuth.dy
-                     << "angle" << azimuthAngle << "altitude" << cTouch.altitudeAngle
-                     << "xTilt" << qBound(-60.0, altitudeAngle * azimuth.dx, 60.0) << "yTilt" << qBound(-60.0, altitudeAngle * azimuth.dy, 60.0);
-            QWindowSystemInterface::handleTabletEvent(self.platformWindow->window(), timeStamp, localViewPosition, globalScreenPosition,
-                    // device, pointerType, buttons
-                    int(QInputDevice::DeviceType::Stylus), int(QPointingDevice::PointerType::Pen), state == QEventPoint::State::Released ? Qt::NoButton : Qt::LeftButton,
-                    // pressure, xTilt, yTilt
-                    pressure, qBound(-60.0, altitudeAngle * azimuth.dx, 60.0), qBound(-60.0, altitudeAngle * azimuth.dy, 60.0),
-                    // tangentialPressure, rotation, z, uid, modifiers
-                    0, azimuthAngle, 0, 0, Qt::NoModifier);
-            ++i;
+            [self handlePencilEventForLocationInView:[cTouch preciseLocationInView:self] withState:state withTimestamp:timeStamp
+                withForce:cTouch.force withMaximumPossibleForce:cTouch.maximumPossibleForce withZOffset:0
+                withAzimuthUnitVector:[cTouch azimuthUnitVectorInView:self]
+                withAltitudeAngleRadian:cTouch.altitudeAngle];
         }
     }
 #endif
@@ -700,7 +686,7 @@ inline ulong getTimeStamp(UIEvent *event)
 
 - (BOOL)canPerformAction:(SEL)action withSender:(id)sender
 {
-#ifndef Q_OS_TVOS
+#if !defined(Q_OS_TVOS) && !defined(Q_OS_VISIONOS)
     // Check first if QIOSMenu should handle the action before continuing up the responder chain
     return [QIOSMenu::menuActionTarget() targetForAction:action withSender:sender] != 0;
 #else
@@ -713,7 +699,7 @@ inline ulong getTimeStamp(UIEvent *event)
 - (id)forwardingTargetForSelector:(SEL)selector
 {
     Q_UNUSED(selector);
-#ifndef Q_OS_TVOS
+#if !defined(Q_OS_TVOS) && !defined(Q_OS_VISIONOS)
     return QIOSMenu::menuActionTarget();
 #else
     return nil;
@@ -797,6 +783,31 @@ inline ulong getTimeStamp(UIEvent *event)
 }
 #endif // QT_CONFIG(wheelevent)
 
+#if QT_CONFIG(tabletevent)
+- (void)handleHover:(UIHoverGestureRecognizer *)recognizer
+{
+    if (!self.platformWindow)
+        return;
+
+    ulong timeStamp = [[NSProcessInfo processInfo] systemUptime] * 1000;
+
+    CGFloat zOffset = 0;
+    if (@available(ios 16.1, *))
+        zOffset = [recognizer zOffset];
+
+    CGVector azimuth;
+    CGFloat altitudeAngleRadian = 0;
+    if (@available(ios 16.4, *)) {
+        azimuth = [recognizer azimuthUnitVectorInView:self];
+        altitudeAngleRadian = recognizer.altitudeAngle;
+    }
+
+    [self handlePencilEventForLocationInView:[recognizer locationInView:self] withState:QEventPoint::State::Released
+        withTimestamp:timeStamp withForce:0 withMaximumPossibleForce:0 withZOffset:zOffset
+        withAzimuthUnitVector:azimuth withAltitudeAngleRadian:altitudeAngleRadian];
+}
+#endif
+
 @end
 
 @implementation UIView (QtHelpers)
@@ -831,7 +842,7 @@ inline ulong getTimeStamp(UIEvent *event)
 
 @end
 
-#ifdef Q_OS_IOS
+#if QT_CONFIG(metal)
 @implementation QUIMetalView
 
 + (Class)layerClass

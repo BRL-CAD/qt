@@ -122,7 +122,6 @@ void tst_QButtonGroup::arrowKeyNavigation()
     layout.addWidget(&g2);
 
     dlg.show();
-    QApplicationPrivate::setActiveWindow(&dlg);
     QVERIFY(QTest::qWaitForWindowActive(&dlg));
 
     bt1.setFocus();
@@ -198,15 +197,13 @@ void tst_QButtonGroup::keyNavigationPushButtons()
     layout->addWidget(pb3);
     layout->addWidget(le2);
 
-    QButtonGroup *buttonGroup = new QButtonGroup;
+    QButtonGroup *buttonGroup = new QButtonGroup(&dlg);
     buttonGroup->addButton(pb1);
     buttonGroup->addButton(pb2);
     buttonGroup->addButton(pb3);
 
     dlg.show();
-    QApplicationPrivate::setActiveWindow(&dlg);
-    if (!QTest::qWaitForWindowActive(&dlg))
-        QSKIP("Window activation failed, skipping test");
+    QVERIFY(QTest::qWaitForWindowFocused(&dlg));
 
     QVERIFY2(le1->hasFocus(), qPrintable(qApp->focusWidget()->objectName()));
     QTest::keyClick(qApp->focusWidget(), Qt::Key_Tab);
@@ -435,7 +432,6 @@ void tst_QButtonGroup::task106609()
     qRegisterMetaType<QAbstractButton*>("QAbstractButton*");
     QSignalSpy spy1(buttons, SIGNAL(buttonClicked(QAbstractButton*)));
 
-    QApplicationPrivate::setActiveWindow(&dlg);
     QTRY_COMPARE(QApplication::activeWindow(), static_cast<QWidget*>(&dlg));
 
     radio1->setFocus();
@@ -477,31 +473,6 @@ void tst_QButtonGroup::checkedButton()
     QCOMPARE(buttons.checkedButton(), &pb2);
 }
 
-class task209485_ButtonDeleter : public QObject
-{
-    Q_OBJECT
-
-public:
-    task209485_ButtonDeleter(QButtonGroup *group, bool deleteButton)
-        : group(group)
-        , deleteButton(deleteButton)
-    {
-        connect(group, &QButtonGroup::buttonClicked,
-                this, &task209485_ButtonDeleter::buttonClicked);
-    }
-
-private slots:
-    void buttonClicked()
-    {
-        if (deleteButton)
-            group->removeButton(group->buttons().first());
-    }
-
-private:
-    QButtonGroup *group;
-    bool deleteButton;
-};
-
 void tst_QButtonGroup::task209485_removeFromGroupInEventHandler_data()
 {
     QTest::addColumn<bool>("deleteButton");
@@ -516,16 +487,19 @@ void tst_QButtonGroup::task209485_removeFromGroupInEventHandler()
     QFETCH(int, signalCount);
     qRegisterMetaType<QAbstractButton *>("QAbstractButton *");
 
-    TestPushButton *button = new TestPushButton;
+    TestPushButton button;
     QButtonGroup group;
-    group.addButton(button);
+    group.addButton(&button);
 
-    task209485_ButtonDeleter buttonDeleter(&group, deleteButton);
+    if (deleteButton) {
+        QObject::connect(&group, &QButtonGroup::buttonClicked,
+                         &button, [&] { group.removeButton(&button); });
+    }
 
     QSignalSpy spy1(&group, SIGNAL(buttonClicked(QAbstractButton*)));
 
     // NOTE: Reintroducing the bug of this task will cause the following line to crash:
-    QTest::mouseClick(button, Qt::LeftButton);
+    QTest::mouseClick(&button, Qt::LeftButton);
 
     QCOMPARE(spy1.size(), signalCount);
 }
@@ -543,18 +517,18 @@ void tst_QButtonGroup::autoIncrementId()
     QRadioButton *radio3 = new QRadioButton(&dlg);
     radio3->setText("radio3");
 
-    buttons->addButton(radio1);
+    buttons->addButton(radio1, 2);
     vbox->addWidget(radio1);
-    buttons->addButton(radio2);
+    buttons->addButton(radio2, -1);
     vbox->addWidget(radio2);
     buttons->addButton(radio3);
     vbox->addWidget(radio3);
 
     radio1->setChecked(true);
 
-    QCOMPARE(buttons->id(radio1), -2);
-    QCOMPARE(buttons->id(radio2), -3);
-    QCOMPARE(buttons->id(radio3), -4);
+    QCOMPARE(buttons->id(radio1), 2);
+    QCOMPARE(buttons->id(radio2), -2);
+    QCOMPARE(buttons->id(radio3), -3);
 
     dlg.show();
 }

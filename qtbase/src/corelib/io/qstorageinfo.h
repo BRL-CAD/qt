@@ -1,10 +1,12 @@
 // Copyright (C) 2014 Ivan Komissarov <ABBAPOH@gmail.com>
 // SPDX-License-Identifier: LicenseRef-Qt-Commercial OR LGPL-3.0-only OR GPL-2.0-only OR GPL-3.0-only
+// Qt-Security score:significant reason:default
 
 #ifndef QSTORAGEINFO_H
 #define QSTORAGEINFO_H
 
 #include <QtCore/qbytearray.h>
+#include <QtCore/qcompare.h>
 #include <QtCore/qdir.h>
 #include <QtCore/qlist.h>
 #include <QtCore/qmetatype.h>
@@ -16,6 +18,7 @@ QT_BEGIN_NAMESPACE
 class QDebug;
 
 class QStorageInfoPrivate;
+QT_DECLARE_QESDP_SPECIALIZATION_DTOR(QStorageInfoPrivate)
 class Q_CORE_EXPORT QStorageInfo
 {
 public:
@@ -23,6 +26,7 @@ public:
     explicit QStorageInfo(const QString &path);
     explicit QStorageInfo(const QDir &dir);
     QStorageInfo(const QStorageInfo &other);
+    QStorageInfo(QStorageInfo &&) noexcept = default;
     ~QStorageInfo();
 
     QStorageInfo &operator=(const QStorageInfo &other);
@@ -58,17 +62,9 @@ public:
 private:
     explicit QStorageInfo(QStorageInfoPrivate &dd);
     friend class QStorageInfoPrivate;
-    friend inline bool operator==(const QStorageInfo &first, const QStorageInfo &second)
-    {
-        if (first.d == second.d)
-            return true;
-        return first.device() == second.device() && first.rootPath() == second.rootPath();
-    }
-
-    friend inline bool operator!=(const QStorageInfo &first, const QStorageInfo &second)
-    {
-        return !(first == second);
-    }
+    friend Q_CORE_EXPORT bool
+    comparesEqual(const QStorageInfo &lhs, const QStorageInfo &rhs) noexcept;
+    Q_DECLARE_EQUALITY_COMPARABLE(QStorageInfo)
 
     friend Q_CORE_EXPORT QDebug operator<<(QDebug, const QStorageInfo &);
     QExplicitlySharedDataPointer<QStorageInfoPrivate> d;

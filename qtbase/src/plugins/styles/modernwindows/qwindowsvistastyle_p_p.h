@@ -1,5 +1,6 @@
 // Copyright (C) 2016 The Qt Company Ltd.
 // SPDX-License-Identifier: LicenseRef-Qt-Commercial OR LGPL-3.0-only OR GPL-2.0-only OR GPL-3.0-only
+// Qt-Security score:significant reason:default
 
 #ifndef QWINDOWSVISTASTYLE_P_P_H
 #define QWINDOWSVISTASTYLE_P_P_H
@@ -25,7 +26,7 @@
 #include <qpixmapcache.h>
 #include <qstyleoption.h>
 #include <QtWidgets/private/qwindowsstyle_p_p.h>
-#include <qmap.h>
+#include <QtCore/private/qflatmap_p.h>
 
 #if QT_CONFIG(pushbutton)
 #include <qpushbutton.h>
@@ -67,7 +68,9 @@
 #if QT_CONFIG(dialogbuttonbox)
 #include <qdialogbuttonbox.h>
 #endif
+#if QT_CONFIG(inputdialog)
 #include <qinputdialog.h>
+#endif
 #if QT_CONFIG(tableview)
 #include <qtableview.h>
 #endif
@@ -114,7 +117,7 @@ public:
     ~QWindowsVistaStylePrivate()
     { cleanup(); }
 
-    static HTHEME createTheme(int theme, HWND hwnd);
+    static HTHEME createTheme(int theme, const QWidget *widget);
     static QString themeName(int theme);
     static bool isItemViewDelegateLineEdit(const QWidget *widget);
     static int pixelMetricFromSystemDp(QStyle::PixelMetric pm, const QStyleOption *option = nullptr, const QWidget *widget = nullptr);
@@ -148,13 +151,17 @@ public:
     QRgb groupBoxTextColorDisabled = 0;
     QRgb sliderTickColor = 0;
     bool hasInitColors = false;
-    QIcon dockFloat, dockClose;
 
     QTime animationTime() const;
     bool transitionsEnabled() const;
 
+protected:
+    QIcon m_titleBarMaxIcon;
+    QIcon m_titleBarCloseIcon;
+    QIcon m_titleBarNormalIcon;
+
 private:
-    static bool initVistaTreeViewTheming();
+    static bool initVistaTreeViewTheming(const QScreen *screen);
     static void cleanupVistaTreeViewTheming();
 
     static QBasicAtomicInt ref;
@@ -168,7 +175,7 @@ private:
     int bufferW = 0;
     int bufferH = 0;
 
-    static HWND m_vistaTreeViewHelper;
+    static QVarLengthFlatMap<const QScreen *, HWND, 4> m_vistaTreeViewHelpers;
 };
 
 QT_END_NAMESPACE

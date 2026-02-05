@@ -40,6 +40,7 @@
 #include <QtGui/private/qfontengine_coretext_p.h>
 
 #include <IOKit/graphics/IOGraphicsLib.h>
+#include <UniformTypeIdentifiers/UTCoreTypes.h>
 
 #include <inttypes.h>
 
@@ -75,6 +76,8 @@ static void logVersionInformation()
             qtDeploymentTarget.majorVersion(), qtDeploymentTarget.minorVersion(), qtDeploymentTarget.microVersion(),
             appBuildSDK.majorVersion(), appBuildSDK.minorVersion(), appBuildSDK.microVersion(),
             appDeploymentTarget.majorVersion(), appDeploymentTarget.minorVersion(), appDeploymentTarget.microVersion());
+
+    qCInfo(lcQpa) << "Running with Liquid Glass enabled:" << qt_apple_runningWithLiquidGlass();
 }
 
 
@@ -108,7 +111,6 @@ QCocoaIntegration::QCocoaIntegration(const QStringList &paramList)
 #endif
     , mCocoaDrag(new QCocoaDrag)
     , mNativeInterface(new QCocoaNativeInterface)
-    , mServices(new QCocoaServices)
     , mKeyboardMapper(new QAppleKeyMapper)
 {
     logVersionInformation();
@@ -124,9 +126,9 @@ QCocoaIntegration::QCocoaIntegration(const QStringList &paramList)
 #endif
         mFontDb.reset(new QCoreTextFontDatabaseEngineFactory<QCoreTextFontEngine>);
 
-    QString icStr = QPlatformInputContextFactory::requested();
-    icStr.isNull() ? mInputContext.reset(new QCocoaInputContext)
-                   : mInputContext.reset(QPlatformInputContextFactory::create(icStr));
+    auto icStrs = QPlatformInputContextFactory::requested();
+    icStrs.isEmpty() ? mInputContext.reset(new QCocoaInputContext)
+                     : mInputContext.reset(QPlatformInputContextFactory::create(icStrs));
 
     initResources();
     QMacAutoReleasePool pool;
@@ -167,6 +169,12 @@ QCocoaIntegration::QCocoaIntegration(const QStringList &paramList)
 
     connect(qGuiApp, &QGuiApplication::focusWindowChanged,
         this, &QCocoaIntegration::focusWindowChanged);
+
+    // Opening of a native menu should close all popup windows
+    m_menuTrackingObserver = QMacNotificationObserver(nil,
+        NSMenuDidBeginTrackingNotification, ^{
+            QGuiApplicationPrivate::instance()->closeAllPopups();
+        });
 }
 
 QCocoaIntegration::~QCocoaIntegration()
@@ -236,6 +244,7 @@ bool QCocoaIntegration::hasCapability(QPlatformIntegration::Capability cap) cons
     case ApplicationState:
     case ApplicationIcon:
     case BackingStoreStaticContents:
+    case OffscreenSurface:
         return true;
     default:
         return QPlatformIntegration::hasCapability(cap);
@@ -387,6 +396,9 @@ QPlatformTheme *QCocoaIntegration::createPlatformTheme(const QString &name) cons
 
 QCocoaServices *QCocoaIntegration::services() const
 {
+    if (mServices.isNull())
+        mServices.reset(new QCocoaServices);
+
     return mServices.data();
 }
 
@@ -412,9 +424,22 @@ QPlatformKeyMapper *QCocoaIntegration::keyMapper() const
 
 void QCocoaIntegration::setApplicationIcon(const QIcon &icon) const
 {
-    // Fall back to a size that looks good on the highest resolution screen available
-    auto fallbackSize = NSApp.dockTile.size.width * qGuiApp->devicePixelRatio();
-    NSApp.applicationIconImage = [NSImage imageFromQIcon:icon withSize:fallbackSize];
+    if (icon.isNull()) {
+        NSApp.applicationIconImage = nil;
+        return;
+    }
+
+    // Request a size that looks good on the highest resolution screen available
+    // for icon engines that don't have an intrinsic size (like SVG).
+    const auto dockTitleSize = QSizeF::fromCGSize(NSApp.dockTile.size).toSize();
+    auto image = icon.pixmap(dockTitleSize, qGuiApp->devicePixelRatio()).toImage();
+
+    // The assigned image is scaled by the system to fit into the tile,
+    // but without taking aspect ratio into account, so let's pad the
+    // image up front if it's not already square.
+    image = qt_mac_padToSquareImage(image);
+
+    NSApp.applicationIconImage = [NSImage imageFromQImage:image];
 }
 
 void QCocoaIntegration::setApplicationBadge(qint64 number)
@@ -440,8 +465,8 @@ void QCocoaIntegration::focusWindowChanged(QWindow *focusWindow)
         return;
 
     static bool hasDefaultApplicationIcon = [](){
-        NSImage *genericApplicationIcon = [[NSWorkspace sharedWorkspace]
-            iconForFileType:NSFileTypeForHFSTypeCode(kGenericApplicationIcon)];
+        NSImage *genericApplicationIcon = [NSWorkspace.sharedWorkspace
+            iconForContentType:UTTypeApplicationBundle];
         NSImage *applicationIcon = [NSImage imageNamed:NSImageNameApplicationIcon];
 
         NSRect rect = NSMakeRect(0, 0, 32, 32);

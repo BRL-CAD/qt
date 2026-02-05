@@ -19,6 +19,7 @@
 #include <QPalette>
 #include <private/qguiapplication_p.h>
 #include "qstylehints.h"
+#include "qaccessibilityhints.h"
 
 QT_BEGIN_NAMESPACE
 
@@ -35,18 +36,23 @@ public:
     int m_tabFocusBehavior = -1;
     int m_uiEffects = -1;
     int m_showShortcutsInContextMenus = -1;
+    int m_contextMenuTrigger = -1;
     int m_wheelScrollLines = -1;
     int m_mouseQuickSelectionThreshold = -1;
     int m_mouseDoubleClickDistance = -1;
     int m_touchDoubleTapDistance = -1;
 
     Qt::ColorScheme colorScheme() const { return m_colorScheme; }
-    void setColorScheme(Qt::ColorScheme colorScheme);
+    void updateColorScheme(Qt::ColorScheme colorScheme);
+    void update(const QPlatformTheme *theme);
+
+    QAccessibilityHints *accessibilityHints() const;
 
     static QStyleHintsPrivate *get(QStyleHints *q);
 
 private:
     Qt::ColorScheme m_colorScheme = Qt::ColorScheme::Unknown;
+    QAccessibilityHints* m_accessibilityHints = nullptr;
 };
 
 QT_END_NAMESPACE

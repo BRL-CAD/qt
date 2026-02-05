@@ -2,29 +2,31 @@
 // SPDX-License-Identifier: LicenseRef-Qt-Commercial OR GPL-3.0-only
 
 
-#include <QTest>
-#include <QSignalSpy>
-#include <QMdiSubWindow>
-#include <QMdiArea>
+#include <QtTest/qtest.h>
+#include <QtTest/qsignalspy.h>
 
-#include <QApplication>
-#include <QMainWindow>
-#include <QMenuBar>
-#include <QPushButton>
-#include <QStyle>
-#include <QStyleOption>
-#include <QVBoxLayout>
-#include <QLineEdit>
-#include <QDockWidget>
-#include <QScrollBar>
-#include <QTextEdit>
+#include <QtWidgets/qapplication.h>
+#include <QtWidgets/qboxlayout.h>
+#include <QtWidgets/qdockwidget.h>
+#include <QtWidgets/qlineedit.h>
+#include <QtWidgets/qmainwindow.h>
+#include <QtWidgets/qmdiarea.h>
+#include <QtWidgets/qmdisubwindow.h>
+#include <QtWidgets/qmenubar.h>
+#include <QtWidgets/qpushbutton.h>
+#include <QtWidgets/qscrollbar.h>
+#include <QtWidgets/qstyle.h>
+#include <QtWidgets/qstyleoption.h>
+#include <QtWidgets/qtextedit.h>
+
+#include <QtGui/qstylehints.h>
 #ifndef QT_NO_OPENGL
-#include <QtOpenGL>
-#include <QOpenGLContext>
+#  include <QtGui/qopenglcontext.h>
 #endif
-#include <QStyleHints>
 
 #include <QtWidgets/private/qapplication_p.h>
+
+using namespace Qt::StringLiterals;
 
 static const Qt::WindowFlags DefaultWindowFlags
     = Qt::SubWindow | Qt::WindowSystemMenuHint
@@ -264,6 +266,7 @@ private slots:
     void tabbedview_activefirst();
     void tabbedview_activesecond();
     void tabbedview_activethird();
+    void tabbedview_closeInactive();
 
 private:
     QMdiSubWindow *activeWindow;
@@ -413,18 +416,6 @@ void tst_QMdiArea::subWindowActivated()
     }
 }
 
-#ifdef Q_OS_MAC
-#include <Security/AuthSession.h>
-bool macHasAccessToWindowsServer()
-{
-    SecuritySessionId mySession;
-    SessionAttributeBits sessionInfo;
-    SessionGetInfo(callerSecuritySession, &mySession, &sessionInfo);
-    return (sessionInfo & sessionHasGraphicAccess);
-}
-#endif
-
-
 void tst_QMdiArea::subWindowActivated2()
 {
     if (QGuiApplication::platformName().startsWith(QLatin1String("wayland"), Qt::CaseInsensitive))
@@ -481,10 +472,6 @@ void tst_QMdiArea::subWindowActivated2()
     // Check that we only emit _one_ signal and the active window
     // is unchanged after showMinimized/showNormal.
     mdiArea.showMinimized();
-#if defined (Q_OS_MAC)
-    if (!macHasAccessToWindowsServer())
-        QEXPECT_FAIL("", "showMinimized doesn't really minimize if you don't have access to the server", Abort);
-#endif
 #ifdef Q_OS_MAC
     QSKIP("QTBUG-25298: This test is unstable on Mac.");
 #endif
@@ -515,7 +502,6 @@ void tst_QMdiArea::subWindowActivatedWithMinimize()
     QSignalSpy spy(workspace, SIGNAL(subWindowActivated(QMdiSubWindow*)));
     connect( workspace, SIGNAL(subWindowActivated(QMdiSubWindow*)), this, SLOT(activeChanged(QMdiSubWindow*)) );
     mw.show();
-    QApplicationPrivate::setActiveWindow(&mw);
     QWidget *widget = new QWidget(workspace);
     widget->setAttribute(Qt::WA_DeleteOnClose);
     QMdiSubWindow *window1 = workspace->addSubWindow(widget);
@@ -660,7 +646,6 @@ void tst_QMdiArea::changeWindowTitle()
 #endif
 
     mw->show();
-    QApplicationPrivate::setActiveWindow(mw);
 
 #ifdef USE_SHOW
     mw->showFullScreen();
@@ -964,7 +949,6 @@ void tst_QMdiArea::activeSubWindow()
     mainWindow.addDockWidget(Qt::LeftDockWidgetArea, dockWidget);
 
     mainWindow.show();
-    QApplicationPrivate::setActiveWindow(&mainWindow);
     QVERIFY(QTest::qWaitForWindowActive(&mainWindow));
     QCOMPARE(mdiArea->activeSubWindow(), subWindow);
     QCOMPARE(qApp->focusWidget(), (QWidget *)subWindowLineEdit);
@@ -987,10 +971,8 @@ void tst_QMdiArea::activeSubWindow()
     dummyTopLevel.show();
     QVERIFY(QTest::qWaitForWindowExposed(&dummyTopLevel));
 
-    QApplicationPrivate::setActiveWindow(&dummyTopLevel);
     QCOMPARE(mdiArea->activeSubWindow(), subWindow);
 
-    QApplicationPrivate::setActiveWindow(&mainWindow);
     QCOMPARE(mdiArea->activeSubWindow(), subWindow);
 
     //task 202657
@@ -1020,10 +1002,10 @@ void tst_QMdiArea::currentSubWindow()
     QLineEdit dummyTopLevel;
     dummyTopLevel.show();
     QVERIFY(QTest::qWaitForWindowExposed(&dummyTopLevel));
+    QVERIFY(QTest::qWaitForWindowActive(&dummyTopLevel));
 
     // Move focus to another top-level and check that we still
     // have an active window.
-    QApplicationPrivate::setActiveWindow(&dummyTopLevel);
     QCOMPARE(qApp->activeWindow(), (QWidget *)&dummyTopLevel);
     QVERIFY(mdiArea.activeSubWindow());
 
@@ -1045,11 +1027,9 @@ void tst_QMdiArea::currentSubWindow()
     QCOMPARE(mdiArea.activeSubWindow(), active);
     QCOMPARE(mdiArea.currentSubWindow(), active);
 
-    QApplicationPrivate::setActiveWindow(&dummyTopLevel);
     QVERIFY(mdiArea.activeSubWindow());
     QCOMPARE(mdiArea.currentSubWindow(), active);
 
-    QApplicationPrivate::setActiveWindow(&mdiArea);
     active->show();
     QCOMPARE(mdiArea.activeSubWindow(), active);
 
@@ -1255,7 +1235,6 @@ void tst_QMdiArea::closeWindows()
 {
     QMdiArea workspace;
     workspace.show();
-    QApplicationPrivate::setActiveWindow(&workspace);
 
     // Close widget
     QWidget *widget = new QWidget;
@@ -1307,7 +1286,6 @@ void tst_QMdiArea::activateNextAndPreviousWindow()
 {
     QMdiArea workspace;
     workspace.show();
-    QApplicationPrivate::setActiveWindow(&workspace);
 
     const int windowCount = 10;
     QMdiSubWindow *windows[windowCount];
@@ -1391,7 +1369,6 @@ void tst_QMdiArea::subWindowList()
 
     QMdiArea workspace;
     workspace.show();
-    QApplicationPrivate::setActiveWindow(&workspace);
     QVERIFY(QTest::qWaitForWindowActive(&workspace));
 
     QList<QMdiSubWindow *> activationOrder;
@@ -1880,7 +1857,6 @@ void tst_QMdiArea::dontMaximizeSubWindowOnActivation()
     QMdiArea mdiArea;
     mdiArea.show();
     QVERIFY(QTest::qWaitForWindowExposed(&mdiArea));
-    QApplicationPrivate::setActiveWindow(&mdiArea);
 
     // Add one maximized window.
     mdiArea.addSubWindow(new QWidget)->showMaximized();
@@ -2265,9 +2241,8 @@ void tst_QMdiArea::tabBetweenSubWindows()
     mdiArea.show();
     QVERIFY(QTest::qWaitForWindowExposed(&mdiArea));
 
-    QApplicationPrivate::setActiveWindow(&mdiArea);
     QWidget *focusWidget = subWindows.back()->widget();
-    QCOMPARE(qApp->focusWidget(), focusWidget);
+    QTRY_COMPARE(qApp->focusWidget(), focusWidget);
 
     QSignalSpy spy(&mdiArea, SIGNAL(subWindowActivated(QMdiSubWindow*)));
     QCOMPARE(spy.size(), 0);
@@ -2797,6 +2772,46 @@ void tst_QMdiArea::tabbedview_activethird()
     QCOMPARE(mdiArea.activeSubWindow(), sub2);
 }
 
+void tst_QMdiArea::tabbedview_closeInactive()
+{
+    QMdiArea mdiArea;
+    auto createNewWindow = [&mdiArea](const QString &name){
+        QMdiSubWindow *subWindow = new QMdiSubWindow;
+        subWindow->setObjectName(name);
+        subWindow->setAttribute(Qt::WA_DeleteOnClose);
+        subWindow->setWindowTitle(name);
+        mdiArea.addSubWindow(subWindow);
+        subWindow->show();
+        return subWindow;
+    };
+
+    mdiArea.setViewMode(QMdiArea::TabbedView);
+    mdiArea.setTabsClosable(true);
+    mdiArea.setTabPosition(QTabWidget::South);
+    mdiArea.setOption(QMdiArea::DontMaximizeSubWindowOnActivation, true);
+    mdiArea.setActivationOrder(QMdiArea::ActivationHistoryOrder);
+
+    mdiArea.resize(800, 600);
+    mdiArea.show();
+    QVERIFY(QTest::qWaitForWindowExposed(&mdiArea));
+    // This is needed for QMdiAreaPrivate::updateTabBarGeometry to update the
+    // viewport margins.
+    mdiArea.setStyleSheet(uR"qss(
+        QTabBar::tab:bottom:selected {
+            border-bottom: 1px solid;
+        }
+    )qss"_s);
+
+    QPointer<QMdiSubWindow> mdi1 = createNewWindow(u"mdi1"_s);
+    QPointer<QMdiSubWindow> mdi2 = createNewWindow(u"mdi2"_s);
+    QTRY_COMPARE(mdiArea.subWindowList().size() , 2);
+    QCOMPARE(mdiArea.activeSubWindow(), mdi2.data());
+
+    mdi1->close();
+
+    QTRY_COMPARE(mdiArea.subWindowList().size() , 1);
+    QTRY_VERIFY(!mdi1);
+}
 
 QTEST_MAIN(tst_QMdiArea)
 #include "tst_qmdiarea.moc"

@@ -15,7 +15,6 @@ import android.content.ClipboardManager;
 import android.text.Html;
 import android.text.Spanned;
 import android.util.Log;
-import android.util.TypedValue;
 import android.view.View;
 import android.view.Window;
 import android.widget.Button;
@@ -37,11 +36,11 @@ class ButtonStruct implements View.OnClickListener
     {
         m_dialog = dialog;
         m_id = id;
-        m_text = Html.fromHtml(text);
+        m_text = Html.fromHtml(text, Html.FROM_HTML_MODE_LEGACY);
     }
-    QtMessageDialogHelper m_dialog;
+    final QtMessageDialogHelper m_dialog;
     private final int m_id;
-    Spanned m_text;
+    final Spanned m_text;
 
     @Override
     public void onClick(View view) {
@@ -49,16 +48,15 @@ class ButtonStruct implements View.OnClickListener
     }
 }
 
-public class QtMessageDialogHelper
+class QtMessageDialogHelper
 {
-
-    public QtMessageDialogHelper(Activity activity)
+    QtMessageDialogHelper(Activity activity)
     {
         m_activity = activity;
     }
 
     @UsedFromNativeCode
-    public void setStandardIcon(int icon)
+    void setStandardIcon(int icon)
     {
         m_standardIcon = icon;
 
@@ -89,31 +87,31 @@ public class QtMessageDialogHelper
     }
 
     @UsedFromNativeCode
-    public void setTile(String title)
+    void setTile(String title)
     {
-        m_title = Html.fromHtml(title);
+        m_title = Html.fromHtml(title, Html.FROM_HTML_MODE_LEGACY);
     }
 
     @UsedFromNativeCode
-    public void setText(String text)
+    void setText(String text)
     {
-        m_text = Html.fromHtml(text);
+        m_text = Html.fromHtml(text, Html.FROM_HTML_MODE_LEGACY);
     }
 
     @UsedFromNativeCode
-    public void setInformativeText(String informativeText)
+    void setInformativeText(String informativeText)
     {
-        m_informativeText = Html.fromHtml(informativeText);
+        m_informativeText = Html.fromHtml(informativeText, Html.FROM_HTML_MODE_LEGACY);
     }
 
     @UsedFromNativeCode
-    public void setDetailedText(String text)
+    void setDetailedText(String text)
     {
-        m_detailedText = Html.fromHtml(text);
+        m_detailedText = Html.fromHtml(text, Html.FROM_HTML_MODE_LEGACY);
     }
 
     @UsedFromNativeCode
-    public void addButton(int id, String text)
+    void addButton(int id, String text)
     {
         if (m_buttonsList == null)
             m_buttonsList = new ArrayList<>();
@@ -123,14 +121,19 @@ public class QtMessageDialogHelper
     private Drawable getStyledDrawable(int id)
     {
         int[] attrs = { id };
-        final TypedArray a = m_theme.obtainStyledAttributes(attrs);
-        Drawable d = a.getDrawable(0);
-        a.recycle();
+        Drawable d;
+        TypedArray a = m_theme.obtainStyledAttributes(attrs);
+        try {
+            d = a.getDrawable(0);
+        } finally {
+            a.recycle();
+        }
+
         return  d;
     }
 
     @UsedFromNativeCode
-    public void show(long handler)
+    void show(long handler)
     {
         m_handler = handler;
         m_activity.runOnUiThread(() -> {
@@ -299,7 +302,7 @@ public class QtMessageDialogHelper
     }
 
     @UsedFromNativeCode
-    public void hide()
+    void hide()
     {
         m_activity.runOnUiThread(() -> {
             if (m_dialog != null && m_dialog.isShowing())
@@ -308,12 +311,12 @@ public class QtMessageDialogHelper
         });
     }
 
-    public long handler()
+    long handler()
     {
         return m_handler;
     }
 
-    public void reset()
+    void reset()
     {
         m_standardIcon = 0;
         m_title = null;

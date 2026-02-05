@@ -17,6 +17,10 @@
 
 #include "qrhi_p.h"
 
+#ifdef Q_OS_WIN
+#include "qdxgihdrinfo_p.h"
+#endif
+
 QT_BEGIN_NAMESPACE
 
 class QVulkanFunctions;
@@ -103,7 +107,7 @@ struct QVkTexture : public QRhiTexture
 
     bool prepareCreate(QSize *adjustedSize = nullptr);
     bool finishCreate();
-    VkImageView imageViewForLevel(int level);
+    VkImageView perLevelImageViewForLoadStore(int level);
 
     VkImage image = VK_NULL_HANDLE;
     VkImageView imageView = VK_NULL_HANDLE;
@@ -124,6 +128,8 @@ struct QVkTexture : public QRhiTexture
     VkFormat vkformat;
     uint mipLevelCount = 0;
     VkSampleCountFlagBits samples;
+    VkFormat viewFormat;
+    VkFormat viewFormatForSampling;
     int lastActiveFrameSlot = -1;
     uint generation = 0;
     friend class QRhiVulkan;
@@ -140,6 +146,17 @@ struct QVkSampler : public QRhiSampler
     VkSampler sampler = VK_NULL_HANDLE;
     int lastActiveFrameSlot = -1;
     uint generation = 0;
+    friend class QRhiVulkan;
+};
+
+struct QVkShadingRateMap : public QRhiShadingRateMap
+{
+    QVkShadingRateMap(QRhiImplementation *rhi);
+    ~QVkShadingRateMap();
+    void destroy() override;
+    bool createFrom(QRhiTexture *src) override;
+
+    QVkTexture *texture = nullptr; // not owned
     friend class QRhiVulkan;
 };
 
@@ -162,8 +179,12 @@ struct QVkRenderPassDescriptor : public QRhiRenderPassDescriptor
     QVarLengthArray<VkAttachmentReference, 8> resolveRefs;
     QVarLengthArray<VkSubpassDependency, 2> subpassDeps;
     bool hasDepthStencil = false;
+    bool hasDepthStencilResolve = false;
+    bool hasShadingRateMap = false;
     uint32_t multiViewCount = 0;
     VkAttachmentReference dsRef;
+    VkAttachmentReference dsResolveRef;
+    VkAttachmentReference shadingRateRef;
     QVector<quint32> serializedFormatData;
     QRhiVulkanRenderPassNativeHandles nativeHandlesStruct;
     int lastActiveFrameSlot = -1;
@@ -179,6 +200,8 @@ struct QVkRenderTargetData
     int colorAttCount = 0;
     int dsAttCount = 0;
     int resolveAttCount = 0;
+    int dsResolveAttCount = 0;
+    int shadingRateAttCount = 0;
     int multiViewCount = 0;
     QRhiRenderTargetAttachmentTracker::ResIdList currentResIdList;
     static const int MAX_COLOR_ATTACHMENTS = 8;
@@ -212,7 +235,10 @@ struct QVkTextureRenderTarget : public QRhiTextureRenderTarget
 
     QVkRenderTargetData d;
     VkImageView rtv[QVkRenderTargetData::MAX_COLOR_ATTACHMENTS];
+    VkImageView dsv = VK_NULL_HANDLE;
     VkImageView resrtv[QVkRenderTargetData::MAX_COLOR_ATTACHMENTS];
+    VkImageView resdsv = VK_NULL_HANDLE;
+    VkImageView shadingRateMapView = VK_NULL_HANDLE;
     int lastActiveFrameSlot = -1;
     friend class QRhiVulkan;
 };
@@ -226,7 +252,6 @@ struct QVkShaderResourceBindings : public QRhiShaderResourceBindings
     void updateResources(UpdateFlags flags) override;
 
     QVarLengthArray<QRhiShaderResourceBinding, 8> sortedBindings;
-    bool hasSlottedResource = false;
     bool hasDynamicOffset = false;
     int poolIndex = -1;
     VkDescriptorSetLayout layout = VK_NULL_HANDLE;
@@ -325,10 +350,10 @@ struct QVkCommandBuffer : public QRhiCommandBuffer
         currentTarget = nullptr;
         activeSecondaryCbStack.clear();
         resetCommands();
-        resetCachedState();
+        resetPerPassState();
     }
 
-    void resetCachedState() {
+    void resetPerPassState() {
         currentGraphicsPipeline = nullptr;
         currentComputePipeline = nullptr;
         currentPipelineGeneration = 0;
@@ -342,6 +367,7 @@ struct QVkCommandBuffer : public QRhiCommandBuffer
         memset(currentVertexBuffers, 0, sizeof(currentVertexBuffers));
         memset(currentVertexOffsets, 0, sizeof(currentVertexOffsets));
         inExternal = false;
+        hasShadingRateSet = false;
     }
 
     PassType recordingPass;
@@ -363,9 +389,10 @@ struct QVkCommandBuffer : public QRhiCommandBuffer
     quint32 currentVertexOffsets[VERTEX_INPUT_RESOURCE_SLOT_COUNT];
     QVarLengthArray<VkCommandBuffer, 4> activeSecondaryCbStack;
     bool inExternal;
+    bool hasShadingRateSet;
 
     struct {
-        QHash<QRhiResource *, QPair<VkAccessFlags, bool> > writtenResources;
+        QHash<QRhiResource *, std::pair<VkAccessFlags, bool> > writtenResources;
         void reset() {
             writtenResources.clear();
         }
@@ -397,7 +424,8 @@ struct QVkCommandBuffer : public QRhiCommandBuffer
             DebugMarkerInsert,
             TransitionPassResources,
             Dispatch,
-            ExecuteSecondary
+            ExecuteSecondary,
+            SetShadingRate
         };
         Cmd cmd;
 
@@ -524,6 +552,10 @@ struct QVkCommandBuffer : public QRhiCommandBuffer
             struct {
                 VkCommandBuffer cb;
             } executeSecondary;
+            struct {
+                uint32_t w;
+                uint32_t h;
+            } setShadingRate;
         } args;
     };
 
@@ -576,6 +608,7 @@ struct QVkSwapChain : public QRhiSwapChain
 
     QSize surfacePixelSize() override;
     bool isFormatSupported(Format f) override;
+    QRhiSwapChainHdrInfo hdrInfo() override;
 
     QRhiRenderPassDescriptor *newCompatibleRenderPassDescriptor() override;
     bool createOrResize() override;
@@ -601,6 +634,7 @@ struct QVkSwapChain : public QRhiSwapChain
     QVkSwapChainRenderTarget rtWrapper;
     QVkSwapChainRenderTarget rtWrapperRight;
     QVkCommandBuffer cbWrapper;
+    VkImageView shadingRateMapView = VK_NULL_HANDLE;
 
     struct ImageResources {
         VkImage image = VK_NULL_HANDLE;
@@ -608,6 +642,7 @@ struct QVkSwapChain : public QRhiSwapChain
         VkFramebuffer fb = VK_NULL_HANDLE;
         VkImage msaaImage = VK_NULL_HANDLE;
         VkImageView msaaImageView = VK_NULL_HANDLE;
+        VkSemaphore drawSem = VK_NULL_HANDLE;
         enum LastUse {
             ScImageUseNone,
             ScImageUseRender,
@@ -618,10 +653,7 @@ struct QVkSwapChain : public QRhiSwapChain
     QVarLengthArray<ImageResources, EXPECTED_MAX_BUFFER_COUNT> imageRes;
 
     struct FrameResources {
-        VkFence imageFence = VK_NULL_HANDLE;
-        bool imageFenceWaitable = false;
         VkSemaphore imageSem = VK_NULL_HANDLE;
-        VkSemaphore drawSem = VK_NULL_HANDLE;
         bool imageAcquired = false;
         bool imageSemWaitable = false;
         VkFence cmdFence = VK_NULL_HANDLE;
@@ -637,6 +669,15 @@ struct QVkSwapChain : public QRhiSwapChain
     friend class QRhiVulkan;
 };
 
+class QVulkanAdapter : public QRhiAdapter
+{
+public:
+    QRhiDriverInfo info() const override;
+
+    VkPhysicalDevice physDev;
+    QRhiDriverInfo adapterInfo;
+};
+
 class QRhiVulkan : public QRhiImplementation
 {
 public:
@@ -644,6 +685,7 @@ public:
 
     bool create(QRhi::Flags flags) override;
     void destroy() override;
+    QRhi::AdapterList enumerateAdaptersBeforeCreate(QRhiNativeHandles *nativeHandles) const override;
 
     QRhiGraphicsPipeline *createGraphicsPipeline() override;
     QRhiComputePipeline *createComputePipeline() override;
@@ -671,6 +713,8 @@ public:
 
     QRhiTextureRenderTarget *createTextureRenderTarget(const QRhiTextureRenderTargetDescription &desc,
                                                        QRhiTextureRenderTarget::Flags flags) override;
+
+    QRhiShadingRateMap *createShadingRateMap() override;
 
     QRhiSwapChain *createSwapChain() override;
     QRhi::FrameOpResult beginFrame(QRhiSwapChain *swapChain, QRhi::BeginFrameFlags flags) override;
@@ -706,6 +750,7 @@ public:
     void setScissor(QRhiCommandBuffer *cb, const QRhiScissor &scissor) override;
     void setBlendConstants(QRhiCommandBuffer *cb, const QColor &c) override;
     void setStencilRef(QRhiCommandBuffer *cb, quint32 refValue) override;
+    void setShadingRate(QRhiCommandBuffer *cb, const QSize &coarsePixelSize) override;
 
     void draw(QRhiCommandBuffer *cb, quint32 vertexCount,
               quint32 instanceCount, quint32 firstVertex, quint32 firstInstance) override;
@@ -731,6 +776,7 @@ public:
     double lastCompletedGpuTime(QRhiCommandBuffer *cb) override;
 
     QList<int> supportedSampleCounts() const override;
+    QList<QSize> supportedShadingRates(int sampleCount) const override;
     int ubufAlignment() const override;
     bool isYUpInFramebuffer() const override;
     bool isYUpInNDC() const override;
@@ -743,6 +789,7 @@ public:
     QRhiDriverInfo driverInfo() const override;
     QRhiStats statistics() override;
     bool makeThreadLocalNativeContextCurrent() override;
+    void setQueueSubmitParams(QRhiNativeHandles *params) override;
     void releaseCachedResources() override;
     bool isDeviceLost() const override;
 
@@ -764,14 +811,18 @@ public:
     bool createDefaultRenderPass(QVkRenderPassDescriptor *rpD,
                                  bool hasDepthStencil,
                                  VkSampleCountFlagBits samples,
-                                 VkFormat colorFormat);
+                                 VkFormat colorFormat,
+                                 QRhiShadingRateMap *shadingRateMap);
     bool createOffscreenRenderPass(QVkRenderPassDescriptor *rpD,
-                                   const QRhiColorAttachment *firstColorAttachment,
-                                   const QRhiColorAttachment *lastColorAttachment,
+                                   const QRhiColorAttachment *colorAttachmentsBegin,
+                                   const QRhiColorAttachment *colorAttachmentsEnd,
                                    bool preserveColor,
                                    bool preserveDs,
+                                   bool storeDs,
                                    QRhiRenderBuffer *depthStencilBuffer,
-                                   QRhiTexture *depthTexture);
+                                   QRhiTexture *depthTexture,
+                                   QRhiTexture *depthResolveTexture,
+                                   QRhiShadingRateMap *shadingRateMap);
     bool ensurePipelineCache(const void *initialData = nullptr, size_t initialDataSize = 0);
     VkShaderModule createShader(const QByteArray &spirv);
 
@@ -781,7 +832,7 @@ public:
     QRhi::FrameOpResult startPrimaryCommandBuffer(VkCommandBuffer *cb);
     QRhi::FrameOpResult endAndSubmitPrimaryCommandBuffer(VkCommandBuffer cb, VkFence cmdFence,
                                                          VkSemaphore *waitSem, VkSemaphore *signalSem);
-    void waitCommandCompletion(int frameSlot);
+    QRhi::FrameOpResult waitCommandCompletion(int frameSlot);
     VkDeviceSize subresUploadByteSize(const QRhiTextureSubresourceUploadDescription &subresDesc) const;
     using BufferImageCopyList = QVarLengthArray<VkBufferImageCopy, 16>;
     void prepareUploadSubres(QVkTexture *texD, int layer, int level,
@@ -806,6 +857,7 @@ public:
     void executeDeferredReleases(bool forced = false);
     void finishActiveReadbacks(bool forced = false);
 
+    void setAllocationName(QVkAlloc allocation, const QByteArray &name, int slot = -1);
     void setObjectName(uint64_t object, VkObjectType type, const QByteArray &name, int slot = -1);
     void trackedBufferBarrier(QVkCommandBuffer *cbD, QVkBuffer *bufD, int slot,
                               VkAccessFlags access, VkPipelineStageFlags stage);
@@ -818,7 +870,7 @@ public:
                             VkPipelineStageFlags srcStage, VkPipelineStageFlags dstStage,
                             int startLayer, int layerCount,
                             int startLevel, int levelCount);
-    void updateShaderResourceBindings(QRhiShaderResourceBindings *srb, int descSetIdx = -1);
+    void updateShaderResourceBindings(QRhiShaderResourceBindings *srb);
     void ensureCommandPoolForNewFrame();
     double elapsedSecondsFromTimestamp(quint64 timestamp[2], bool *ok);
     void printExtraErrorInfo(VkResult err);
@@ -840,8 +892,11 @@ public:
     QVulkanDeviceFunctions *df = nullptr;
     QRhi::Flags rhiFlags;
     VkPhysicalDeviceFeatures physDevFeatures;
+#ifdef VK_VERSION_1_1
+    VkPhysicalDeviceMultiviewFeatures multiviewFeaturesIfApi11;
+#endif
 #ifdef VK_VERSION_1_2
-    VkPhysicalDeviceVulkan11Features physDevFeatures11;
+    VkPhysicalDeviceVulkan11Features physDevFeatures11IfApi12OrNewer;
     VkPhysicalDeviceVulkan12Features physDevFeatures12;
 #endif
 #ifdef VK_VERSION_1_3
@@ -852,6 +907,12 @@ public:
     VkDeviceSize texbufAlign;
     bool deviceLost = false;
     bool releaseCachedResourcesCalledBeforeFrameStart = false;
+
+#ifdef Q_OS_WIN
+    bool adapterLuidValid = false;
+    LUID adapterLuid;
+    QDxgiHdrInfo *dxgiHdrInfo = nullptr;
+#endif
 
 #ifdef VK_EXT_debug_utils
     PFN_vkSetDebugUtilsObjectNameEXT vkSetDebugUtilsObjectNameEXT = nullptr;
@@ -869,6 +930,10 @@ public:
     PFN_vkGetPhysicalDeviceSurfaceFormatsKHR vkGetPhysicalDeviceSurfaceFormatsKHR;
     PFN_vkGetPhysicalDeviceSurfacePresentModesKHR vkGetPhysicalDeviceSurfacePresentModesKHR;
 
+#ifdef VK_KHR_create_renderpass2
+    PFN_vkCreateRenderPass2KHR vkCreateRenderPass2KHR = nullptr;
+#endif
+
     struct {
         bool compute = false;
         bool wideLines = false;
@@ -879,7 +944,12 @@ public:
         bool geometryShader = false;
         bool nonFillPolygonMode = false;
         bool multiView = false;
+        bool renderPass2KHR = false;
+        bool depthStencilResolveKHR = false;
+        bool perDrawShadingRate = false;
+        bool imageBasedShadingRate = false;
         QVersionNumber apiVersion;
+        int imageBasedShadingRateTileSize = 0;
     } caps;
 
     VkPipelineCache pipelineCache = VK_NULL_HANDLE;
@@ -930,7 +1000,7 @@ public:
         VkBuffer stagingBuf;
         QVkAlloc stagingAlloc;
         quint32 byteSize;
-        QSize pixelSize;
+        QRect rect;
         QRhiTexture::Format format;
     };
     QVarLengthArray<TextureReadback, 2> activeTextureReadbacks;
@@ -993,6 +1063,9 @@ public:
                 VkFramebuffer fb;
                 VkImageView rtv[QVkRenderTargetData::MAX_COLOR_ATTACHMENTS];
                 VkImageView resrtv[QVkRenderTargetData::MAX_COLOR_ATTACHMENTS];
+                VkImageView dsv;
+                VkImageView resdsv;
+                VkImageView shadingRateMapView;
             } textureRenderTarget;
             struct {
                 VkRenderPass rp;
@@ -1007,6 +1080,16 @@ public:
         };
     };
     QList<DeferredReleaseEntry> releaseQueue;
+
+#ifdef VK_KHR_fragment_shading_rate
+    QVarLengthArray<VkPhysicalDeviceFragmentShadingRateKHR, 8> fragmentShadingRates;
+    PFN_vkCmdSetFragmentShadingRateKHR vkCmdSetFragmentShadingRateKHR = nullptr;
+#endif
+
+    QVarLengthArray<VkSemaphore, 4> waitSemaphoresForQueueSubmit;
+    QVarLengthArray<VkPipelineStageFlags, 4> semaphoresWaitMasksForQueueSubmit;
+    QVarLengthArray<VkSemaphore, 4> signalSemaphoresForQueueSubmit;
+    QVarLengthArray<VkSemaphore, 4> waitSemaphoresForPresent;
 };
 
 Q_DECLARE_TYPEINFO(QRhiVulkan::DescriptorPoolData, Q_RELOCATABLE_TYPE);

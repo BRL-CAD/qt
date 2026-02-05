@@ -1,5 +1,6 @@
 // Copyright (C) 2021 The Qt Company Ltd.
 // SPDX-License-Identifier: LicenseRef-Qt-Commercial OR LGPL-3.0-only OR GPL-2.0-only OR GPL-3.0-only
+// Qt-Security score:critical reason:data-parser
 
 #include "qlocale_p.h"
 
@@ -25,7 +26,7 @@ using namespace Qt::StringLiterals;
 ** Wrappers for Mac locale system functions
 */
 
-Q_LOGGING_CATEGORY(lcLocale, "qt.core.locale")
+Q_STATIC_LOGGING_CATEGORY(lcLocale, "qt.core.locale")
 
 static void printLocalizationInformation()
 {
@@ -344,7 +345,10 @@ static QVariant macToQtFormat(QStringView sys_fmt)
         case 'Y': // Year for Week-of-year calendars (1..n): 1..n = padded number
             break;
 
-        case 'u': // Extended Year (1..n): 2 = short year, 1 & 3..n = padded number
+        case 'u': // Extended Year (1..n), padded number.
+            // Explicitly has no special case for 'uu' as only the last two digits.
+            result += "yyyy"_L1;
+            break;
         case 'y': // Year (1..n): 2 = short year, 1 & 3..n = padded number
             // Qt only supports long (4) or short (2) year, use long for all others
             if (repeat == 2)
@@ -376,8 +380,8 @@ static QVariant macToQtFormat(QStringView sys_fmt)
         case 'a': // AM/PM (1..n): Qt supports no distinctions
         case 'b': // Like a, but also distinguishing noon, midnight (ignore difference).
         case 'B': // Flexible day period (at night, &c.)
-            // Translate to Qt uppercase AM/PM
-            result += "AP"_L1;
+            // Translate to Qt AM/PM, using locale-appropriate case:
+            result += "Ap"_L1;
             break;
         case 'h': // Hour [1..12] (1,2): 1,2 = padded number
         case 'K': // Hour [0..11] (1,2): 1,2 = padded number
@@ -400,13 +404,19 @@ static QVariant macToQtFormat(QStringView sys_fmt)
                 result += "zzz"_L1;
             break;
         case 'O': // Time Zone (1, 4)
+            result += u't';
+            break;
         case 'v': // Time Zone (1, 4)
         case 'V': // Time Zone (1..4)
+            result += "tttt"_L1;
+            break;
         case 'x': // Time Zone (1..5)
         case 'X': // Time Zone (1..5)
+            result += (repeat > 1 && (repeat & 1)) ? "ttt"_L1 : "tt"_L1;
+            break;
         case 'z': // Time Zone (1..4)
         case 'Z': // Time Zone (1..5)
-            result += u't';
+            result += repeat < 4 ? "tt"_L1 : repeat > 4 ? "ttt"_L1 : "t"_L1;
             break;
         default:
             // a..z and A..Z are reserved for format codes, so any occurrence of these not
@@ -421,6 +431,28 @@ static QVariant macToQtFormat(QStringView sys_fmt)
     }
 
     return !result.isEmpty() ? QVariant::fromValue(result) : QVariant();
+}
+
+static QVariant getGroupingSizes()
+{
+    // It does not seem like you can directly query the group sizes from CFLocale as there
+    // is no key that corresponds to it, see:
+    // https://developer.apple.com/documentation/corefoundation/cflocalekey
+    // We have to create a number formatter for the locale and query the data from there.
+    // see: https://developer.apple.com/documentation/corefoundation/1390801-cfnumberformattercopyproperty
+    QLocaleData::GroupSizes sizes;
+    QCFType<CFLocaleRef> locale = CFLocaleCopyCurrent();
+    QCFType<CFNumberFormatterRef> numberFormatter =
+            CFNumberFormatterCreate(NULL, locale, kCFNumberFormatterDecimalStyle);
+    CFTypeRef numTref =
+            CFNumberFormatterCopyProperty(numberFormatter, kCFNumberFormatterGroupingSize);
+    CFNumberRef num = static_cast<CFNumberRef>(numTref);
+    int value;
+    if (CFNumberGetValue(num, kCFNumberIntType, &value) && value > 0) {
+        sizes.least = value;
+        sizes.higher = value;
+    }
+    return QVariant::fromValue(sizes);
 }
 
 static QVariant getMacDateFormat(CFDateFormatterStyle style)
@@ -585,6 +617,8 @@ QVariant QSystemLocale::query(QueryType type, QVariant &&in) const
         return getLocaleValue<QLocalePrivate::codeToScript>(kCFLocaleScriptCode);
     case DecimalPoint:
         return getCFLocaleValue(kCFLocaleDecimalSeparator);
+    case Grouping:
+        return getGroupingSizes();
     case GroupSeparator:
         return getCFLocaleValue(kCFLocaleGroupingSeparator);
     case DateFormatLong:
@@ -663,5 +697,41 @@ QVariant QSystemLocale::query(QueryType type, QVariant &&in) const
 }
 
 #endif // QT_NO_SYSTEMLOCALE
+
+#if !QT_CONFIG(icu)
+
+static QString localeConvertString(const QByteArray &localeID, const QString &str, bool *ok,
+                                   bool toLowerCase)
+{
+    QMacAutoReleasePool pool;
+    Q_ASSERT(ok);
+    NSString *localestring = [[NSString alloc] initWithData:localeID.toNSData()
+                                                   encoding:NSUTF8StringEncoding];
+    NSLocale *locale = [NSLocale localeWithLocaleIdentifier:localestring];
+    if (!locale) {
+        *ok = false;
+        return QString();
+    }
+    *ok = true;
+    NSString *nsstring = str.toNSString();
+    if (toLowerCase)
+        nsstring = [nsstring lowercaseStringWithLocale:locale];
+    else
+        nsstring = [nsstring uppercaseStringWithLocale:locale];
+
+    return QString::fromNSString(nsstring);
+}
+
+QString QLocalePrivate::toLower(const QString &str, bool *ok) const
+{
+    return localeConvertString(bcp47Name('-'), str, ok, true);
+}
+
+QString QLocalePrivate::toUpper(const QString &str, bool *ok) const
+{
+    return localeConvertString(bcp47Name('-'), str, ok, false);
+}
+
+#endif
 
 QT_END_NAMESPACE

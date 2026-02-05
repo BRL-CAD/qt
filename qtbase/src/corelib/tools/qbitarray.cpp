@@ -23,6 +23,8 @@ QT_BEGIN_NAMESPACE
     \ingroup shared
     \reentrant
 
+    \compares equality
+
     A QBitArray is an array that gives access to individual bits and
     provides operators (\l{operator&()}{AND}, \l{operator|()}{OR},
     \l{operator^()}{XOR}, and \l{operator~()}{NOT}) that work on
@@ -77,6 +79,7 @@ QT_BEGIN_NAMESPACE
     \sa QByteArray, QList
 */
 
+#if QT_VERSION < QT_VERSION_CHECK(7, 0, 0)
 /*!
     \fn QBitArray::QBitArray(QBitArray &&other)
 
@@ -85,6 +88,7 @@ QT_BEGIN_NAMESPACE
 
     \since 5.2
 */
+#endif
 
 /*! \fn QBitArray::QBitArray()
 
@@ -463,6 +467,7 @@ quint32 QBitArray::toUInt32(QSysInfo::Endian endianness, bool *ok) const noexcep
     \overload
 */
 
+#if QT_VERSION < QT_VERSION_CHECK(7, 0, 0)
 /*! \fn QBitArray::QBitArray(const QBitArray &other) noexcept
 
     Constructs a copy of \a other.
@@ -487,25 +492,24 @@ quint32 QBitArray::toUInt32(QSysInfo::Endian endianness, bool *ok) const noexcep
     Moves \a other to this bit array and returns a reference to
     this bit array.
 */
+#endif // Qt 6
 
 /*! \fn void QBitArray::swap(QBitArray &other)
     \since 4.8
-
-    Swaps bit array \a other with this bit array. This operation is very
-    fast and never fails.
+    \memberswap{bit array}
 */
 
-/*! \fn bool QBitArray::operator==(const QBitArray &other) const
+/*! \fn bool QBitArray::operator==(const QBitArray &lhs, const QBitArray &rhs)
 
-    Returns \c true if \a other is equal to this bit array; otherwise
+    Returns \c true if \a lhs is equal to \a rhs bit array; otherwise
     returns \c false.
 
     \sa operator!=()
 */
 
-/*! \fn bool QBitArray::operator!=(const QBitArray &other) const
+/*! \fn bool QBitArray::operator!=(const QBitArray &lhs, const QBitArray &rhs)
 
-    Returns \c true if \a other is not equal to this bit array;
+    Returns \c true if \a lhs is not equal to \a rhs bit array;
     otherwise returns \c false.
 
     \sa operator==()
@@ -525,18 +529,23 @@ static QBitArray sizedForOverwrite(const QBitArray &a1, const QBitArray &a2)
     QByteArrayData bytes(n, n);
 
     // initialize the count of bits in the last byte (see construction note)
-    if (n1 > n2)
+    // and the QByteArray null termination (some of our algorithms read it)
+    if (n1 > n2) {
         *bytes.ptr = *d1.ptr;
-    else if (n2 > n1)
+        bytes.ptr[n1] = 0;
+    } else if (n2 > n1) {
         *bytes.ptr = *d2.ptr;
-    else if (n1)        // n1 == n2
+        bytes.ptr[n2] = 0;
+    } else if (n1) {    // n1 == n2
         *bytes.ptr = qMin(*d1.ptr, *d2.ptr);
+        bytes.ptr[n1] = 0;
+    }
 
     result.data_ptr() = std::move(bytes);
     return result;
 }
 
-template <typename BitwiseOp> static Q_NEVER_INLINE
+template <typename BitwiseOp> Q_NEVER_INLINE static
 QBitArray &performBitwiseOperationHelper(QBitArray &out, const QBitArray &a1,
                                          const QBitArray &a2, BitwiseOp op)
 {
@@ -572,7 +581,7 @@ QBitArray &performBitwiseOperationHelper(QBitArray &out, const QBitArray &a1,
     return out;
 }
 
-template <typename BitwiseOp> static Q_NEVER_INLINE
+template <typename BitwiseOp> Q_NEVER_INLINE static
 QBitArray &performBitwiseOperationInCopy(QBitArray &self, const QBitArray &other, BitwiseOp op)
 {
     QBitArray tmp(std::move(self));
@@ -580,7 +589,7 @@ QBitArray &performBitwiseOperationInCopy(QBitArray &self, const QBitArray &other
     return performBitwiseOperationHelper(self, tmp, other, op);
 }
 
-template <typename BitwiseOp> static Q_NEVER_INLINE
+template <typename BitwiseOp> Q_NEVER_INLINE static
 QBitArray &performBitwiseOperationInPlace(QBitArray &self, const QBitArray &other, BitwiseOp op)
 {
     if (self.size() < other.size())

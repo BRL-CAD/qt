@@ -19,11 +19,15 @@
 #include <QString>
 #include <QPoint>
 #include <QEvent>
+#include <QLoggingCategory>
+
 #include <private/qglobal_p.h>
 
 #include <memory>
 
 QT_BEGIN_NAMESPACE
+
+Q_DECLARE_LOGGING_CATEGORY(qLcEvdevMouse)
 
 class QSocketNotifier;
 
@@ -45,7 +49,9 @@ private:
     QEvdevMouseHandler(const QString &device, int fd, bool abs, bool compression, int jitterLimit);
 
     void sendMouseEvent();
+#ifndef Q_OS_VXWORKS
     bool getHardwareMaximum();
+#endif
     void detectHiResWheelSupport();
 
     QString m_device;

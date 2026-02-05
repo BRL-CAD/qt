@@ -1,5 +1,6 @@
 // Copyright (C) 2020 The Qt Company Ltd.
 // SPDX-License-Identifier: LicenseRef-Qt-Commercial OR LGPL-3.0-only OR GPL-2.0-only OR GPL-3.0-only
+// Qt-Security score:significant reason:default
 
 #include <QtPrintSupport/qtprintsupportglobal.h>
 
@@ -1221,7 +1222,7 @@ void QWin32PrintEngine::setProperty(PrintEnginePropertyKey key, const QVariant &
         const bool isFullPage = (d->m_pageLayout.mode() == QPageLayout::FullPageMode);
         QVariant orientation = QVariant::fromValue(d->m_pageLayout.orientation());
         QVariant margins = QVariant::fromValue(
-            QPair<QMarginsF, QPageLayout::Unit>(d->m_pageLayout.margins(), d->m_pageLayout.units()));
+            std::pair<QMarginsF, QPageLayout::Unit>(d->m_pageLayout.margins(), d->m_pageLayout.units()));
         QPrintDevice printDevice = ps->createPrintDevice(id.isEmpty() ? ps->defaultPrintDeviceId() : id);
         if (printDevice.isValid()) {
             d->m_printDevice = printDevice;
@@ -1285,7 +1286,8 @@ void QWin32PrintEngine::setProperty(PrintEnginePropertyKey key, const QVariant &
         Q_ASSERT(margins.size() == 4);
         d->m_pageLayout.setUnits(QPageLayout::Point);
         d->m_pageLayout.setMargins(QMarginsF(margins.at(0).toReal(), margins.at(1).toReal(),
-                                             margins.at(2).toReal(), margins.at(3).toReal()));
+                                             margins.at(2).toReal(), margins.at(3).toReal()),
+                                   QPageLayout::OutOfBoundsPolicy::Clamp);
         d->updateMetrics();
 #ifdef QT_DEBUG_METRICS
         qDebug() << "QWin32PrintEngine::setProperty(PPK_PageMargins," << margins << ')';
@@ -1311,9 +1313,9 @@ void QWin32PrintEngine::setProperty(PrintEnginePropertyKey key, const QVariant &
     }
 
     case PPK_QPageMargins: {
-        QPair<QMarginsF, QPageLayout::Unit> pair = value.value<QPair<QMarginsF, QPageLayout::Unit> >();
+        auto pair = value.value<std::pair<QMarginsF, QPageLayout::Unit>>();
         d->m_pageLayout.setUnits(pair.second);
-        d->m_pageLayout.setMargins(pair.first);
+        d->m_pageLayout.setMargins(pair.first, QPageLayout::OutOfBoundsPolicy::Clamp);
         d->updateMetrics();
 #ifdef QT_DEBUG_METRICS
         qDebug() << "QWin32PrintEngine::setProperty(PPK_QPageMargins," << pair.first << pair.second << ')';
@@ -1329,7 +1331,7 @@ void QWin32PrintEngine::setProperty(PrintEnginePropertyKey key, const QVariant &
             setProperty(PPK_FullPage, pageLayout.mode() == QPageLayout::FullPageMode);
             setProperty(PPK_Orientation, QVariant::fromValue(pageLayout.orientation()));
             d->m_pageLayout.setUnits(pageLayout.units());
-            d->m_pageLayout.setMargins(pageLayout.margins());
+            d->m_pageLayout.setMargins(pageLayout.margins(), QPageLayout::OutOfBoundsPolicy::Clamp);
             d->updateMetrics();
 #ifdef QT_DEBUG_METRICS
             qDebug() << "QWin32PrintEngine::setProperty(PPK_QPageLayout," << pageLayout << ')';
@@ -1517,7 +1519,7 @@ QVariant QWin32PrintEngine::property(PrintEnginePropertyKey key) const
         break;
 
     case PPK_QPageMargins: {
-        QPair<QMarginsF, QPageLayout::Unit> pair = qMakePair(d->m_pageLayout.margins(), d->m_pageLayout.units());
+        std::pair<QMarginsF, QPageLayout::Unit> pair(d->m_pageLayout.margins(), d->m_pageLayout.units());
         value.setValue(pair);
         break;
     }
@@ -1707,7 +1709,8 @@ void QWin32PrintEnginePrivate::updateMetrics()
     m_paintSizeMM = QSize(qRound(sizeMM.width()), qRound(sizeMM.height()));
     // Calculate the origin using the physical device pixels, not our paint pixels
     // Origin is defined as User Margins - Device Margins
-    QMarginsF margins = m_pageLayout.margins(QPageLayout::Millimeter) / 25.4;
+    const bool isFullPage = (m_pageLayout.mode() == QPageLayout::FullPageMode);
+    const QMarginsF margins = isFullPage ? QMarginsF() : (m_pageLayout.margins(QPageLayout::Millimeter) / 25.4);
     origin_x = qRound(pageScaleX * margins.left() * dpi_x) - GetDeviceCaps(hdc, PHYSICALOFFSETX);
     origin_y = qRound(pageScaleY * margins.top() * dpi_y) - GetDeviceCaps(hdc, PHYSICALOFFSETY);
 }

@@ -1,5 +1,6 @@
 // Copyright (C) 2016 The Qt Company Ltd.
 // SPDX-License-Identifier: LicenseRef-Qt-Commercial OR LGPL-3.0-only OR GPL-2.0-only OR GPL-3.0-only
+// Qt-Security score:critical reason:data-parser
 
 #include "qsql_sqlite_p.h"
 
@@ -7,6 +8,7 @@
 #include <qdatetime.h>
 #include <qdebug.h>
 #include <qlist.h>
+#include <qloggingcategory.h>
 #include <qsqlerror.h>
 #include <qsqlfield.h>
 #include <qsqlindex.h>
@@ -37,6 +39,8 @@ Q_DECLARE_OPAQUE_POINTER(sqlite3_stmt*)
 Q_DECLARE_METATYPE(sqlite3_stmt*)
 
 QT_BEGIN_NAMESPACE
+
+Q_STATIC_LOGGING_CATEGORY(lcSqlite, "qt.sql.sqlite")
 
 using namespace Qt::StringLiterals;
 
@@ -131,7 +135,7 @@ QSqlIndex QSQLiteDriverPrivate::getTableInfo(QSqlQuery &query, const QString &ta
         }
     }
 
-    query.exec("PRAGMA "_L1 + schema + "table_info ("_L1 + table + u')');
+    query.exec("PRAGMA "_L1 + schema + "table_xinfo ("_L1 + table + u')');
     QSqlIndex ind;
     while (query.next()) {
         bool isPk = query.value(5).toInt();
@@ -247,7 +251,6 @@ void QSQLiteResultPrivate::initColumns(bool emptyResultset)
         }
 
         QSqlField fld(colName, QMetaType(fieldType), tableName);
-        fld.setSqlType(stp);
         rInf.append(fld);
     }
 }
@@ -804,7 +807,7 @@ bool QSQLiteDriver::open(const QString & db, const QString &, const QString &, c
         }
 #endif
         else
-            qWarning("Unsupported option '%ls'", qUtf16Printable(option.toString()));
+            qCWarning(lcSqlite, "Unsupported option '%ls'", qUtf16Printable(option.toString()));
     }
 
     int openMode = (openReadOnlyOption ? SQLITE_OPEN_READONLY : (SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE));
@@ -815,7 +818,7 @@ bool QSQLiteDriver::open(const QString & db, const QString &, const QString &, c
 #if defined(SQLITE_OPEN_NOFOLLOW)
         openMode |= SQLITE_OPEN_NOFOLLOW;
 #else
-        qWarning("SQLITE_OPEN_NOFOLLOW not supported with the SQLite version %s", sqlite3_libversion());
+        qCWarning(lcSqlite, "SQLITE_OPEN_NOFOLLOW not supported with the SQLite version %s", sqlite3_libversion());
 #endif
     }
 
@@ -1056,12 +1059,13 @@ bool QSQLiteDriver::subscribeToNotification(const QString &name)
 {
     Q_D(QSQLiteDriver);
     if (!isOpen()) {
-        qWarning("Database not open.");
+        qCWarning(lcSqlite, "QSQLiteDriver::subscribeToNotification: Database not open.");
         return false;
     }
 
     if (d->notificationid.contains(name)) {
-        qWarning("Already subscribing to '%ls'.", qUtf16Printable(name));
+        qCWarning(lcSqlite, "QSQLiteDriver::subscribeToNotification: Already subscribing to '%ls'.",
+                  qUtf16Printable(name));
         return false;
     }
 
@@ -1077,12 +1081,13 @@ bool QSQLiteDriver::unsubscribeFromNotification(const QString &name)
 {
     Q_D(QSQLiteDriver);
     if (!isOpen()) {
-        qWarning("Database not open.");
+        qCWarning(lcSqlite, "QSQLiteDriver::unsubscribeFromNotification: Database not open.");
         return false;
     }
 
     if (!d->notificationid.contains(name)) {
-        qWarning("Not subscribed to '%ls'.", qUtf16Printable(name));
+        qCWarning(lcSqlite, "QSQLiteDriver::unsubscribeFromNotification: Not subscribed to '%ls'.",
+                  qUtf16Printable(name));
         return false;
     }
 

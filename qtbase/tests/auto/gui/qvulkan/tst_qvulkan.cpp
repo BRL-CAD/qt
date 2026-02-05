@@ -5,10 +5,15 @@
 #include <QtGui/QVulkanFunctions>
 #include <QtGui/QVulkanWindow>
 #include <QtCore/qvarlengtharray.h>
+#include <QtCore/qelapsedtimer.h>
 
 #include <QTest>
 
 #include <QSignalSpy>
+
+#ifdef Q_OS_ANDROID
+#include <android/api-level.h>
+#endif
 
 class tst_QVulkan : public QObject
 {
@@ -81,17 +86,13 @@ void tst_QVulkan::vulkanCheckSupported()
 
     if (inst.create()) { // skip the rest when Vulkan is not supported at all
         QVERIFY(!ve.isEmpty());
-        QVERIFY(ve == inst.supportedExtensions());
-        QVERIFY(supportedApiVersion.majorVersion() >= 1);
+        QCOMPARE(ve, inst.supportedExtensions());
+        QCOMPARE_GE(supportedApiVersion.majorVersion(), 1);
     }
 }
 
 void tst_QVulkan::vulkan11()
 {
-#ifdef Q_OS_ANDROID
-    if (QNativeInterface::QAndroidApplication::sdkVersion() >= 31)
-        QSKIP("Fails on Android 12 (QTBUG-105739)");
-#endif
 #if VK_VERSION_1_1
     QVulkanInstance inst;
     if (inst.supportedApiVersion() < QVersionNumber(1, 1))
@@ -117,6 +118,11 @@ void tst_QVulkan::vulkan11()
         err = f->vkEnumeratePhysicalDeviceGroups(inst.vkInstance(), &count, groupProperties.data()); // 1.1 API
         QCOMPARE(err, VK_SUCCESS);
         for (const VkPhysicalDeviceGroupProperties &gp : groupProperties) {
+#ifdef Q_OS_ANDROID
+            QEXPECT_FAIL("",
+                "VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_GROUP_PROPERTIES check fails on Android",
+                Continue);
+#endif
             QCOMPARE(gp.sType, VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_GROUP_PROPERTIES);
             for (uint32_t i = 0; i != gp.physicalDeviceCount; ++i) {
                 VkPhysicalDevice physDev = gp.physicalDevices[i];
@@ -167,9 +173,9 @@ void tst_QVulkan::vulkan11()
 void tst_QVulkan::vulkanPlainWindow()
 {
 #ifdef Q_OS_ANDROID
-    QSKIP("Fails on Android 7 emulator (QTBUG-108328)");
+    if (QNativeInterface::QAndroidApplication::sdkVersion() < __ANDROID_API_Q__)
+        QSKIP ("Versions prior to Android 10 didn't have full Vulkan support.");
 #endif
-
     QVulkanInstance inst;
     if (!inst.create())
         QSKIP("Vulkan init failed; skip");
@@ -298,7 +304,7 @@ void tst_QVulkan::vulkanWindow()
     QVERIFY(w.graphicsCommandPool() != VK_NULL_HANDLE);
     QVERIFY(w.defaultRenderPass() != VK_NULL_HANDLE);
 
-    QVERIFY(w.concurrentFrameCount() > 0);
+    QCOMPARE_GT(w.concurrentFrameCount(), 0);
     QVERIFY(w.concurrentFrameCount() <= QVulkanWindow::MAX_CONCURRENT_FRAME_COUNT);
 }
 
@@ -439,28 +445,24 @@ void tst_QVulkan::vulkanWindowRenderer()
     if (w.availablePhysicalDevices().isEmpty())
         QSKIP("No Vulkan physical devices; skip");
 
-    QVERIFY(testVulkan.preInitResCount == 1);
-    QVERIFY(testVulkan.initResCount == 1);
-    QVERIFY(testVulkan.initSwcResCount == 1);
+    QCOMPARE(testVulkan.preInitResCount, 1);
+    QCOMPARE(testVulkan.initResCount, 1);
+    QCOMPARE(testVulkan.initSwcResCount, 1);
     // this has to be QTRY due to the async update in QVulkanWindowPrivate::ensureStarted()
     QTRY_VERIFY(testVulkan.startNextFrameCount >= 1);
 
     QVERIFY(!w.swapChainImageSize().isEmpty());
-    QVERIFY(w.colorFormat() != VK_FORMAT_UNDEFINED);
-    QVERIFY(w.depthStencilFormat() != VK_FORMAT_UNDEFINED);
+    QCOMPARE_NE(w.colorFormat(), VK_FORMAT_UNDEFINED);
+    QCOMPARE_NE(w.depthStencilFormat(), VK_FORMAT_UNDEFINED);
 
     w.destroy();
     waitForUnexposed(&w);
-    QVERIFY(testVulkan.releaseSwcResCount == 1);
-    QVERIFY(testVulkan.releaseResCount == 1);
+    QCOMPARE(testVulkan.releaseSwcResCount, 1);
+    QCOMPARE(testVulkan.releaseResCount, 1);
 }
 
 void tst_QVulkan::vulkanWindowGrab()
 {
-#ifdef Q_OS_ANDROID
-    if (QNativeInterface::QAndroidApplication::sdkVersion() >= 31)
-        QSKIP("Fails on Android 12 (QTBUG-105739)");
-#endif
     QVulkanInstance inst;
     inst.setLayers(QByteArrayList() << "VK_LAYER_KHRONOS_validation");
     if (!inst.create())
@@ -506,9 +508,9 @@ void tst_QVulkan::vulkanWindowGrab()
     int greenFuzz = qAbs(qGreen(a) - qGreen(refPixel));
     int blueFuzz = qAbs(qBlue(a) - qBlue(refPixel));
 
-    QVERIFY(redFuzz <= 1);
-    QVERIFY(blueFuzz <= 1);
-    QVERIFY(greenFuzz <= 1);
+    QCOMPARE_LE(redFuzz, 1);
+    QCOMPARE_LE(blueFuzz, 1);
+    QCOMPARE_LE(greenFuzz, 1);
 
     w.destroy();
 }

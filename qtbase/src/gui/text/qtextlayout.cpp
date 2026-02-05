@@ -1,5 +1,6 @@
 // Copyright (C) 2016 The Qt Company Ltd.
 // SPDX-License-Identifier: LicenseRef-Qt-Commercial OR LGPL-3.0-only OR GPL-2.0-only OR GPL-3.0-only
+// Qt-Security score:critical reason:data-parser
 
 #include "qtextlayout.h"
 #include "qtextengine_p.h"
@@ -1039,7 +1040,7 @@ QList<QGlyphRun> QTextLayout::glyphRuns(int from,
     if (length < 0)
         length = text().size();
 
-    QHash<QPair<QFontEngine *, int>, QGlyphRun> glyphRunHash;
+    QHash<std::pair<QFontEngine *, int>, QGlyphRun> glyphRunHash;
     for (int i=0; i<d->lines.size(); ++i) {
         if (d->lines.at(i).from > from + length)
             break;
@@ -1050,7 +1051,7 @@ QList<QGlyphRun> QTextLayout::glyphRuns(int from,
 
                 QFontEngine *fontEngine = rawFont.d->fontEngine;
                 QGlyphRun::GlyphRunFlags flags = glyphRun.flags();
-                QPair<QFontEngine *, int> key(fontEngine, int(flags));
+                std::pair<QFontEngine *, int> key(fontEngine, int(flags));
                 // merge the glyph runs using the same font
                 QGlyphRun &oldGlyphRun = glyphRunHash[key];
                 if (oldGlyphRun.isEmpty()) {
@@ -1860,7 +1861,10 @@ void QTextLine::layout_helper(int maxGlyphs)
 
     bool manuallyWrapped = false;
     bool hasInlineObject = false;
+    bool reachedEndOfLine = false;
     QFixed maxInlineObjectHeight = 0;
+
+    const bool includeTrailingSpaces = eng->option.flags() & QTextOption::IncludeTrailingSpaces;
 
     while (newItem < eng->layoutData->items.size()) {
         lbh.resetRightBearing();
@@ -1951,17 +1955,22 @@ void QTextLine::layout_helper(int maxGlyphs)
                 }
             }
 
-            hasInlineObject = true;
-            maxInlineObjectHeight = qMax(maxInlineObjectHeight, current.ascent + current.descent);
-
             lbh.tmpData.textWidth += current.width;
 
             newItem = item + 1;
             ++lbh.glyphCount;
             if (lbh.checkFullOtherwiseExtend(line))
                 goto found;
+
+            hasInlineObject = true;
+            maxInlineObjectHeight = qMax(maxInlineObjectHeight, current.ascent + current.descent);
+
         } else if (attributes[lbh.currentPosition].whiteSpace
                    && eng->layoutData->string.at(lbh.currentPosition).decompositionTag() != QChar::NoBreak) {
+            // If we are adding a space block, we save the last non-whitespace glyph for calculating
+            // the right bearing later
+            if (lbh.currentPosition > 0 && !attributes[lbh.currentPosition - 1].whiteSpace)
+                lbh.saveCurrentGlyph();
             lbh.whiteSpaceOrObject = true;
             while (lbh.currentPosition < end
                    && attributes[lbh.currentPosition].whiteSpace
@@ -1975,7 +1984,15 @@ void QTextLine::layout_helper(int maxGlyphs)
 
             lbh.whiteSpaceOrObject = false;
             bool sb_or_ws = false;
-            lbh.saveCurrentGlyph();
+            // We save the previous glyph so we can use it for calculating the right bearing
+            // later. If we are trimming trailing spaces, the previous glyph is whitespace
+            // and we have already recorded a non-whitespace glyph, we keep that one instead.
+            if (lbh.currentPosition == 0
+                || lbh.previousGlyph == 0
+                || includeTrailingSpaces
+                || !attributes[lbh.currentPosition - 1].whiteSpace) {
+                lbh.saveCurrentGlyph();
+            }
             QFixed accumulatedTextWidth;
             do {
                 addNextCluster(lbh.currentPosition, end, lbh.tmpData, lbh.glyphCount,
@@ -2072,6 +2089,7 @@ void QTextLine::layout_helper(int maxGlyphs)
             newItem = item + 1;
     }
     LB_DEBUG("reached end of line");
+    reachedEndOfLine = true;
     lbh.checkFullOtherwiseExtend(line);
     line.textWidth += lbh.commitedSoftHyphenWidth;
 found:
@@ -2082,6 +2100,7 @@ found:
         lbh.calculateRightBearing();
 
     // Then apply any negative right bearing
+    const QFixed textWidthWithoutBearing = line.textWidth;
     line.textWidth += lbh.negativeRightBearing();
 
     if (line.length == 0) {
@@ -2136,9 +2155,7 @@ found:
            line.descent.toReal(), line.textWidth.toReal(), lbh.spaceData.width.toReal());
     LB_DEBUG("        : '%s'", eng->layoutData->string.mid(line.from, line.length).toUtf8().data());
 
-    const QFixed trailingSpace = (eng->option.flags() & QTextOption::IncludeTrailingSpaces
-                              ? lbh.spaceData.textWidth
-                              : QFixed(0));
+    const QFixed trailingSpace = (includeTrailingSpaces ? lbh.spaceData.textWidth : QFixed(0));
     if (eng->option.wrapMode() == QTextOption::WrapAtWordBoundaryOrAnywhere) {
         if ((lbh.maxGlyphs != INT_MAX && lbh.glyphCount > lbh.maxGlyphs)
             || (lbh.maxGlyphs == INT_MAX && line.textWidth > (line.width -  trailingSpace))) {
@@ -2155,7 +2172,11 @@ found:
         eng->maxWidth = qMax(eng->maxWidth, line.textWidth);
     } else {
         eng->minWidth = qMax(eng->minWidth, lbh.minw);
-        if (qAddOverflow(eng->layoutData->currentMaxWidth, line.textWidth, &eng->layoutData->currentMaxWidth))
+
+        const QFixed actualTextWidth = manuallyWrapped || reachedEndOfLine
+                                           ? line.textWidth
+                                           : textWidthWithoutBearing;
+        if (qAddOverflow(eng->layoutData->currentMaxWidth, actualTextWidth, &eng->layoutData->currentMaxWidth))
             eng->layoutData->currentMaxWidth = QFIXED_MAX;
         if (!manuallyWrapped) {
             if (qAddOverflow(eng->layoutData->currentMaxWidth, lbh.spaceData.textWidth, &eng->layoutData->currentMaxWidth))

@@ -52,7 +52,8 @@ void QWindowsBackingStore::flush(QWindow *window, const QRegion &region,
 
     const bool hasAlpha = rw->format().hasAlpha();
     const Qt::WindowFlags flags = window->flags();
-    if ((flags & Qt::FramelessWindowHint) && QWindowsWindow::setWindowLayered(rw->handle(), flags, hasAlpha, rw->opacity()) && hasAlpha) {
+    // Note: This condition must be in sync with setWindowOpacity. FIXME: Improve this :)
+    if (rw->isLayered() && hasAlpha && QWindowsWindow::hasNoNativeFrame(rw->handle(), flags)) {
         // Windows with alpha: Use blend function to update.
         QRect r = QHighDpi::toNativePixels(window->frameGeometry(), window);
         QMargins frameMargins = rw->frameMargins();
@@ -117,7 +118,7 @@ void QWindowsBackingStore::resize(const QSize &size, const QRegion &region)
         if (QImage::toPixelFormat(format).alphaUsage() == QPixelFormat::UsesAlpha)
             m_alphaNeedsFill = true;
         else // upgrade but here we know app painting does not rely on alpha hence no need to fill
-            format = qt_maybeAlphaVersionWithSameDepth(format);
+            format = qt_maybeDataCompatibleAlphaVersion(format);
 
         QWindowsNativeImage *oldwni = m_image.data();
         auto *newwni = new QWindowsNativeImage(size.width(), size.height(), format);

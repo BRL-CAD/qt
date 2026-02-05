@@ -21,6 +21,9 @@
 #include FT_FREETYPE_H
 #include FT_MULTIPLE_MASTERS_H
 
+#if defined(FT_COLOR_H)
+#  include FT_COLOR_H
+#endif
 
 #ifndef Q_OS_WIN
 #include <unistd.h>
@@ -29,11 +32,19 @@
 #include <qmutex.h>
 
 #include <string.h>
+#include <qpainterpath.h>
+
+#include <utility> // for std::pair
 
 QT_BEGIN_NAMESPACE
 
 class QFontEngineFTRawFont;
 class QFontconfigDatabase;
+class QColrPaintGraphRenderer;
+
+#if defined(FT_COLOR_H) && (FREETYPE_MAJOR*10000 + FREETYPE_MINOR*100 + FREETYPE_PATCH) >= 21300
+#  define QFONTENGINE_FT_SUPPORT_COLRV1
+#endif
 
 /*
  * This class represents one font file on disk (like Arial.ttf) and is shared between all the font engines
@@ -82,6 +93,11 @@ public:
     static void addGlyphToPath(FT_Face face, FT_GlyphSlot g, const QFixedPoint &point, QPainterPath *path, FT_Fixed x_scale, FT_Fixed y_scale);
     static void addBitmapToPath(FT_GlyphSlot slot, const QFixedPoint &point, QPainterPath *path);
 
+    inline QList<QFontVariableAxis> variableAxes() const
+    {
+        return variableAxisList;
+    }
+
 private:
     friend class QFontEngineFT;
     friend class QtFreetypeData;
@@ -93,6 +109,7 @@ private:
     QByteArray fontData;
 
     QFontEngine::Holder hbFace;
+    QList<QFontVariableAxis> variableAxisList;
 };
 
 class Q_GUI_EXPORT QFontEngineFT : public QFontEngine
@@ -174,6 +191,7 @@ private:
     QFixed underlinePosition() const override;
 
     glyph_t glyphIndex(uint ucs4) const override;
+    QString glyphName(glyph_t index) const override;
     void doKerning(QGlyphLayout *, ShaperFlags) const override;
 
     void getUnscaledGlyph(glyph_t glyph, QPainterPath *path, glyph_metrics_t *metrics) override;
@@ -185,7 +203,7 @@ private:
     void addOutlineToPath(qreal x, qreal y, const QGlyphLayout &glyphs,
                   QPainterPath *path, QTextItem::RenderFlags flags) override;
 
-    bool stringToCMap(const QChar *str, int len, QGlyphLayout *glyphs, int *nglyphs, ShaperFlags flags) const override;
+    int stringToCMap(const QChar *str, int len, QGlyphLayout *glyphs, int *nglyphs, ShaperFlags flags) const override;
 
     glyph_metrics_t boundingBox(const QGlyphLayout &glyphs) override;
     glyph_metrics_t boundingBox(glyph_t glyph) override;
@@ -213,6 +231,8 @@ private:
 
     int glyphCount() const override;
 
+    QList<QFontVariableAxis> variableAxes() const override;
+
     enum Scaling {
         Scaled,
         Unscaled
@@ -232,10 +252,19 @@ private:
                             GlyphFormat format = Format_None,
                             bool fetchMetricsOnly = false,
                             bool disableOutlineDrawing = false) const
-    { return loadGlyph(cacheEnabled ? &defaultGlyphSet : nullptr, glyph, subPixelPosition, format, fetchMetricsOnly, disableOutlineDrawing); }
+    {
+        return loadGlyph(cacheEnabled ? &defaultGlyphSet : nullptr,
+                         glyph,
+                         subPixelPosition,
+                         QColor(),
+                         format,
+                         fetchMetricsOnly,
+                         disableOutlineDrawing);
+    }
     Glyph *loadGlyph(QGlyphSet *set,
                      uint glyph,
                      const QFixedPoint &subPixelPosition,
+                     QColor color,
                      GlyphFormat = Format_None,
                      bool fetchMetricsOnly = false,
                      bool disableOutlineDrawing = false) const;
@@ -243,6 +272,7 @@ private:
                         const QFixedPoint &subPixelPosition,
                         GlyphFormat format,
                         const QTransform &t,
+                        QColor color,
                         bool fetchBoundingBox = false,
                         bool disableOutlineDrawing = false);
 
@@ -296,6 +326,23 @@ private:
     bool shouldUseDesignMetrics(ShaperFlags flags) const;
     QFixed scaledBitmapMetrics(QFixed m) const;
     glyph_metrics_t scaledBitmapMetrics(const glyph_metrics_t &m, const QTransform &matrix) const;
+
+#if defined(QFONTENGINE_FT_SUPPORT_COLRV1)
+    Glyph *loadColrv1Glyph(QGlyphSet *set,
+                           Glyph *g,
+                           uint glyph,
+                           const QColor &color,
+                           bool fetchMetricsOnly) const;
+
+    bool traverseColr1(FT_OpaquePaint paint,
+                       QSet<std::pair<FT_Byte *, FT_Bool> > *loops,
+                       QColor foregroundColor,
+                       FT_Color *palette,
+                       ushort paletteCount,
+                       QColrPaintGraphRenderer *paintGraphRenderer) const;
+    mutable glyph_t colrv1_bounds_cache_id = 0;
+    mutable QRect colrv1_bounds_cache;
+#endif // QFONTENGINE_FT_SUPPORT_COLRV1
 
     GlyphFormat defaultFormat;
     FT_Matrix matrix;

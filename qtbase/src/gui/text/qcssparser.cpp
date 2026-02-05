@@ -1,5 +1,6 @@
 // Copyright (C) 2016 The Qt Company Ltd.
 // SPDX-License-Identifier: LicenseRef-Qt-Commercial OR LGPL-3.0-only OR GPL-2.0-only OR GPL-3.0-only
+// Qt-Security score:critical reason:data-parser
 
 #include "qcssparser_p.h"
 
@@ -12,8 +13,9 @@
 #include <qfontmetrics.h>
 #include <qbrush.h>
 #include <qimagereader.h>
+#include <qtextformat.h>
 
-#include <algorithm>
+#include <QtCore/q20algorithm.h>
 
 #ifndef QT_NO_CSSPARSER
 
@@ -33,17 +35,46 @@ struct QCssKnownValue
 {
     const char name[28];
     quint64 id;
+
+    struct ByName;
 };
 
-static const QCssKnownValue properties[NumProperties - 1] = {
+struct QCssKnownValue::ByName
+{
+    constexpr bool operator()(const QCssKnownValue &lhs, const QCssKnownValue &rhs) const noexcept
+    { return std::string_view{lhs.name} < std::string_view{rhs.name}; }
+};
+#if !defined(Q_CC_GNU_ONLY) || Q_CC_GNU >= 1000
+#  define NOT_OLD_GCCs(...) __VA_ARGS__
+#else
+#  define NOT_OLD_GCCs(...) /* nothing */
+#endif
+#define CHECK_ARRAY_IS_SORTED(array, Num) \
+    static_assert(std::size(array) == Num); \
+    NOT_OLD_GCCs( \
+    static_assert(q20::is_sorted(std::begin(array), std::end(array), \
+                                 QCssKnownValue::ByName{})); \
+    ) /* NOT_OLD_GCCs */ \
+    /* end */
+
+// This array is sorted alphabetically.
+static constexpr QCssKnownValue properties[] = {
     { "-qt-background-role", QtBackgroundRole },
     { "-qt-block-indent", QtBlockIndent },
     { "-qt-fg-texture-cachekey", QtForegroundTextureCacheKey },
+    { "-qt-foreground", QtForeground },
     { "-qt-line-height-type", QtLineHeightType },
     { "-qt-list-indent", QtListIndent },
     { "-qt-list-number-prefix", QtListNumberPrefix },
     { "-qt-list-number-suffix", QtListNumberSuffix },
     { "-qt-paragraph-type", QtParagraphType },
+    { "-qt-stroke-color", QtStrokeColor },
+    { "-qt-stroke-dasharray", QtStrokeDashArray },
+    { "-qt-stroke-dashoffset", QtStrokeDashOffset },
+    { "-qt-stroke-linecap", QtStrokeLineCap },
+    { "-qt-stroke-linejoin", QtStrokeLineJoin },
+    { "-qt-stroke-miterlimit", QtStrokeMiterLimit },
+    { "-qt-stroke-width", QtStrokeWidth },
     { "-qt-style-features", QtStyleFeatures },
     { "-qt-table-type", QtTableType },
     { "-qt-user-state", QtUserState },
@@ -149,13 +180,16 @@ static const QCssKnownValue properties[NumProperties - 1] = {
     { "width", Width },
     { "word-spacing", WordSpacing }
 };
+CHECK_ARRAY_IS_SORTED(properties, size_t(NumProperties) - 1)
 
-static const QCssKnownValue values[NumKnownValues - 1] = {
+static constexpr QCssKnownValue values[] = {
+    { "accent", Value_Accent },
     { "active", Value_Active },
     { "alternate-base", Value_AlternateBase },
     { "always", Value_Always },
     { "auto", Value_Auto },
     { "base", Value_Base },
+    { "beveljoin", Value_BevelJoin},
     { "bold", Value_Bold },
     { "bottom", Value_Bottom },
     { "bright-text", Value_BrightText },
@@ -172,6 +206,7 @@ static const QCssKnownValue values[NumKnownValues - 1] = {
     { "dot-dot-dash", Value_DotDotDash },
     { "dotted", Value_Dotted },
     { "double", Value_Double },
+    { "flatcap", Value_FlatCap},
     { "groove", Value_Groove },
     { "highlight", Value_Highlight },
     { "highlighted-text", Value_HighlightedText },
@@ -190,7 +225,9 @@ static const QCssKnownValue values[NumKnownValues - 1] = {
     { "mid", Value_Mid },
     { "middle", Value_Middle },
     { "midlight", Value_Midlight },
+    { "miterjoin", Value_MiterJoin},
     { "native", Value_Native },
+    { "no-role", Value_NoRole },
     { "none", Value_None },
     { "normal", Value_Normal },
     { "nowrap", Value_NoWrap },
@@ -199,20 +236,27 @@ static const QCssKnownValue values[NumKnownValues - 1] = {
     { "on", Value_On },
     { "outset", Value_Outset },
     { "overline", Value_Overline },
+    { "placeholder-text", Value_PlaceholderText },
     { "pre", Value_Pre },
     { "pre-line", Value_PreLine },
     { "pre-wrap", Value_PreWrap },
     { "ridge", Value_Ridge },
     { "right", Value_Right },
+    { "roundcap", Value_RoundCap},
+    { "roundjoin", Value_RoundJoin},
     { "selected", Value_Selected },
     { "shadow", Value_Shadow },
     { "small" , Value_Small },
     { "small-caps", Value_SmallCaps },
     { "solid", Value_Solid },
     { "square", Value_Square },
+    { "squarecap", Value_SquareCap},
     { "sub", Value_Sub },
     { "super", Value_Super },
+    { "svgmiterjoin", Value_SvgMiterJoin},
     { "text", Value_Text },
+    { "tooltip-base", Value_ToolTipBase },
+    { "tooltip-text", Value_ToolTipText },
     { "top", Value_Top },
     { "transparent", Value_Transparent },
     { "underline", Value_Underline },
@@ -225,12 +269,16 @@ static const QCssKnownValue values[NumKnownValues - 1] = {
     { "x-large", Value_XLarge },
     { "xx-large", Value_XXLarge }
 };
+CHECK_ARRAY_IS_SORTED(values, size_t(NumKnownValues) - 1)
 
 //Map id to strings as they appears in the 'values' array above
-static const short indexOfId[NumKnownValues] = { 0, 41, 48, 42, 49, 50, 55, 35, 26, 71, 72, 25, 43, 5, 64, 48,
-    29, 59, 60, 27, 52, 62, 6, 10, 39, 56, 19, 13, 17, 18, 20, 21, 51, 24, 46, 68, 37, 3, 2, 40, 63, 16,
-    11, 58, 14, 32, 65, 33, 66, 56, 67, 34, 70, 8, 28, 38, 12, 36, 61, 7, 9, 4, 69, 54, 22, 23, 30, 31,
-    1, 15, 0, 53, 45, 44 };
+static constexpr uchar indexOfId[] = {
+    0, 46, 54, 47, 55, 56, 63, 38, 29, 83, 84, 28, 48, 7, 76, 52,
+    32, 68, 69, 30, 58, 74, 8, 12, 43, 65, 21, 15, 19, 20, 22, 24, 57, 27, 51, 80, 40, 4, 3, 45, 75, 18, 13,
+    66, 16, 35, 77, 36, 78, 64, 79, 37, 67, 23, 59, 42, 6, 60, 70, 82, 10, 31, 41, 14, 39, 71, 9, 11, 5, 81,
+    62, 25, 26, 33, 34, 2, 44, 72, 73, 53, 0, 17, 1, 61, 50, 49 };
+
+static_assert(std::size(indexOfId) == size_t(NumKnownValues));
 
 QString Value::toString() const
 {
@@ -241,7 +289,7 @@ QString Value::toString() const
     }
 }
 
-static const QCssKnownValue pseudos[NumPseudos - 1] = {
+static constexpr QCssKnownValue pseudos[] = {
     { "active", PseudoClass_Active },
     { "adjoins-item", PseudoClass_Item },
     { "alternate", PseudoClass_Alternate },
@@ -287,44 +335,51 @@ static const QCssKnownValue pseudos[NumPseudos - 1] = {
     { "vertical", PseudoClass_Vertical },
     { "window", PseudoClass_Window }
 };
+CHECK_ARRAY_IS_SORTED(pseudos, size_t(NumPseudos) - 1)
 
-static const QCssKnownValue origins[NumKnownOrigins - 1] = {
+static constexpr QCssKnownValue origins[] = {
     { "border", Origin_Border },
     { "content", Origin_Content },
     { "margin", Origin_Margin }, // not in css
     { "padding", Origin_Padding }
 };
+CHECK_ARRAY_IS_SORTED(origins, size_t(NumKnownOrigins) - 1)
 
-static const QCssKnownValue repeats[NumKnownRepeats - 1] = {
+static constexpr QCssKnownValue repeats[] = {
     { "no-repeat", Repeat_None },
     { "repeat-x", Repeat_X },
     { "repeat-xy", Repeat_XY },
     { "repeat-y", Repeat_Y }
 };
+CHECK_ARRAY_IS_SORTED(repeats, size_t(NumKnownRepeats) - 1)
 
-static const QCssKnownValue tileModes[NumKnownTileModes - 1] = {
+static constexpr QCssKnownValue tileModes[] = {
     { "repeat", TileMode_Repeat },
     { "round", TileMode_Round },
     { "stretch", TileMode_Stretch },
 };
+CHECK_ARRAY_IS_SORTED(tileModes, size_t(NumKnownTileModes) - 1)
 
-static const QCssKnownValue positions[NumKnownPositionModes - 1] = {
+static constexpr QCssKnownValue positions[] = {
     { "absolute", PositionMode_Absolute },
     { "fixed", PositionMode_Fixed },
     { "relative", PositionMode_Relative },
     { "static", PositionMode_Static }
 };
+CHECK_ARRAY_IS_SORTED(positions, size_t(NumKnownPositionModes) - 1)
 
-static const QCssKnownValue attachments[NumKnownAttachments - 1] = {
+static constexpr QCssKnownValue attachments[] = {
     { "fixed", Attachment_Fixed },
     { "scroll", Attachment_Scroll }
 };
+CHECK_ARRAY_IS_SORTED(attachments, size_t(NumKnownAttachments) - 1)
 
-static const QCssKnownValue styleFeatures[NumKnownStyleFeatures - 1] = {
+static constexpr QCssKnownValue styleFeatures[] = {
     { "background-color", StyleFeature_BackgroundColor },
     { "background-gradient", StyleFeature_BackgroundGradient },
     { "none", StyleFeature_None }
 };
+CHECK_ARRAY_IS_SORTED(styleFeatures, size_t(NumKnownStyleFeatures) - 1)
 
 static bool operator<(const QString &name, const QCssKnownValue &prop)
 {
@@ -336,9 +391,12 @@ static bool operator<(const QCssKnownValue &prop, const QString &name)
     return QString::compare(QLatin1StringView(prop.name), name, Qt::CaseInsensitive) < 0;
 }
 
+#undef CHECK_ARRAY_IS_SORTED
+#undef NOT_OLD_GCCs
+
 static quint64 findKnownValue(const QString &name, const QCssKnownValue *start, int numValues)
 {
-    const QCssKnownValue *end = start + numValues - 1;
+    const QCssKnownValue *end = start + (numValues - 1);
     const QCssKnownValue *prop = std::lower_bound(start, end, name);
     if ((prop == end) || (name < *prop))
         return 0;
@@ -393,6 +451,8 @@ LengthData ValueExtractor::lengthValue(const Value& v)
 
     if (data.unit != LengthData::None)
         s.chop(2);
+    else if (v.type == Value::Percentage)
+        data.unit = LengthData::Percent;
 
     data.number = s.toDouble();
     return data;
@@ -404,6 +464,15 @@ static int lengthValueFromData(const LengthData& data, const QFont& f)
                       : data.unit == LengthData::Em ? QFontMetrics(f).height() : 1);
     // raised lower limit due to the implementation of qRound()
     return qRound(qBound(double(INT_MIN) + 0.1, scale * data.number, double(INT_MAX)));
+}
+
+QTextLength ValueExtractor::textLength(const Declaration &decl)
+{
+    const LengthData data = lengthValue(decl.d->values.at(0));
+    if (data.unit == LengthData::Percent)
+        return QTextLength(QTextLength::PercentageLength, data.number);
+
+    return QTextLength(QTextLength::FixedLength, lengthValueFromData(data, f));
 }
 
 int ValueExtractor::lengthValue(const Declaration &decl)
@@ -703,6 +772,8 @@ static ColorData parseColorValue(QCss::Value v)
 
     const QString &identifier = lst.at(0);
     if ((identifier.compare("palette"_L1, Qt::CaseInsensitive)) == 0) {
+        static_assert((Value_LastColorRole - Value_FirstColorRole + 1) == QPalette::ColorRole::NColorRoles);
+
         int role = findKnownValue(lst.at(1).trimmed(), values, NumKnownValues);
         if (role >= Value_FirstColorRole && role <= Value_LastColorRole)
             return (QPalette::ColorRole)(role-Value_FirstColorRole);
@@ -812,6 +883,10 @@ static BrushData parseBrushValue(const QCss::Value &v, const QPalette &pal)
     QStringList spreads;
     spreads << "pad"_L1 << "reflect"_L1 << "repeat"_L1;
 
+    int coordinateMode = -1;
+    QStringList coordinateModes;
+    coordinateModes << "logical"_L1 << "stretchtodevice"_L1 << "objectbounding"_L1 << "object"_L1;
+
     bool dependsOnThePalette = false;
     Parser parser(lst.at(1));
     while (parser.hasNext()) {
@@ -838,11 +913,12 @@ static BrushData parseBrushValue(const QCss::Value &v, const QPalette &pal)
             parser.next();
             QCss::Value value;
             (void)parser.parseTerm(&value);
-            if (attr.compare("spread"_L1, Qt::CaseInsensitive) == 0) {
+            if (attr.compare("spread"_L1, Qt::CaseInsensitive) == 0)
                 spread = spreads.indexOf(value.variant.toString());
-            } else {
+            else if (attr.compare("coordinatemode"_L1, Qt::CaseInsensitive) == 0)
+                coordinateMode = coordinateModes.indexOf(value.variant.toString());
+            else
                 vars[attr] = value.variant.toReal();
-            }
         }
         parser.skipSpace();
         (void)parser.test(COMMA);
@@ -851,7 +927,7 @@ static BrushData parseBrushValue(const QCss::Value &v, const QPalette &pal)
     if (gradType == 0) {
         QLinearGradient lg(vars.value("x1"_L1), vars.value("y1"_L1),
                            vars.value("x2"_L1), vars.value("y2"_L1));
-        lg.setCoordinateMode(QGradient::ObjectBoundingMode);
+        lg.setCoordinateMode(coordinateMode < 0 ? QGradient::ObjectBoundingMode : QGradient::CoordinateMode(coordinateMode));
         lg.setStops(stops);
         if (spread != -1)
             lg.setSpread(QGradient::Spread(spread));
@@ -865,7 +941,7 @@ static BrushData parseBrushValue(const QCss::Value &v, const QPalette &pal)
         QRadialGradient rg(vars.value("cx"_L1), vars.value("cy"_L1),
                            vars.value("radius"_L1), vars.value("fx"_L1),
                            vars.value("fy"_L1));
-        rg.setCoordinateMode(QGradient::ObjectBoundingMode);
+        rg.setCoordinateMode(coordinateMode < 0 ? QGradient::ObjectBoundingMode : QGradient::CoordinateMode(coordinateMode));
         rg.setStops(stops);
         if (spread != -1)
             rg.setSpread(QGradient::Spread(spread));
@@ -877,7 +953,7 @@ static BrushData parseBrushValue(const QCss::Value &v, const QPalette &pal)
 
     if (gradType == 2) {
         QConicalGradient cg(vars.value("cx"_L1), vars.value("cy"_L1), vars.value("angle"_L1));
-        cg.setCoordinateMode(QGradient::ObjectBoundingMode);
+        cg.setCoordinateMode(coordinateMode < 0 ? QGradient::ObjectBoundingMode : QGradient::CoordinateMode(coordinateMode));
         cg.setStops(stops);
         if (spread != -1)
             cg.setSpread(QGradient::Spread(spread));
@@ -1124,7 +1200,7 @@ static bool setFontSizeFromValue(QCss::Value value, QFont *font, int *fontSizeAd
     } else if (s.endsWith("px"_L1, Qt::CaseInsensitive)) {
         s.chop(2);
         value.variant = s;
-        if (value.variant.convert(QMetaType::fromType<int>())) {
+        if (value.variant.convert(QMetaType::fromType<qreal>())) {
             font->setPixelSize(qBound(0, value.variant.toInt(), (1 << 24) - 1));
             valid = true;
         }
@@ -1788,6 +1864,13 @@ void Declaration::borderImageValue(QString *image, int *cuts,
             if (v.type != Value::Number)
                 break;
             cuts[i] = v.variant.toString().toInt();
+            if (cuts[i] < 0) {
+                qWarning("Declaration::borderImageValue: Invalid cut value %d at position %d",
+                         cuts[i], i);
+                cuts[0] = cuts[1] = cuts[2] = cuts[3] = -1;
+                i = 4;
+                break;
+            }
         }
         if (i == 0) cuts[0] = cuts[1] = cuts[2] = cuts[3] = 0;
         else if (i == 1) cuts[3] = cuts[2] = cuts[1] = cuts[0];
@@ -1813,6 +1896,35 @@ bool Declaration::borderCollapseValue() const
         return false;
     else
         return d->values.at(0).toString() == "collapse"_L1;
+}
+
+QList<qreal> Declaration::dashArray() const
+{
+    if (d->propertyId != Property::QtStrokeDashArray || d->values.empty())
+        return QList<qreal>();
+
+    bool isValid = true;
+    QList<qreal> dashes;
+    for (int i = 0; i < d->values.size(); i++) {
+        Value v = d->values[i];
+        // Separators must be at odd indices and Numbers at even indices.
+        bool isValidSeparator = (i & 1) && v.type == Value::TermOperatorComma;
+        bool isValidNumber = !(i & 1) && v.type == Value::Number;
+        if (!isValidNumber && !isValidSeparator) {
+            isValid = false;
+            break;
+        } else if (isValidNumber) {
+            bool ok;
+            dashes.append(v.variant.toReal(&ok));
+            if (!ok) {
+                isValid = false;
+                break;
+            }
+        }
+    }
+
+    isValid &= !(dashes.size() & 1);
+    return isValid ? dashes : QList<qreal>();
 }
 
 QIcon Declaration::iconValue() const
@@ -2358,6 +2470,10 @@ bool Parser::parse(StyleSheet *styleSheet, Qt::CaseSensitivity nameCaseSensitivi
             PageRule rule;
             if (!parsePage(&rule)) return false;
             styleSheet->pageRules.append(rule);
+        } else if (testAnimation()) {
+            AnimationRule rule;
+            if (!parseAnimation(&rule)) return false;
+            styleSheet->animationRules.append(rule);
         } else if (testRuleset()) {
             StyleRule rule;
             if (!parseRuleset(&rule)) return false;
@@ -2481,6 +2597,72 @@ bool Parser::parseNextOperator(Value *value)
         case COMMA: value->type = Value::TermOperatorComma; skipSpace(); break;
         default: prev(); break;
     }
+    return true;
+}
+
+bool Parser::parseAnimation(AnimationRule *animationRule)
+{
+    skipSpace();
+    if (!test(IDENT)) return false;
+
+    animationRule->animName = lexem();
+
+    if (!next(LBRACE)) return false;
+    skipSpace();
+
+    while (test(PERCENTAGE) || test(IDENT)) {
+        AnimationRule::AnimationRuleSet set;
+        if (lookup() == PERCENTAGE) {
+            QString name = lexem();
+            name.removeLast();
+            float keyFrame = name.toFloat() / 100;
+            set.keyFrame = keyFrame;
+        } else if (lookup() == IDENT) {
+            QString name;
+            if (parseElementName(&name)) {
+                if (name == QStringLiteral("from"))
+                    set.keyFrame = 0;
+                else if (name == QStringLiteral("to"))
+                    set.keyFrame = 1;
+            }
+        }
+
+        skipSpace();
+        if (!next(LBRACE)) return false;
+        const int declarationStart = index;
+
+        do {
+            skipSpace();
+            Declaration decl;
+            const int rewind = index;
+            if (!parseNextDeclaration(&decl)) {
+                index = rewind;
+                const bool foundSemicolon = until(SEMICOLON);
+                const int semicolonIndex = index;
+
+                index = declarationStart;
+                const bool foundRBrace = until(RBRACE);
+
+                if (foundSemicolon && semicolonIndex < index) {
+                    decl = Declaration();
+                    index = semicolonIndex - 1;
+                } else {
+                    skipSpace();
+                    return foundRBrace;
+                }
+            }
+            if (!decl.isEmpty())
+                set.declarations.append(decl);
+        } while (test(SEMICOLON));
+
+        if (!next(RBRACE)) return false;
+        skipSpace();
+        animationRule->ruleSets.append(set);
+    }
+
+    if (!next(RBRACE)) return false;
+    skipSpace();
+
     return true;
 }
 

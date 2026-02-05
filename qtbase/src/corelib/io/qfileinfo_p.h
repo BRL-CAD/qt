@@ -1,5 +1,6 @@
 // Copyright (C) 2016 The Qt Company Ltd.
 // SPDX-License-Identifier: LicenseRef-Qt-Commercial OR LGPL-3.0-only OR GPL-2.0-only OR GPL-3.0-only
+// Qt-Security score:significant reason:default
 
 #ifndef QFILEINFO_P_H
 #define QFILEINFO_P_H
@@ -45,6 +46,8 @@ public:
         CachedPerms             = 0x100
     };
 
+    static QFileInfoPrivate *get(QFileInfo *fi) { return fi->d_func(); }
+
     inline QFileInfoPrivate()
         : QSharedData(), fileEngine(nullptr),
         cachedFlags(0),
@@ -55,7 +58,7 @@ public:
         : QSharedData(copy),
         fileEntry(copy.fileEntry),
         metaData(copy.metaData),
-        fileEngine(QFileSystemEngine::resolveEntryAndCreateLegacyEngine(fileEntry, metaData)),
+        fileEngine(QFileSystemEngine::createLegacyEngine(fileEntry, metaData)),
         cachedFlags(0),
 #ifndef QT_NO_FSFILEENGINE
         isDefaultConstructed(false),
@@ -66,7 +69,7 @@ public:
     {}
     inline QFileInfoPrivate(const QString &file)
         : fileEntry(file),
-        fileEngine(QFileSystemEngine::resolveEntryAndCreateLegacyEngine(fileEntry, metaData)),
+        fileEngine(QFileSystemEngine::createLegacyEngine(fileEntry, metaData)),
         cachedFlags(0),
 #ifndef QT_NO_FSFILEENGINE
         isDefaultConstructed(file.isEmpty()),
@@ -81,7 +84,7 @@ public:
         : QSharedData(),
         fileEntry(file),
         metaData(data),
-        fileEngine(QFileSystemEngine::resolveEntryAndCreateLegacyEngine(fileEntry, metaData)),
+        fileEngine(QFileSystemEngine::createLegacyEngine(fileEntry, metaData)),
         cachedFlags(0),
         isDefaultConstructed(false),
         cache_enabled(true), fileFlags(0), fileSize(0)

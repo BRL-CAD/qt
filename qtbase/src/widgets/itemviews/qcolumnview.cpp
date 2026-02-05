@@ -1,5 +1,6 @@
 // Copyright (C) 2020 The Qt Company Ltd.
 // SPDX-License-Identifier: LicenseRef-Qt-Commercial OR LGPL-3.0-only OR GPL-2.0-only OR GPL-3.0-only
+// Qt-Security score:significant reason:default
 
 #include <qglobal.h>
 #include "qcolumnview.h"
@@ -18,7 +19,6 @@
 QT_BEGIN_NAMESPACE
 
 /*!
-    \since 4.3
     \class QColumnView
     \brief The QColumnView class provides a model/view implementation of a column view.
     \ingroup model-view
@@ -35,7 +35,7 @@ QT_BEGIN_NAMESPACE
     QAbstractItemView class to allow it to display data provided by
     models derived from the QAbstractItemModel class.
 
-    \image qcolumnview.png
+    \image qcolumnview.png {Address information in a column view}
 
     \sa {Model/View Programming}
 */
@@ -757,7 +757,6 @@ QAbstractItemView *QColumnView::createColumn(const QModelIndex &index)
     alternatingRowColors(). This can be useful when reimplementing
     createColumn().
 
-    \since 4.4
     \sa createColumn()
  */
 void QColumnView::initializeColumn(QAbstractItemView *column) const

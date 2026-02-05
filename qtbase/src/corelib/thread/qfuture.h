@@ -1,5 +1,6 @@
 // Copyright (C) 2016 The Qt Company Ltd.
 // SPDX-License-Identifier: LicenseRef-Qt-Commercial OR LGPL-3.0-only OR GPL-2.0-only OR GPL-3.0-only
+// Qt-Security score:significant reason:default
 
 #ifndef QFUTURE_H
 #define QFUTURE_H
@@ -25,7 +26,7 @@ template <typename T>
 class QFuture
 {
     static_assert (std::is_move_constructible_v<T>
-                   || std::is_same_v<T, void>,
+                   || std::is_void_v<T>,
                    "A move-constructible type or type void is required");
 public:
     QFuture()
@@ -44,7 +45,7 @@ public:
     }
 
     template<typename U, typename V = T, typename = QtPrivate::EnableForVoid<V>>
-    explicit QFuture(const QFuture<U> &other) : d(other.d)
+    QFuture(const QFuture<U> &other) : d(other.d)
     {
     }
 
@@ -63,6 +64,7 @@ public:
 
     void cancel() { d.cancel(); }
     bool isCanceled() const { return d.isCanceled(); }
+    void cancelChain() { d.cancelChain(); }
 
 #if QT_DEPRECATED_SINCE(6, 0)
     QT_DEPRECATED_VERSION_X_6_0("Use setSuspended() instead.")
@@ -166,7 +168,7 @@ QT_WARNING_POP
     class const_iterator
     {
     public:
-        static_assert(!std::is_same_v<T, void>,
+        static_assert(!std::is_void_v<T>,
                       "It isn't possible to define QFuture<void>::const_iterator");
 
         typedef std::bidirectional_iterator_tag iterator_category;
@@ -175,7 +177,7 @@ QT_WARNING_POP
         typedef const T *pointer;
         typedef const T &reference;
 
-        inline const_iterator() {}
+        const_iterator() = default;
         inline const_iterator(QFuture const * const _future, int _index)
         : future(_future), index(advanceIndex(_index, 0)) { }
         inline const_iterator(const const_iterator &o) : future(o.future), index(o.index)  {}
@@ -183,8 +185,6 @@ QT_WARNING_POP
         { future = o.future; index = o.index; return *this; }
         inline const T &operator*() const { return future->d.resultReference(index); }
         inline const T *operator->() const { return future->d.resultPointer(index); }
-        inline bool operator!=(const const_iterator &other) const { return index != other.index; }
-        inline bool operator==(const const_iterator &o) const { return !operator!=(o); }
         inline const_iterator &operator++()
         { index = advanceIndex(index, 1); return *this; }
         inline const_iterator &operator--()
@@ -213,6 +213,12 @@ QT_WARNING_POP
         { return const_iterator(k.future, k.advanceIndex(k.index, j)); }
 
     private:
+        friend bool comparesEqual(const const_iterator &lhs, const const_iterator &rhs) noexcept
+        {
+            return lhs.index == rhs.index;
+        }
+        Q_DECLARE_EQUALITY_COMPARABLE(const_iterator)
+
         /*! \internal
 
             Advances the iterator index \a idx \a n steps, waits for the
@@ -276,7 +282,7 @@ private:
     friend class QFutureInterfaceBase;
 
     template<class Function, class ResultType, class ParentResultType>
-    friend class QtPrivate::Continuation;
+    friend class QtPrivate::CompactContinuation;
 
     template<class Function, class ResultType>
     friend class QtPrivate::CanceledHandler;
@@ -292,7 +298,7 @@ private:
     friend struct QtPrivate::UnwrapHandler;
 
     using QFuturePrivate =
-            std::conditional_t<std::is_same_v<T, void>, QFutureInterfaceBase, QFutureInterface<T>>;
+            std::conditional_t<std::is_void_v<T>, QFutureInterfaceBase, QFutureInterface<T>>;
 
 #ifdef QFUTURE_TEST
 public:
@@ -335,7 +341,7 @@ QFuture<typename QFuture<T>::template ResultType<Function>>
 QFuture<T>::then(QtFuture::Launch policy, Function &&function)
 {
     QFutureInterface<ResultType<Function>> promise(QFutureInterfaceBase::State::Pending);
-    QtPrivate::Continuation<std::decay_t<Function>, ResultType<Function>, T>::create(
+    QtPrivate::CompactContinuation<std::decay_t<Function>, ResultType<Function>, T>::create(
             std::forward<Function>(function), this, promise, policy);
     return promise.future();
 }
@@ -346,7 +352,7 @@ QFuture<typename QFuture<T>::template ResultType<Function>> QFuture<T>::then(QTh
                                                                              Function &&function)
 {
     QFutureInterface<ResultType<Function>> promise(QFutureInterfaceBase::State::Pending);
-    QtPrivate::Continuation<std::decay_t<Function>, ResultType<Function>, T>::create(
+    QtPrivate::CompactContinuation<std::decay_t<Function>, ResultType<Function>, T>::create(
             std::forward<Function>(function), this, promise, pool);
     return promise.future();
 }
@@ -357,7 +363,7 @@ QFuture<typename QFuture<T>::template ResultType<Function>> QFuture<T>::then(QOb
                                                                              Function &&function)
 {
     QFutureInterface<ResultType<Function>> promise(QFutureInterfaceBase::State::Pending);
-    QtPrivate::Continuation<std::decay_t<Function>, ResultType<Function>, T>::create(
+    QtPrivate::CompactContinuation<std::decay_t<Function>, ResultType<Function>, T>::create(
             std::forward<Function>(function), this, promise, context);
     return promise.future();
 }
@@ -433,11 +439,12 @@ template<typename T>
 struct MetaTypeQFutureHelper<QFuture<T>>
 {
     static bool registerConverter() {
-        if constexpr (std::is_same_v<T, void>)
+        if constexpr (std::is_void_v<T>) {
             return false;
-
-        return QMetaType::registerConverter<QFuture<T>, QFuture<void>>(
-                [](const QFuture<T> &future) { return QFuture<void>(future); });
+        } else {
+            return QMetaType::registerConverter<QFuture<T>, QFuture<void>>(
+                    [](const QFuture<T> &future) { return QFuture<void>(future); });
+        }
     }
 };
 

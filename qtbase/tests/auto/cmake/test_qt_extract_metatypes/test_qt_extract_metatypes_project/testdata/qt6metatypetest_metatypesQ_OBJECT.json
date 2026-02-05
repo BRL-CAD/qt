@@ -3,6 +3,7 @@
         "classes": [
             {
                 "className": "MetaType",
+                "lineNumber": 7,
                 "object": true,
                 "qualifiedClassName": "MetaType",
                 "superClasses": [
@@ -14,6 +15,6 @@
             }
         ],
         "inputFile": "MetaType.h",
-        "outputRevision": 68
+        "outputRevision": 69
     }
 ]

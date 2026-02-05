@@ -10,7 +10,7 @@
 #include <QProcess>
 #endif
 #include <qicon.h>
-#include <qiconengine.h>
+#include <private/qabstractfileiconengine_p.h>
 
 #include <algorithm>
 
@@ -34,6 +34,8 @@ private slots:
     void detach();
     void addFile();
     void pixmap();
+    void pixmapByDprFromEngine_data();
+    void pixmapByDprFromEngine();
     void paint();
     void availableSizes();
     void name();
@@ -47,6 +49,9 @@ private slots:
     void task184901_badCache();
 #endif
     void task223279_inconsistentAddFile();
+
+    void themeFromPlugin_data();
+    void themeFromPlugin();
 
 private:
     bool haveImageFormat(QByteArray const&);
@@ -118,7 +123,7 @@ void tst_QIcon::actualSize()
     // Skip two corner cases
     if (qApp->devicePixelRatio() > 1 && (qstrcmp(QTest::currentDataTag(), "resource9") == 0
                                       || qstrcmp(QTest::currentDataTag(), "external9") == 0))
-        QSKIP("Behavior is unspecified for devicePixelRatio > 1", QTest::QSkipAll);
+        QSKIP("Behavior is unspecified for devicePixelRatio > 1");
 
     auto expectedDeviceSize = [](QSize deviceIndependentExpectedSize, QSize maxSourceImageSize) -> QSize {
         qreal dpr = qApp->devicePixelRatio();
@@ -164,7 +169,7 @@ void tst_QIcon::actualSize2_data()
 void tst_QIcon::actualSize2()
 {
     if (qApp->devicePixelRatio() > 1)
-        QSKIP("Behavior is unspecified for devicePixelRatio > 1", QTest::SkipAll);
+        QSKIP("Behavior is unspecified for devicePixelRatio > 1");
 
     QIcon icon;
     icon.addPixmap(m_pngImageFileName);
@@ -192,7 +197,7 @@ void tst_QIcon::isNull() {
     // test string constructor with empty string
     QIcon iconEmptyString = QIcon(QString());
     QVERIFY(iconEmptyString.isNull());
-    QVERIFY(!iconEmptyString.actualSize(QSize(32, 32)).isValid());;
+    QVERIFY(!iconEmptyString.actualSize(QSize(32, 32)).isValid());
 
     // test string constructor with non-existing file
     QIcon iconNoFile = QIcon("imagedoesnotexist");
@@ -389,7 +394,7 @@ void tst_QIcon::detach()
 void tst_QIcon::addFile()
 {
     if (qApp->devicePixelRatio() != int(qApp->devicePixelRatio()))
-        QSKIP("Test is not ready for non integer devicePixelRatio", QTest::SkipAll);
+        QSKIP("Test is not ready for non integer devicePixelRatio");
 
     QIcon icon;
     icon.addFile(QLatin1String(":/styles/commonstyle/images/standardbutton-open-16.png"));
@@ -442,6 +447,67 @@ void tst_QIcon::pixmap()
     QVERIFY(icon.pixmap(QSize(16, 16)).size().width() >= 16);
     QVERIFY(icon.pixmap(QSize(16, 16), 1).size().width() == 16);
     QVERIFY(icon.pixmap(QSize(16, 16), -1).size().width() >= 16);
+}
+
+void tst_QIcon::pixmapByDprFromEngine_data()
+{
+    QTest::addColumn<int>("engineSize");
+    QTest::addColumn<int>("requestedSize");
+    QTest::addColumn<qreal>("requestedDpr");
+    QTest::addColumn<int>("expectedSize");
+    QTest::addColumn<qreal>("expectedDpr");
+
+    QTest::newRow("engine 16x16, request 32x32, dpr = 1")
+        << 16 << 32 << 1.0 << 16 << 1.0;    // no upscaling is done
+    QTest::newRow("engine 16x16, request 32x32, dpr = 2")
+        << 16 << 32 << 2.0 << 16 << 1.0;    // no upscaling is done
+    QTest::newRow("engine 32x32, request 32x32, dpr = 1")
+        << 32 << 32 << 1.0 << 32 << 1.0;
+    QTest::newRow("engine 32x32, request 32x32, dpr = 2")
+        << 32 << 32 << 2.0 << 32 << 1.0;    // no upscaling is done
+    QTest::newRow("engine 32x32, request 16x16, dpr = 1")
+        << 32 << 16 << 1.0 << 32 << 2.0;    // downscaling done by increasing dpr
+    QTest::newRow("engine 32x32, request 16x16, dpr = 2")
+        << 32 << 16 << 2.0 << 32 << 2.0;
+    QTest::newRow("engine 32x32, request 8x8, dpr = 1")
+        << 32 << 8 << 1.0 << 32 << 4.0;     // downscaling done by increasing dpr
+    QTest::newRow("engine 32x32, request 8x8, dpr = 2")
+        << 32 << 8 << 2.0 << 32 << 4.0;     // downscaling done by increasing dpr
+}
+
+void tst_QIcon::pixmapByDprFromEngine()
+{
+    QFETCH(int, engineSize);
+    QFETCH(int, requestedSize);
+    QFETCH(qreal, requestedDpr);
+    QFETCH(int, expectedSize);
+    QFETCH(qreal, expectedDpr);
+
+    class TestEngine : public QPixmapIconEngine
+    {
+    public:
+        using QPixmapIconEngine::QPixmapIconEngine;
+        QSize size;
+
+        QPixmap pixmap(const QSize &size, QIcon::Mode mode, QIcon::State state) override
+        {
+            return scaledPixmap(size, mode, state, 1.0f);
+        }
+        QPixmap scaledPixmap(const QSize &, QIcon::Mode, QIcon::State, qreal) override
+        {
+            // simulate an icon engine which does no scaling (= only has fixed size icons)
+            QPixmap pm(size);
+            pm.fill(Qt::red);
+            return pm;
+        }
+    };
+
+    auto testEngine = new TestEngine;
+    QIcon ico(testEngine);
+    testEngine->size = QSize(engineSize, engineSize);
+    auto pm = ico.pixmap(QSize(requestedSize, requestedSize), requestedDpr);
+    QCOMPARE(pm.size(), QSize(expectedSize, expectedSize));
+    QCOMPARE(pm.devicePixelRatio(), expectedDpr);
 }
 
 void tst_QIcon::paint()
@@ -872,6 +938,32 @@ void tst_QIcon::task223279_inconsistentAddFile()
     QCOMPARE(pm1.size(), pm2.size());
 }
 
+Q_IMPORT_PLUGIN(TestIconPlugin)
+
+void tst_QIcon::themeFromPlugin_data()
+{
+    QTest::addColumn<QString>("themeName");
+
+    QTest::addRow("plugintheme") << "plugintheme";
+    QTest::addRow("specialtheme") << "specialTheme"; // deliberately not matching case
+}
+
+void tst_QIcon::themeFromPlugin()
+{
+    QFETCH(const QString, themeName);
+    auto restoreTheme = qScopeGuard([oldTheme = QIcon::themeName()]{
+        QIcon::setThemeName(oldTheme);
+    });
+
+    QIcon icon = QIcon::fromTheme("icon1");
+    QVERIFY(icon.isNull());
+
+    QIcon::setThemeName(themeName);
+
+    icon = QIcon::fromTheme("icon1");
+    QVERIFY(!icon.isNull());
+    QCOMPARE(icon.name(), themeName + "/icon1");
+}
 
 QTEST_MAIN(tst_QIcon)
 #include "tst_qicon.moc"

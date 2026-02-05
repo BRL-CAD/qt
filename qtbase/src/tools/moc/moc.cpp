@@ -13,6 +13,7 @@
 #include <QtCore/qjsondocument.h>
 
 // for normalizeTypeInternal
+#include <private/qmetaobject_p.h>
 #include <private/qmetaobject_moc_p.h>
 #include <private/qduplicatetracker_p.h>
 
@@ -78,6 +79,7 @@ bool Moc::parseClassHead(ClassDef *def)
         }
     }
     def->classname = name;
+    def->lineNumber = symbol().lineNum;
 
     if (test(IDENTIFIER)) {
         const QByteArray lex = lexem();
@@ -160,7 +162,12 @@ Type Moc::parseType()
     }
 
     skipCxxAttributes();
-    test(ENUM) || test(CLASS) || test(STRUCT);
+    if (test(ENUM))
+        type.typeTag = TypeTag::HasEnum;
+    if (test(CLASS))
+        type.typeTag |= TypeTag::HasClass;
+    if (test(STRUCT))
+        type.typeTag |= TypeTag::HasStruct;
     for(;;) {
         skipCxxAttributes();
         switch (next()) {
@@ -236,20 +243,23 @@ enum class IncludeState {
     NoInclude,
 };
 
-bool Moc::parseEnum(EnumDef *def)
+bool Moc::parseEnum(EnumDef *def, ClassDef *containingClass)
 {
     bool isTypdefEnum = false; // typedef enum { ... } Foo;
 
     if (test(CLASS) || test(STRUCT))
-        def->isEnumClass = true;
+        def->flags |= EnumIsScoped;
 
     if (test(IDENTIFIER)) {
         def->name = lexem();
+        if (containingClass)
+            containingClass->allEnumNames.insert(def->name);
     } else {
         if (lookup(-1) != TYPEDEF)
             return false; // anonymous enum
         isTypdefEnum = true;
     }
+    def->lineNumber = symbol().lineNum;
     if (test(COLON)) { // C++11 strongly typed enum
         // enum Foo : unsigned long { ... };
         def->type = normalizeType(parseType().name);
@@ -287,6 +297,8 @@ bool Moc::parseEnum(EnumDef *def)
         if (!test(IDENTIFIER))
             return false;
         def->name = lexem();
+        // used as the name for our enum, but we don't track it,
+        // because we only care about types that might conflict with members
     }
     return true;
 }
@@ -309,7 +321,6 @@ void Moc::parseFunctionArguments(FunctionDef *def)
             arg.rightType += lexem();
         }
         arg.normalizedType = normalizeType(QByteArray(arg.type.name + ' ' + arg.rightType));
-        arg.typeNameForCast = QByteArray("std::add_pointer_t<"+arg.normalizedType+">");
         if (test(EQ))
             arg.isDefault = true;
         def->arguments += arg;
@@ -436,7 +447,7 @@ bool Moc::parseFunction(FunctionDef *def, bool inMacro)
     // note that testFunctionAttribute is handled further below,
     // and revisions and attributes must come first
     while (testForFunctionModifiers(def)) {}
-    Type tempType = parseType();;
+    Type tempType = parseType();
     while (!tempType.name.isEmpty() && lookup() != LPAREN) {
         if (testFunctionAttribute(def->type.firstToken, def))
             ; // fine
@@ -454,6 +465,8 @@ bool Moc::parseFunction(FunctionDef *def, bool inMacro)
     }
     next(LPAREN, "Not a signal or slot declaration");
     def->name = tempType.name;
+    def->lineNumber = symbol().lineNum;
+
     scopedFunctionName = tempType.isScoped;
 
     if (!test(RPAREN)) {
@@ -520,7 +533,7 @@ bool Moc::parseFunction(FunctionDef *def, bool inMacro)
 
 bool Moc::testForFunctionModifiers(FunctionDef *def)
 {
-    return test(EXPLICIT) || test(INLINE) ||
+    return test(EXPLICIT) || test(INLINE) || test(CONSTEXPR) ||
             (test(STATIC) && (def->isStatic = true)) ||
             (test(VIRTUAL) && (def->isVirtual = true));
 }
@@ -540,6 +553,7 @@ bool Moc::parseMaybeFunction(const ClassDef *cdef, FunctionDef *def)
     bool scopedFunctionName = false;
     if (test(LPAREN)) {
         def->name = def->type.name;
+        def->lineNumber = symbol().lineNum;
         scopedFunctionName = def->type.isScoped;
         if (def->name == cdef->classname) {
             def->isDestructor = tilde;
@@ -554,7 +568,7 @@ bool Moc::parseMaybeFunction(const ClassDef *cdef, FunctionDef *def)
         // but otherwise we end up with misparses
         if (def->isSlot || def->isSignal || def->isInvokable)
             while (testForFunctionModifiers(def)) {}
-        Type tempType = parseType();;
+        Type tempType = parseType();
         while (!tempType.name.isEmpty() && lookup() != LPAREN) {
             if (testFunctionAttribute(def->type.firstToken, def))
                 ; // fine
@@ -573,6 +587,7 @@ bool Moc::parseMaybeFunction(const ClassDef *cdef, FunctionDef *def)
         if (!test(LPAREN))
             return false;
         def->name = tempType.name;
+        def->lineNumber = symbol().lineNum;
         scopedFunctionName = tempType.isScoped;
     }
 
@@ -691,6 +706,7 @@ void Moc::parse()
                     } else if (!test(SEMIC)) {
                         NamespaceDef def;
                         def.classname = nsName;
+                        def.lineNumber = symbol().lineNum;
                         def.doGenerate = currentFilenames.size() <= 1;
 
                         next(LBRACE);
@@ -739,14 +755,14 @@ void Moc::parse()
                                 break;
                             case Q_ENUMS_TOKEN:
                             case Q_ENUM_NS_TOKEN:
-                                parseEnumOrFlag(&def, false);
+                                parseEnumOrFlag(&def, {});
                                 break;
                             case Q_ENUM_TOKEN:
                                 error("Q_ENUM can't be used in a Q_NAMESPACE, use Q_ENUM_NS instead");
                                 break;
                             case Q_FLAGS_TOKEN:
                             case Q_FLAG_NS_TOKEN:
-                                parseEnumOrFlag(&def, true);
+                                parseEnumOrFlag(&def, EnumIsFlag);
                                 break;
                             case Q_FLAG_TOKEN:
                                 error("Q_FLAG can't be used in a Q_NAMESPACE, use Q_FLAG_NS instead");
@@ -764,7 +780,7 @@ void Moc::parse()
                                 break;
                             case ENUM: {
                                 EnumDef enumDef;
-                                if (parseEnum(&enumDef))
+                                if (parseEnum(&enumDef, nullptr))
                                     def.enumList += enumDef;
                             } break;
                             case CLASS:
@@ -861,6 +877,7 @@ void Moc::parse()
             continue;
         ClassDef def;
         if (parseClassHead(&def)) {
+            Symbol qmlRegistrationMacroSymbol = {};
             prependNamespaces(def, namespaceList);
 
             FunctionDef::Access access = FunctionDef::Private;
@@ -881,6 +898,7 @@ void Moc::parse()
                     if (test(Q_SIGNALS_TOKEN))
                         error("Signals cannot have access specifier");
                     break;
+                case STRUCT:
                 case CLASS: {
                     ClassDef nestedDef;
                     if (parseClassHead(&nestedDef)) {
@@ -934,14 +952,14 @@ void Moc::parse()
                     break;
                 case Q_ENUMS_TOKEN:
                 case Q_ENUM_TOKEN:
-                    parseEnumOrFlag(&def, false);
+                    parseEnumOrFlag(&def, {});
                     break;
                 case Q_ENUM_NS_TOKEN:
                     error("Q_ENUM_NS can't be used in a Q_OBJECT/Q_GADGET, use Q_ENUM instead");
                     break;
                 case Q_FLAGS_TOKEN:
                 case Q_FLAG_TOKEN:
-                    parseEnumOrFlag(&def, true);
+                    parseEnumOrFlag(&def, EnumIsFlag);
                     break;
                 case Q_FLAG_NS_TOKEN:
                     error("Q_FLAG_NS can't be used in a Q_OBJECT/Q_GADGET, use Q_FLAG instead");
@@ -969,12 +987,23 @@ void Moc::parse()
                     break;
                 case ENUM: {
                     EnumDef enumDef;
-                    if (parseEnum(&enumDef))
+                    if (parseEnum(&enumDef, &def))
                         def.enumList += enumDef;
                 } break;
                 case SEMIC:
                 case COLON:
                     break;
+                case IDENTIFIER:
+                {
+                    const QByteArray lex = lexem();
+                    if (lex.startsWith("QML_")) {
+                        if (   lex == "QML_ELEMENT" || lex == "QML_NAMED_ELEMENT"
+                            || lex == "QML_ANONYMOUS" || lex == "QML_VALUE_TYPE") {
+                            qmlRegistrationMacroSymbol = symbol();
+                        }
+                    }
+                }
+                Q_FALLTHROUGH();
                 default:
                     FunctionDef funcDef;
                     funcDef.access = access;
@@ -1014,6 +1043,20 @@ void Moc::parse()
             }
 
             next(RBRACE);
+
+            /* if the header is available, moc will see a Q_CLASSINFO entry; the
+               token is only visible if the header is missing
+               To avoid false positives, we only warn when encountering the token in a QObject or gadget
+            */
+            if ((def.hasQObject || def.hasQGadget) && qmlRegistrationMacroSymbol.token != NOTOKEN) {
+                QByteArray msg("Potential QML registration macro was found, but no header containing it was included.\n"
+                               "This might cause runtime errors in QML applications\n"
+                               "Include <QtQmlIntegration/qqmlintegration.h> or <QtQml/qqmlregistration.h> to fix this.");
+                if (qmlMacroWarningIsFatal)
+                    error(qmlRegistrationMacroSymbol, msg.constData());
+                else
+                    warning(qmlRegistrationMacroSymbol, msg.constData());
+            }
 
             if (!def.hasQObject && !def.hasQGadget && def.signalList.isEmpty() && def.slotList.isEmpty()
                 && def.propertyList.isEmpty() && def.enumDeclarations.isEmpty())
@@ -1065,6 +1108,18 @@ void Moc::parse()
                 classList += def;
         }
     }
+}
+
+QByteArrayView Moc::strippedFileName() const
+{
+    QByteArrayView fn = QByteArrayView(filename);
+
+    auto isSlash = [](char ch) { return ch == '/' || ch == '\\'; };
+    auto rit = std::find_if(fn.crbegin(), fn.crend(), isSlash);
+    if (rit != fn.crend())
+        fn = fn.last(rit - fn.crbegin());
+
+    return fn;
 }
 
 static bool any_type_contains(const QList<PropertyDef> &properties, const QByteArray &pattern)
@@ -1134,12 +1189,7 @@ static QByteArrayList requiredQtContainers(const QList<ClassDef> &classes)
 
 void Moc::generate(FILE *out, FILE *jsonOutput)
 {
-    QByteArrayView fn = QByteArrayView(filename);
-
-    auto isSlash = [](char ch) { return ch == '/' || ch == '\\'; };
-    auto rit = std::find_if(fn.crbegin(), fn.crend(), isSlash);
-    if (rit != fn.crend())
-        fn = fn.last(rit - fn.crbegin());
+    QByteArrayView fn = strippedFileName();
 
     fprintf(out, "/****************************************************************************\n"
             "** Meta object code from reading C++ file '%s'\n**\n" , fn.constData());
@@ -1321,10 +1371,13 @@ void Moc::createPropertyDef(PropertyDef &propDef, int propertyIndex, Moc::Proper
 {
     propDef.location = index;
     propDef.relativeIndex = propertyIndex;
+    propDef.lineNumber = symbol().lineNum;
 
-    QByteArray type = parseType().name;
+    Type t = parseType();
+    QByteArray type = t.name;
     if (type.isEmpty())
         error();
+    propDef.typeTag = t.typeTag;
     propDef.designable = propDef.scriptable = propDef.stored = "true";
     propDef.user = "false";
     /*
@@ -1338,8 +1391,6 @@ void Moc::createPropertyDef(PropertyDef &propDef, int propertyIndex, Moc::Proper
     type = normalizeType(type);
     if (type == "QMap")
         type = "QMap<QString,QVariant>";
-    else if (type == "QValueList")
-        type = "QValueList<QVariant>";
     else if (type == "LongLong")
         type = "qlonglong";
     else if (type == "ULongLong")
@@ -1597,7 +1648,7 @@ void Moc::parsePrivateProperty(ClassDef *def, Moc::PropertyMode mode)
     def->propertyList += propDef;
 }
 
-void Moc::parseEnumOrFlag(BaseDef *def, bool isFlag)
+void Moc::parseEnumOrFlag(BaseDef *def, EnumFlags flags)
 {
     next(LPAREN);
     QByteArray identifier;
@@ -1607,7 +1658,7 @@ void Moc::parseEnumOrFlag(BaseDef *def, bool isFlag)
             identifier += "::";
             identifier += lexem();
         }
-        def->enumDeclarations[identifier] = isFlag;
+        def->enumDeclarations[identifier] = flags;
     }
     next(RPAREN);
 }
@@ -2003,6 +2054,7 @@ QJsonObject ClassDef::toJson() const
     QJsonObject cls;
     cls["className"_L1] = QString::fromUtf8(classname.constData());
     cls["qualifiedClassName"_L1] = QString::fromUtf8(qualified.constData());
+    cls["lineNumber"_L1] = lineNumber;
 
     QJsonArray classInfos;
     for (const auto &info: std::as_const(classInfoList)) {
@@ -2015,20 +2067,26 @@ QJsonObject ClassDef::toJson() const
     if (classInfos.size())
         cls["classInfos"_L1] = classInfos;
 
-    const auto appendFunctions = [&cls](const QString &type, const QList<FunctionDef> &funcs) {
+    int methodIndex = 0;
+    const auto appendFunctions
+            = [&cls, &methodIndex](const QString &type, const QList<FunctionDef> &funcs) {
         QJsonArray jsonFuncs;
 
         for (const FunctionDef &fdef: funcs)
-            jsonFuncs.append(fdef.toJson());
+            jsonFuncs.append(fdef.toJson(methodIndex++));
 
         if (!jsonFuncs.isEmpty())
             cls[type] = jsonFuncs;
     };
 
+    // signals, slots, and methods, in this order, follow the same index
     appendFunctions("signals"_L1, signalList);
     appendFunctions("slots"_L1, slotList);
-    appendFunctions("constructors"_L1, constructorList);
     appendFunctions("methods"_L1, methodList);
+
+    // constructors are indexed separately.
+    methodIndex = 0;
+    appendFunctions("constructors"_L1, constructorList);
 
     QJsonArray props;
 
@@ -2082,13 +2140,16 @@ QJsonObject ClassDef::toJson() const
     return cls;
 }
 
-QJsonObject FunctionDef::toJson() const
+QJsonObject FunctionDef::toJson(int index) const
 {
     QJsonObject fdef;
     fdef["name"_L1] = QString::fromUtf8(name);
+    fdef["index"_L1] = index;
     if (!tag.isEmpty())
         fdef["tag"_L1] = QString::fromUtf8(tag);
     fdef["returnType"_L1] = QString::fromUtf8(normalizedType);
+    if (isConst)
+        fdef["isConst"_L1] = true;
 
     QJsonArray args;
     for (const ArgumentDef &arg: arguments)
@@ -2101,6 +2162,7 @@ QJsonObject FunctionDef::toJson() const
 
     if (revision > 0)
         fdef["revision"_L1] = revision;
+    fdef["lineNumber"_L1] = lineNumber;
 
     if (wasCloned)
         fdef["isCloned"_L1] = true;
@@ -2165,6 +2227,7 @@ QJsonObject PropertyDef::toJson() const
     prop["final"_L1] = final;
     prop["required"_L1] = required;
     prop["index"_L1] = relativeIndex;
+    prop["lineNumber"_L1] = lineNumber;
     if (revision > 0)
         prop["revision"_L1] = revision;
 
@@ -2174,13 +2237,15 @@ QJsonObject PropertyDef::toJson() const
 QJsonObject EnumDef::toJson(const ClassDef &cdef) const
 {
     QJsonObject def;
+    uint flags = this->flags | cdef.enumDeclarations.value(name);
     def["name"_L1] = QString::fromUtf8(name);
+    def["lineNumber"_L1] = lineNumber;
     if (!enumName.isEmpty())
         def["alias"_L1] = QString::fromUtf8(enumName);
     if (!type.isEmpty())
         def["type"_L1] = QString::fromUtf8(type);
-    def["isFlag"_L1] = cdef.enumDeclarations.value(name);
-    def["isClass"_L1] = isEnumClass;
+    def["isFlag"_L1] = (flags & EnumIsFlag) != 0;
+    def["isClass"_L1] = (flags & EnumIsScoped) != 0;
 
     QJsonArray valueArr;
     for (const QByteArray &value: values)

@@ -1,4 +1,4 @@
-// Copyright (C) 2018 The Qt Company Ltd.
+// Copyright (C) 2024 The Qt Company Ltd.
 // SPDX-License-Identifier: LicenseRef-Qt-Commercial OR LGPL-3.0-only OR GPL-2.0-only OR GPL-3.0-only
 
 #ifndef QCOLORSPACE_P_H
@@ -16,6 +16,7 @@
 //
 
 #include "qcolorspace.h"
+#include "qcolorclut_p.h"
 #include "qcolormatrix_p.h"
 #include "qcolortrc_p.h"
 #include "qcolortrclut_p.h"
@@ -28,29 +29,7 @@
 
 QT_BEGIN_NAMESPACE
 
-class Q_AUTOTEST_EXPORT QColorSpacePrimaries
-{
-public:
-   QColorSpacePrimaries() = default;
-   QColorSpacePrimaries(QColorSpace::Primaries primaries);
-   QColorSpacePrimaries(QPointF whitePoint,
-                        QPointF redPoint,
-                        QPointF greenPoint,
-                        QPointF bluePoint)
-           : whitePoint(whitePoint)
-           , redPoint(redPoint)
-           , greenPoint(greenPoint)
-           , bluePoint(bluePoint)
-   { }
-
-   QColorMatrix toXyzMatrix() const;
-   bool areValid() const;
-
-   QPointF whitePoint;
-   QPointF redPoint;
-   QPointF greenPoint;
-   QPointF bluePoint;
-};
+bool qColorSpacePrimaryPointsAreValid(const QColorSpace::PrimaryPoints &primaries);
 
 class QColorSpacePrivate : public QSharedData
 {
@@ -59,12 +38,14 @@ public:
     QColorSpacePrivate(QColorSpace::NamedColorSpace namedColorSpace);
     QColorSpacePrivate(QColorSpace::Primaries primaries, QColorSpace::TransferFunction transferFunction, float gamma);
     QColorSpacePrivate(QColorSpace::Primaries primaries, const QList<uint16_t> &transferFunctionTable);
-    QColorSpacePrivate(const QColorSpacePrimaries &primaries, QColorSpace::TransferFunction transferFunction, float gamma);
-    QColorSpacePrivate(const QColorSpacePrimaries &primaries, const QList<uint16_t> &transferFunctionTable);
-    QColorSpacePrivate(const QColorSpacePrimaries &primaries,
+    QColorSpacePrivate(const QColorSpace::PrimaryPoints &primaries, QColorSpace::TransferFunction transferFunction, float gamma);
+    QColorSpacePrivate(const QColorSpace::PrimaryPoints &primaries, const QList<uint16_t> &transferFunctionTable);
+    QColorSpacePrivate(const QColorSpace::PrimaryPoints &primaries,
                        const QList<uint16_t> &redTransferFunctionTable,
                        const QList<uint16_t> &greenTransferFunctionTable,
                        const QList<uint16_t> &blueRransferFunctionTable);
+    QColorSpacePrivate(QPointF whitePoint, QColorSpace::TransferFunction transferFunction, float gamma);
+    QColorSpacePrivate(QPointF whitePoint, const QList<uint16_t> &transferFunctionTable);
     QColorSpacePrivate(const QColorSpacePrivate &other) = default;
 
     static const QColorSpacePrivate *get(const QColorSpace &colorSpace)
@@ -77,6 +58,9 @@ public:
         return colorSpace.d_ptr.get();
     }
 
+    bool equals(const QColorSpacePrivate *other) const;
+    bool isValid() const noexcept;
+
     void initialize();
     void setToXyzMatrix();
     void setTransferFunction();
@@ -88,21 +72,39 @@ public:
     QColorTransform transformationToColorSpace(const QColorSpacePrivate *out) const;
     QColorTransform transformationToXYZ() const;
 
+    bool isThreeComponentMatrix() const;
+    void clearElementListProcessingForEdit();
+
     static constexpr QColorSpace::NamedColorSpace Unknown = QColorSpace::NamedColorSpace(0);
     QColorSpace::NamedColorSpace namedColorSpace = Unknown;
 
     QColorSpace::Primaries primaries = QColorSpace::Primaries::Custom;
     QColorSpace::TransferFunction transferFunction = QColorSpace::TransferFunction::Custom;
+    QColorSpace::TransformModel transformModel = QColorSpace::TransformModel::ThreeComponentMatrix;
+    QColorSpace::ColorModel colorModel = QColorSpace::ColorModel::Undefined;
     float gamma = 0.0f;
     QColorVector whitePoint;
 
+    // Three component matrix data:
     QColorTrc trc[3];
     QColorMatrix toXyz;
+    QColorMatrix chad;
 
+    // Element list processing data:
+    struct TransferElement {
+        QColorTrc trc[4];
+    };
+    using Element = std::variant<TransferElement, QColorMatrix, QColorVector, QColorCLUT>;
+    bool isPcsLab = false;
+    // A = device, B = PCS
+    QList<Element> mAB, mBA;
+
+    // Metadata
     QString description;
     QString userDescription;
     QByteArray iccProfile;
 
+    // Cached tables for three component matrix transform:
     Q_CONSTINIT static QBasicMutex s_lutWriteLock;
     struct LUT {
         LUT() = default;

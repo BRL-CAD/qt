@@ -1,10 +1,12 @@
 // Copyright (C) 2016 The Qt Company Ltd.
 // SPDX-License-Identifier: LicenseRef-Qt-Commercial OR LGPL-3.0-only OR GPL-2.0-only OR GPL-3.0-only
+// Qt-Security score:significant reason:default
 
 #include "qwindowcontainer_p.h"
 #include "qwidget_p.h"
 #include "qwidgetwindow_p.h"
 #include <QtGui/qwindow.h>
+#include <QtGui/private/qwindow_p.h>
 #include <QtGui/private/qguiapplication_p.h>
 #include <qpa/qplatformintegration.h>
 #include <QDebug>
@@ -28,7 +30,6 @@ public:
 
     QWindowContainerPrivate()
         : window(nullptr)
-        , oldFocusWindow(nullptr)
         , usesNativeWidgets(false)
     {
     }
@@ -62,6 +63,8 @@ public:
         if (window->parent() == nullptr)
             return;
         Q_Q(QWindowContainer);
+        if (q->testAttribute(Qt::WA_DontCreateNativeAncestors))
+            return;
         if (q->internalWinId()) {
             // Allow use native widgets if the window container is already a native widget
             usesNativeWidgets = true;
@@ -103,7 +106,6 @@ public:
     }
 
     QPointer<QWindow> window;
-    QWindow *oldFocusWindow;
     QWindow fakeParent;
 
     uint usesNativeWidgets : 1;
@@ -155,11 +157,13 @@ public:
     instance have any focus policy and it will delegate focus to the
     window via a call to QWindow::requestActivate(). However,
     returning to the normal focus chain from the QWindow instance will
-    be up to the QWindow instance implementation itself. For instance,
-    when entering a Qt Quick based window with tab focus, it is quite
-    likely that further tab presses will only cycle inside the QML
-    application. Also, whether QWindow::requestActivate() actually
-    gives the window focus, is platform dependent.
+    be up to the QWindow instance implementation itself. Also, whether
+    QWindow::requestActivate() actually gives the window focus, is
+    platform dependent.
+
+    Since 6.8, if embedding a Qt Quick based window, tab presses will
+    transition in and out of the embedded QML window, allowing focus to move
+    to the next or previous focusable object in the window container chain.
 
     \li Using many window container instances in a QWidget-based
     application can greatly hurt the overall performance of the
@@ -207,6 +211,7 @@ QWindowContainer::QWindowContainer(QWindow *embeddedWindow, QWidget *parent, Qt:
     }
 
     d->window = embeddedWindow;
+    d->window->installEventFilter(this);
 
     QString windowName = d->window->objectName();
     if (windowName.isEmpty())
@@ -219,8 +224,8 @@ QWindowContainer::QWindowContainer(QWindow *embeddedWindow, QWidget *parent, Qt:
 
     setAcceptDrops(true);
 
-    connect(qGuiApp, &QGuiApplication::focusWindowChanged,
-            this, &QWindowContainer::focusWindowChanged);
+    connect(containedWindow(), &QWindow::minimumHeightChanged, this, &QWindowContainer::updateGeometry);
+    connect(containedWindow(), &QWindow::minimumWidthChanged, this, &QWindowContainer::updateGeometry);
 }
 
 QWindow *QWindowContainer::containedWindow() const
@@ -241,30 +246,12 @@ QWindowContainer::~QWindowContainer()
     // QEvent::PlatformSurface delivery relies on virtuals. Getting
     // SurfaceAboutToBeDestroyed can be essential for OpenGL, Vulkan, etc.
     // QWindow subclasses in particular. Keep these working.
-    if (d->window)
+    if (d->window) {
+        d->window->removeEventFilter(this);
         d->window->destroy();
+    }
 
     delete d->window;
-
-    disconnect(qGuiApp, &QGuiApplication::focusWindowChanged,
-               this, &QWindowContainer::focusWindowChanged);
-}
-
-
-
-/*!
-    \internal
- */
-
-void QWindowContainer::focusWindowChanged(QWindow *focusWindow)
-{
-    Q_D(QWindowContainer);
-    d->oldFocusWindow = focusWindow;
-    if (focusWindow == d->window) {
-        QWidget *widget = QApplication::focusWidget();
-        if (widget)
-            widget->clearFocus();
-    }
 }
 
 /*!
@@ -281,8 +268,12 @@ bool QWindowContainer::eventFilter(QObject *o, QEvent *e)
         QChildEvent *ce = static_cast<QChildEvent *>(e);
         if (ce->child() == d->window) {
             o->removeEventFilter(this);
+            d->window->removeEventFilter(this);
             d->window = nullptr;
         }
+    } else if (e->type() == QEvent::FocusIn) {
+        if (o == d->window)
+            setFocus(Qt::ActiveWindowFocusReason);
     }
     return false;
 }
@@ -332,11 +323,16 @@ bool QWindowContainer::event(QEvent *e)
         break;
     case QEvent::FocusIn:
         if (d->window->parent()) {
-            if (d->oldFocusWindow != d->window) {
+            if (QGuiApplication::focusWindow() != d->window) {
+                QFocusEvent *event = static_cast<QFocusEvent *>(e);
+                const auto reason = event->reason();
+                QWindowPrivate::FocusTarget target = QWindowPrivate::FocusTarget::Current;
+                if (reason == Qt::TabFocusReason)
+                    target = QWindowPrivate::FocusTarget::First;
+                else if (reason == Qt::BacktabFocusReason)
+                    target = QWindowPrivate::FocusTarget::Last;
+                qt_window_private(d->window)->setFocusToTarget(target, reason);
                 d->window->requestActivate();
-            } else {
-                QWidget *next = nextInFocusChain();
-                next->setFocus();
             }
         }
         break;
@@ -371,6 +367,11 @@ bool QWindowContainer::event(QEvent *e)
     }
 
     return QWidget::event(e);
+}
+
+QSize QWindowContainer::minimumSizeHint() const
+{
+    return containedWindow() ? containedWindow()->minimumSize() : QSize(0, 0);
 }
 
 typedef void (*qwindowcontainer_traverse_callback)(QWidget *parent);
@@ -424,7 +425,9 @@ void QWindowContainer::parentWasChanged(QWidget *parent)
 void QWindowContainer::parentWasMoved(QWidget *parent)
 {
     if (QWindowContainerPrivate *d = QWindowContainerPrivate::get(parent)) {
-        if (d->window->parent())
+        if (!d->window)
+            return;
+        else if (d->window->parent())
             d->updateGeometry();
     }
     qwindowcontainer_traverse(parent, parentWasMoved);
@@ -433,7 +436,9 @@ void QWindowContainer::parentWasMoved(QWidget *parent)
 void QWindowContainer::parentWasRaised(QWidget *parent)
 {
     if (QWindowContainerPrivate *d = QWindowContainerPrivate::get(parent)) {
-        if (d->window->parent())
+        if (!d->window)
+            return;
+        else if (d->window->parent())
             d->window->raise();
     }
     qwindowcontainer_traverse(parent, parentWasRaised);
@@ -442,7 +447,9 @@ void QWindowContainer::parentWasRaised(QWidget *parent)
 void QWindowContainer::parentWasLowered(QWidget *parent)
 {
     if (QWindowContainerPrivate *d = QWindowContainerPrivate::get(parent)) {
-        if (d->window->parent())
+        if (!d->window)
+            return;
+        else if (d->window->parent())
             d->window->lower();
     }
     qwindowcontainer_traverse(parent, parentWasLowered);

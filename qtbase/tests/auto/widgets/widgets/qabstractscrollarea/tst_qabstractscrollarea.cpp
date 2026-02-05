@@ -318,7 +318,10 @@ void tst_QAbstractScrollArea::task214488_layoutDirection()
     scrollArea.setLayoutDirection(dir);
 
     int refValue = hbar->value();
-    qApp->sendEvent(&scrollArea, new QKeyEvent(QEvent::KeyPress, key, Qt::NoModifier));
+    {
+        QKeyEvent ke(QEvent::KeyPress, key, Qt::NoModifier);
+        qApp->sendEvent(&scrollArea, &ke);
+    }
     QVERIFY(lessThan ? (hbar->value() < refValue) : (hbar->value() > refValue));
 }
 
@@ -430,6 +433,18 @@ void tst_QAbstractScrollArea::sizeHint()
 
     QSize sizeHint = scrollArea.sizeHint();
     QCOMPARE(sizeHint, scrollArea.viewportSizeHint());
+
+    // check if the hScrollbar is taken into account
+    scrollArea.setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOn);
+    scrollArea.setVerticalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
+    QCOMPARE_GT(scrollArea.sizeHint().height(), scrollArea.viewportSizeHint().height());
+
+    // check if the vScrollbar is taken into account
+    scrollArea.setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
+    scrollArea.setVerticalScrollBarPolicy(Qt::ScrollBarAlwaysOn);
+    QCOMPARE_GT(scrollArea.sizeHint().width(), scrollArea.viewportSizeHint().width());
+
+    scrollArea.setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOn);
 
     scrollArea.setVerticalScrollBarPolicy(Qt::ScrollBarAlwaysOn);
     scrollArea.setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOn);

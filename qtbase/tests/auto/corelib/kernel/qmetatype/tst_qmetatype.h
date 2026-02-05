@@ -44,7 +44,6 @@ private:
     QList<QVariant> propList;
 
 private slots:
-    void defined();
 #if QT_CONFIG(thread)
     void threadSafety();
 #endif
@@ -111,6 +110,7 @@ private slots:
     void customDebugStream();
     void unknownType();
     void fromType();
+    void compareCompiles();
     void operatorEq_data();
     void operatorEq();
     void operatorEq2_data();

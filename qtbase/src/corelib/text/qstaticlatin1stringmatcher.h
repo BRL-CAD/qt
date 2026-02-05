@@ -1,5 +1,6 @@
 // Copyright (C) 2023 The Qt Company Ltd.
 // SPDX-License-Identifier: LicenseRef-Qt-Commercial OR LGPL-3.0-only OR GPL-2.0-only OR GPL-3.0-only
+// Qt-Security score:critical reason:data-parser
 
 #ifndef QSTATICLATIN1STRINGMATCHER_H
 #define QSTATICLATIN1STRINGMATCHER_H
@@ -109,13 +110,30 @@ public:
     }
 
     constexpr qsizetype indexIn(QLatin1StringView haystack, qsizetype from = 0) const noexcept
+    { return indexIn_helper(haystack, from); }
+
+    constexpr qsizetype indexIn(QStringView haystack, qsizetype from = 0) const noexcept
+    { return indexIn_helper(haystack, from); }
+
+private:
+    template <typename String>
+    constexpr qsizetype indexIn_helper(String haystack, qsizetype from = 0) const noexcept
     {
+        static_assert(QtPrivate::isLatin1OrUtf16View<String>);
+
         if (from >= haystack.size())
             return -1;
-        const char *begin = haystack.begin() + from;
-        const char *end = haystack.end();
+
+        const auto start = [haystack]() constexpr {
+            if constexpr (std::is_same_v<String, QStringView>)
+                return haystack.utf16();
+            else
+                return haystack.begin();
+        }();
+        const auto begin = start + from;
+        const auto end = start + haystack.size();
         const auto r = m_searcher(begin, end, m_pattern.begin(), m_pattern.end());
-        return r.begin == end ? -1 : std::distance(haystack.begin(), r.begin);
+        return r.begin == end ? -1 : std::distance(start, r.begin);
     }
 };
 

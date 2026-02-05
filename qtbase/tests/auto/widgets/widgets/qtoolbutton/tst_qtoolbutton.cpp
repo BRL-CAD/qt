@@ -35,6 +35,8 @@ private slots:
     void qtbug_34759_sizeHintResetWhenSettingMenu();
     void defaultActionSynced();
     void deleteInHandler();
+    void emptyMenu();
+    void popupMode();
 
 protected slots:
     void sendMouseClick();
@@ -130,6 +132,11 @@ void tst_QToolButton::triggered()
 
     m_menu = menu.data();
 
+    // QMenu uses QGuiApplicationPrivate::lastCursorPosition to detect pointer
+    // movement. And GuiApplication needs at least one mouse move to properly
+    // initialize it. So we send a mouse move now, before we open the menu.
+    QTest::mouseMove(mainWidget.windowHandle(), mainWidget.mapFromGlobal(QPoint(0, 0)));
+
     QTimer *timer = new QTimer(this);
     timer->setInterval(50);
     connect(timer, SIGNAL(timeout()), this, SLOT(sendMouseClick()));
@@ -182,7 +189,6 @@ void tst_QToolButton::task176137_autoRepeatOfAction()
     label->move(0, 50);
 
     mainWidget.show();
-    QApplicationPrivate::setActiveWindow(&mainWidget);
     QVERIFY(QTest::qWaitForWindowActive(&mainWidget));
 
     QSignalSpy spy(&action,SIGNAL(triggered()));
@@ -333,6 +339,101 @@ void tst_QToolButton::deleteInHandler()
     QTest::mouseClick(tb, Qt::LeftButton);
     QVERIFY(!tb);
 }
+
+void tst_QToolButton::emptyMenu()
+{
+
+    QToolButton tb;
+    auto menu = new QMenu(&tb);
+    tb.setMenu(menu);
+    tb.showMenu(); // calls exec(), but since the fix for QTBUG-129108, we don't show an empty menu
+
+    // see triggered() test
+    QTest::mouseMove(tb.windowHandle(), tb.mapFromGlobal(QPoint(0, 0)));
+
+    // But if we now put something in the menu, it should show up
+    auto act = menu->addAction("an action");
+    QSignalSpy triggeredSpy(act, &QAction::triggered);
+    // In 200ms, click on the action so that exec() returns
+    QTimer::singleShot(200, menu, [&]() {
+        QTest::mouseClick(menu, Qt::LeftButton, {}, menu->rect().center());
+    });
+    tb.showMenu(); // calls exec(), which only returns in 200ms
+    QTRY_COMPARE(triggeredSpy.size(), 1);
+}
+
+void tst_QToolButton::popupMode()
+{
+    {
+        // action without menu -> no change in popup mode
+        QToolButton tb;
+        QCOMPARE(tb.popupMode(), QToolButton::DelayedPopup); // ### Qt7 change to MenuButtonPopup
+        auto a = new QAction("Action 1");
+        tb.setDefaultAction(a);
+        QCOMPARE(tb.popupMode(), QToolButton::DelayedPopup);
+    }
+    {
+        // action with menu, no user-set popup mode -> MenuButtonPopup
+        QToolButton tb;
+        auto a = new QAction("Action 1");
+        auto menu = new QMenu;
+        menu->addAction("Menuaction");
+        a->setMenu(menu);   // before setDefaultAction
+        tb.setDefaultAction(a);
+        QCOMPARE(tb.popupMode(), QToolButton::MenuButtonPopup);
+        tb.setPopupMode(QToolButton::InstantPopup);
+        QCOMPARE(tb.popupMode(), QToolButton::InstantPopup);
+    }
+    {
+        // action with menu, no user-set popup mode -> MenuButtonPopup
+        QToolButton tb;
+        auto a = new QAction("Action 1");
+        auto menu = new QMenu;
+        menu->addAction("Menuaction");
+        tb.setDefaultAction(a);
+        a->setMenu(menu); // after setDefaultAction
+        QCOMPARE(tb.popupMode(), QToolButton::MenuButtonPopup);
+        tb.setPopupMode(QToolButton::InstantPopup);
+        QCOMPARE(tb.popupMode(), QToolButton::InstantPopup);
+    }
+    {
+        // action without (initial) menu, user-set popup mode is not changed
+        QToolButton tb;
+        auto a = new QAction("Action 1");
+        auto menu = new QMenu;
+        menu->addAction("Menuaction");
+        tb.setDefaultAction(a);
+        tb.setPopupMode(QToolButton::InstantPopup);
+        QCOMPARE(tb.popupMode(), QToolButton::InstantPopup);
+        a->setMenu(menu);
+        QCOMPARE(tb.popupMode(), QToolButton::InstantPopup);
+    }
+    {
+        // action with menu but after user-set popup mode -> popup mode is not changed
+        QToolButton tb;
+        auto a = new QAction("Action 1");
+        auto menu = new QMenu;
+        menu->addAction("Menuaction");
+        tb.setPopupMode(QToolButton::InstantPopup);
+        QCOMPARE(tb.popupMode(), QToolButton::InstantPopup);
+        a->setMenu(menu); // before setDefaultAction
+        tb.setDefaultAction(a);
+        QCOMPARE(tb.popupMode(), QToolButton::InstantPopup);
+    }
+    {
+        // action with menu but after user-set popup mode -> popup mode is not changed
+        QToolButton tb;
+        auto a = new QAction("Action 1");
+        auto menu = new QMenu;
+        menu->addAction("Menuaction");
+        tb.setPopupMode(QToolButton::InstantPopup);
+        QCOMPARE(tb.popupMode(), QToolButton::InstantPopup);
+        tb.setDefaultAction(a);
+        a->setMenu(menu); // after setDefaultAction
+        QCOMPARE(tb.popupMode(), QToolButton::InstantPopup);
+    }
+}
+
 
 QTEST_MAIN(tst_QToolButton)
 #include "tst_qtoolbutton.moc"

@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: LicenseRef-Qt-Commercial OR GPL-3.0-only
 
 #include <QTest>
+#include <QtTest/private/qcomparisontesthelper_p.h>
 #include <QtTest/private/qpropertytesthelper_p.h>
 #include <QSignalSpy>
 
@@ -24,6 +25,7 @@ public slots:
     void cleanupTestCase();
     void init();
 private slots:
+    void compareCompiles();
     void clear_data();
     void clear();
     void clearAndSelect();
@@ -54,9 +56,12 @@ private slots:
     void merge_data();
     void merge();
     void isRowSelected();
+    void isColumnSelected();
     void childrenDeselectionSignal();
+#if QT_CONFIG(proxymodel)
     void layoutChangedWithAllSelected1();
     void layoutChangedWithAllSelected2();
+#endif
     void layoutChangedTreeSelection();
     void deselectRemovedMiddleRange();
     void setModel();
@@ -73,7 +78,9 @@ private slots:
     void QTBUG48402();
 
     void QTBUG58851_data();
+#if QT_CONFIG(proxymodel)
     void QTBUG58851();
+#endif
 
     void QTBUG18001_data();
     void QTBUG18001();
@@ -97,7 +104,7 @@ QDataStream &operator<<(QDataStream &, const QModelIndexList &);
 QDataStream &operator>>(QDataStream &, QModelIndexList &);
 
 typedef QList<int> IntList;
-typedef QPair<int, int> IntPair;
+using IntPair = std::pair<int, int>;
 typedef QList<IntPair> PairList;
 
 class QStreamHelper: public QAbstractItemModel
@@ -211,6 +218,11 @@ void tst_QItemSelectionModel::init()
         model->removeRow(0, QModelIndex());
     while (model->rowCount(QModelIndex()) < 5)
         model->insertRow(0, QModelIndex());
+}
+
+void tst_QItemSelectionModel::compareCompiles()
+{
+    QTestPrivate::testEqualityOperatorsCompile<QItemSelectionRange>();
 }
 
 void tst_QItemSelectionModel::clear_data()
@@ -1662,7 +1674,7 @@ void tst_QItemSelectionModel::removeColumns()
 }
 
 typedef QList<IntList> IntListList;
-typedef QPair<IntPair, IntPair> IntPairPair;
+using IntPairPair = std::pair<IntPair, IntPair>;
 typedef QList<IntPairPair> IntPairPairList;
 
 void tst_QItemSelectionModel::modelLayoutChanged_data()
@@ -1959,6 +1971,11 @@ void tst_QItemSelectionModel::rowIntersectsSelection1()
     selectionModel.select(index, QItemSelectionModel::Toggle);
     QVERIFY(!selectionModel.rowIntersectsSelection(0, QModelIndex()));
     QVERIFY(!selectionModel.columnIntersectsSelection(0, QModelIndex()));
+
+    QStandardItemModel model2;
+    model2.setItem(0, 0, new QStandardItem("foo"));
+    QVERIFY(!selectionModel.rowIntersectsSelection(0, model2.index(0, 0, QModelIndex())));
+    QVERIFY(!selectionModel.columnIntersectsSelection(0, model2.index(0, 0, QModelIndex())));
 }
 
 void tst_QItemSelectionModel::rowIntersectsSelection2()
@@ -2190,12 +2207,52 @@ void tst_QItemSelectionModel::merge()
 
 void tst_QItemSelectionModel::isRowSelected()
 {
-    QStandardItemModel model(2,2);
-    model.setData(model.index(0,0), 0, Qt::UserRole - 1);
+    QStandardItemModel model(2, 2);
+    model.setData(model.index(0, 0), 0, Qt::UserRole - 1);
     QItemSelectionModel sel(&model);
-    sel.select( QItemSelection(model.index(0,0), model.index(0, 1)), QItemSelectionModel::Select);
+    sel.select(QItemSelection(model.index(0, 0), model.index(0, 1)), QItemSelectionModel::Select);
     QCOMPARE(sel.selectedIndexes().size(), 1);
-    QVERIFY(sel.isRowSelected(0, QModelIndex()));
+    QVERIFY(sel.isRowSelected(0));
+    QVERIFY(!sel.isRowSelected(1));
+
+    // check Toggle branch in isRowSelected()
+    sel.select(QItemSelection(model.index(0, 0), model.index(0, 1)), QItemSelectionModel::Toggle);
+    QVERIFY(!sel.isRowSelected(0));
+    QVERIFY(!sel.isRowSelected(1));
+
+    sel.select(QItemSelection(model.index(0, 0), model.index(0, 1)), QItemSelectionModel::Toggle);
+    QVERIFY(sel.isRowSelected(0));
+    QVERIFY(!sel.isRowSelected(1));
+
+    // check Deselect branch in isRowSelected()
+    sel.select(QItemSelection(model.index(0, 0), model.index(0, 1)), QItemSelectionModel::Deselect);
+    QVERIFY(!sel.isRowSelected(0));
+    QVERIFY(!sel.isRowSelected(1));
+}
+
+void tst_QItemSelectionModel::isColumnSelected()
+{
+    QStandardItemModel model(2, 2);
+    model.setData(model.index(0, 0), 0, Qt::UserRole - 1);
+    QItemSelectionModel sel(&model);
+    sel.select(QItemSelection(model.index(0, 0), model.index(1, 0)), QItemSelectionModel::Select);
+    QCOMPARE(sel.selectedIndexes().size(), 1);
+    QVERIFY(sel.isColumnSelected(0));
+    QVERIFY(!sel.isColumnSelected(1));
+
+    // check Toggle branch in isColumnSelected()
+    sel.select(QItemSelection(model.index(0, 0), model.index(1, 0)), QItemSelectionModel::Toggle);
+    QVERIFY(!sel.isColumnSelected(0));
+    QVERIFY(!sel.isColumnSelected(1));
+
+    sel.select(QItemSelection(model.index(0, 0), model.index(1, 0)), QItemSelectionModel::Toggle);
+    QVERIFY(sel.isColumnSelected(0));
+    QVERIFY(!sel.isColumnSelected(1));
+
+    // check Deselect branch in isColumnSelected()
+    sel.select(QItemSelection(model.index(0, 0), model.index(1, 0)), QItemSelectionModel::Deselect);
+    QVERIFY(!sel.isColumnSelected(0));
+    QVERIFY(!sel.isColumnSelected(1));
 }
 
 void tst_QItemSelectionModel::childrenDeselectionSignal()
@@ -2253,6 +2310,7 @@ void tst_QItemSelectionModel::childrenDeselectionSignal()
     QVERIFY(selectionModel.selection().contains(sel2));
 }
 
+#if QT_CONFIG(proxymodel)
 void tst_QItemSelectionModel::layoutChangedWithAllSelected1()
 {
     QStringListModel model( QStringList() << "foo" << "bar" << "foo2");
@@ -2331,6 +2389,7 @@ void tst_QItemSelectionModel::layoutChangedWithAllSelected2()
     for (const auto &index : indexList)
         QVERIFY(selection.isSelected(index));
 }
+#endif
 
 // This test is a regression test for QTBUG-2804.
 void tst_QItemSelectionModel::layoutChangedTreeSelection()
@@ -2714,6 +2773,9 @@ void tst_QItemSelectionModel::QTBUG48402()
     model.removeRows(removeTop, removeBottom - removeTop + 1);
 
     QCOMPARE(QItemSelectionRange(helper.tl, helper.br), QItemSelectionRange(dtl, dbr));
+    QT_TEST_EQUALITY_OPS(QItemSelectionRange(helper.tl, helper.br), QItemSelectionRange(dtl, dbr), true);
+    QT_TEST_EQUALITY_OPS(QItemSelectionRange(), QItemSelectionRange(), true);
+    QT_TEST_EQUALITY_OPS(QItemSelectionRange(helper.tl, helper.br), QItemSelectionRange(), false);
 }
 
 void tst_QItemSelectionModel::QTBUG58851_data()
@@ -2742,6 +2804,7 @@ void tst_QItemSelectionModel::QTBUG58851_data()
                 << IntPair(2, 3));
 }
 
+#if QT_CONFIG(proxymodel)
 void tst_QItemSelectionModel::QTBUG58851()
 {
     using IntPair = std::pair<int, int>;
@@ -2786,6 +2849,7 @@ void tst_QItemSelectionModel::QTBUG58851()
         QVERIFY(selections.isSelected(i));
     }
 }
+#endif
 
 void tst_QItemSelectionModel::QTBUG18001_data()
 {
@@ -2963,7 +3027,7 @@ void tst_QItemSelectionModel::destroyModel()
     selectionModel->setCurrentIndex(itemModel->index(1, 0), QItemSelectionModel::Select);
     QVERIFY(selectionModel->currentIndex().isValid());
 
-    QTest::failOnWarning(QRegularExpression(".*"));
+    QTest::failOnWarning();
     itemModel.reset();
     QVERIFY(!selectionModel->currentIndex().isValid());
     QVERIFY(selectionModel->selection().isEmpty());

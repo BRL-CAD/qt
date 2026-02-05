@@ -1,5 +1,6 @@
 // Copyright (C) 2016 The Qt Company Ltd.
 // SPDX-License-Identifier: LicenseRef-Qt-Commercial OR LGPL-3.0-only OR GPL-2.0-only OR GPL-3.0-only
+// Qt-Security score:significant reason:default
 
 #include <QWidgetItem>
 #include <QToolBar>
@@ -564,19 +565,19 @@ int QToolBarAreaLayoutInfo::distance(const QPoint &pos) const
 {
     switch (dockPos) {
         case QInternal::LeftDock:
-            if (pos.y() < rect.bottom())
+            if (pos.y() > 0 && pos.y() < rect.bottom())
                 return pos.x() - rect.right();
             break;
         case QInternal::RightDock:
-            if (pos.y() < rect.bottom())
+            if (pos.y() > 0 && pos.y() < rect.bottom())
                 return rect.left() - pos.x();
             break;
         case QInternal::TopDock:
-            if (pos.x() < rect.right())
+            if (pos.x() > 0 && pos.x() < rect.right())
                 return pos.y() - rect.bottom();
             break;
         case QInternal::BottomDock:
-            if (pos.x() < rect.right())
+            if (pos.x() > 0 && pos.x() < rect.right())
                 return rect.top() - pos.y();
             break;
 

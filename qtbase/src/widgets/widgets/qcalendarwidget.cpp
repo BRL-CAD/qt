@@ -1,5 +1,6 @@
 // Copyright (C) 2020 The Qt Company Ltd.
 // SPDX-License-Identifier: LicenseRef-Qt-Commercial OR LGPL-3.0-only OR GPL-2.0-only OR GPL-3.0-only
+// Qt-Security score:critical reason:data-parser
 
 #include "qcalendarwidget.h"
 
@@ -1462,7 +1463,8 @@ void QCalendarView::mouseDoubleClickEvent(QMouseEvent *event)
 
     QDate date = handleMouseEvent(event);
     validDateClicked = false;
-    if (date == calendarModel->m_date && !style()->styleHint(QStyle::SH_ItemView_ActivateItemOnSingleClick)) {
+    if (date == calendarModel->m_date &&
+        !style()->styleHint(QStyle::SH_ItemView_ActivateItemOnSingleClick, nullptr, this)) {
         emit editingFinished();
     }
 }
@@ -1539,7 +1541,7 @@ void QCalendarView::mouseReleaseEvent(QMouseEvent *event)
         if (date.isValid()) {
             emit changeDate(date, true);
             emit clicked(date);
-            if (style()->styleHint(QStyle::SH_ItemView_ActivateItemOnSingleClick))
+            if (style()->styleHint(QStyle::SH_ItemView_ActivateItemOnSingleClick, nullptr, this))
                 emit editingFinished();
         }
         validDateClicked = false;
@@ -1576,20 +1578,15 @@ protected:
     {
         Q_UNUSED(e);
 
+        QStylePainter painter(this);
         QStyleOptionToolButton opt;
         initStyleOption(&opt);
 
-        if (opt.state & QStyle::State_MouseOver || isDown()) {
-            //act as normal button
-            setPalette(QPalette());
-        } else {
-            //set the highlight color for button text
-            QPalette toolPalette = palette();
-            toolPalette.setColor(QPalette::ButtonText, toolPalette.color(QPalette::HighlightedText));
-            setPalette(toolPalette);
-        }
+        // set the highlight color for button text so it remains legible on top of navBarBackground
+        if (!opt.state.testFlag(QStyle::State_MouseOver) || isDown())
+            opt.palette.setColor(QPalette::ButtonText, opt.palette.color(QPalette::HighlightedText));
 
-        QToolButton::paintEvent(e);
+        painter.drawComplexControl(QStyle::CC_ToolButton, opt);
     }
 };
 
@@ -2019,6 +2016,7 @@ void QCalendarWidgetPrivate::_q_editingFinished()
     \inmodule QtWidgets
 
     \image fusion-calendarwidget.png
+           {Calendar widget showing the month, year, and a selected day}
 
     The widget is initialized with the current month and year, but
     QCalendarWidget provides several public slots to change the year
@@ -2057,6 +2055,7 @@ void QCalendarWidgetPrivate::_q_editingFinished()
     \table
     \row \li
         \image qcalendarwidget-grid.png
+               {Calendar widget with a visible grid}
     \row \li
         \snippet code/src_gui_widgets_qcalendarwidget.cpp 0
     \endtable
@@ -2487,6 +2486,7 @@ void QCalendarWidget::showToday()
     \table
     \row
     \li \image qcalendarwidget-minimum.png
+               {Calendar widget with the disabled dates before the minimum date}
     \row
     \li
     \snippet code/src_gui_widgets_qcalendarwidget.cpp 1
@@ -2543,6 +2543,7 @@ void QCalendarWidget::clearMinimumDate()
     \table
     \row
     \li \image qcalendarwidget-maximum.png
+               {Calendar widget with the disabled dates after the maximum date}
     \row
     \li
     \snippet code/src_gui_widgets_qcalendarwidget.cpp 2
@@ -2717,6 +2718,7 @@ void QCalendarWidget::setVerticalHeaderFormat(QCalendarWidget::VerticalHeaderFor
     \table
     \row
         \li \inlineimage qcalendarwidget-grid.png
+                         {Calendar widget set to be visible}
     \row
         \li
         \snippet code/src_gui_widgets_qcalendarwidget.cpp 5
@@ -2891,7 +2893,7 @@ QMap<QDate, QTextCharFormat> QCalendarWidget::dateTextFormat() const
 
 /*!
     Returns a QTextCharFormat for \a date. The char format can be
-    empty if the date is not renderd specially.
+    empty if the date is not rendered specially.
 */
 QTextCharFormat QCalendarWidget::dateTextFormat(QDate date) const
 {

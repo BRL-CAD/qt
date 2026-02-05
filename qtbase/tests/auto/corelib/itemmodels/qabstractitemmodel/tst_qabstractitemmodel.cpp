@@ -6,7 +6,9 @@
 #include <QtTest/private/qcomparisontesthelper_p.h>
 
 #include <QtCore/QCoreApplication>
+#if QT_CONFIG(sortfilterproxymodel)
 #include <QtCore/QSortFilterProxyModel>
+#endif
 #include <QtCore/QStringListModel>
 #include <QtGui/QStandardItemModel>
 
@@ -38,6 +40,8 @@ private slots:
     void parent();
     void hasChildren();
     void data();
+    void invalidModelIndexDataReturnsInvalidQVariant();
+    void invalidPersistentModelIndexDataReturnsInvalidQVariant();
     void headerData();
     void itemData();
     void itemFlags();
@@ -80,9 +84,11 @@ private slots:
     void testMoveWithinOwnRange_data();
     void testMoveWithinOwnRange();
 
+#if QT_CONFIG(sortfilterproxymodel)
     void testMoveThroughProxy();
 
     void testReset();
+#endif
 
     void testDataChanged();
 
@@ -386,6 +392,33 @@ void tst_QAbstractItemModel::data()
     QCOMPARE(model.setHeaderData(0, Qt::Horizontal, QVariant(0), 0), false);
 }
 
+void tst_QAbstractItemModel::invalidModelIndexDataReturnsInvalidQVariant()
+{
+    const QModelIndex invalid;
+    QVERIFY(!invalid.isValid());
+    QVERIFY(!invalid.data(Qt::ItemDataRole::DisplayRole).isValid());
+
+    QtTestModel model(1, 1);
+    const QModelIndex mi = model.index(0, 1);
+    QVERIFY(!mi.isValid());
+    QVERIFY(!mi.data(Qt::ItemDataRole::DisplayRole).isValid());
+}
+
+void tst_QAbstractItemModel::invalidPersistentModelIndexDataReturnsInvalidQVariant()
+{
+    const QPersistentModelIndex invalid;
+    QVERIFY(!invalid.isValid());
+    QVERIFY(!invalid.data(Qt::ItemDataRole::DisplayRole).isValid());
+
+    QtTestModel model(1, 1);
+    const QPersistentModelIndex pmi = model.index(0, 0);
+    QVERIFY(pmi.isValid());
+    QVERIFY(pmi.data(Qt::ItemDataRole::DisplayRole).isValid());
+    model.removeRows(0, 1);
+    QVERIFY(!pmi.isValid());
+    QVERIFY(!pmi.data(Qt::ItemDataRole::DisplayRole).isValid());
+}
+
 void tst_QAbstractItemModel::headerData()
 {
     QtTestModel model(1, 1);
@@ -481,8 +514,8 @@ void tst_QAbstractItemModel::match()
     QCOMPARE(res.size(), 3);
 }
 
-typedef QPair<int, int> Position;
-typedef QList<QPair<int, int> > Selection;
+using Position = std::pair<int, int>;
+using Selection = QList<Position>;
 typedef QList<QList<QString> > StringTable;
 typedef QList<QString> StringTableRow;
 
@@ -989,9 +1022,9 @@ void tst_QAbstractItemModel::complexChangesWithPersistent()
 
 void tst_QAbstractItemModel::modelIndexComparisons()
 {
-    QTestPrivate::testEqualityOperatorsCompile<QModelIndex>();
-    QTestPrivate::testEqualityOperatorsCompile<QPersistentModelIndex>();
-    QTestPrivate::testEqualityOperatorsCompile<QPersistentModelIndex, QModelIndex>();
+    QTestPrivate::testAllComparisonOperatorsCompile<QModelIndex>();
+    QTestPrivate::testAllComparisonOperatorsCompile<QPersistentModelIndex>();
+    QTestPrivate::testAllComparisonOperatorsCompile<QPersistentModelIndex, QModelIndex>();
 
     QtTestModel model(3, 3);
 
@@ -999,13 +1032,28 @@ void tst_QAbstractItemModel::modelIndexComparisons()
     QModelIndex mi22 = model.index(2, 2);
     QPersistentModelIndex pmi11 = mi11;
     QPersistentModelIndex pmi22 = mi22;
+    QPersistentModelIndex pmiU;
 
     QT_TEST_EQUALITY_OPS(mi11, mi11, true);
     QT_TEST_EQUALITY_OPS(mi11, mi22, false);
+    QT_TEST_ALL_COMPARISON_OPS(mi11, mi11, Qt::strong_ordering::equal);
+    QT_TEST_ALL_COMPARISON_OPS(mi11, mi22, Qt::strong_ordering::less);
+    QT_TEST_ALL_COMPARISON_OPS(mi22, mi11, Qt::strong_ordering::greater);
     QT_TEST_EQUALITY_OPS(pmi11, pmi11, true);
     QT_TEST_EQUALITY_OPS(pmi11, pmi22, false);
     QT_TEST_EQUALITY_OPS(pmi11, mi11, true);
     QT_TEST_EQUALITY_OPS(pmi11, mi22, false);
+
+    QT_TEST_ALL_COMPARISON_OPS(pmi11, pmi11, Qt::strong_ordering::equal);
+    QT_TEST_ALL_COMPARISON_OPS(pmi11, pmi22, Qt::strong_ordering::less);
+    // Disengaged QPMIs are sorted randomly (based on address of their Private)
+    // So all we can check here is QPMIs with d == nullptr, which should reliably
+    // come before any others.
+    QT_TEST_ALL_COMPARISON_OPS(pmiU, pmiU, Qt::strong_ordering::equal);
+    QT_TEST_ALL_COMPARISON_OPS(pmi11, pmiU, Qt::strong_ordering::greater);
+    QT_TEST_ALL_COMPARISON_OPS(pmi11, mi11, Qt::strong_ordering::equal);
+    QT_TEST_ALL_COMPARISON_OPS(pmi11, mi22, Qt::strong_ordering::less);
+    QT_TEST_ALL_COMPARISON_OPS(pmiU, mi11, Qt::strong_ordering::less);
 }
 
 void tst_QAbstractItemModel::testMoveSameParentDown_data()
@@ -1239,6 +1287,7 @@ void tst_QAbstractItemModel::testMoveSameParentUp()
     }
 }
 
+#if QT_CONFIG(sortfilterproxymodel)
 void tst_QAbstractItemModel::testMoveThroughProxy()
 {
     QSortFilterProxyModel *proxy = new QSortFilterProxyModel(this);
@@ -1257,6 +1306,7 @@ void tst_QAbstractItemModel::testMoveThroughProxy()
     moveCommand->setDestRow(0);
     moveCommand->doCommand();
 }
+#endif
 
 void tst_QAbstractItemModel::testMoveToGrandParent_data()
 {
@@ -1804,6 +1854,7 @@ void tst_QAbstractItemModel::testMoveWithinOwnRange()
     QCOMPARE(afterSpy.size(), 0);
 }
 
+#if QT_CONFIG(proxymodel)
 class ListenerObject : public QObject
 {
     Q_OBJECT
@@ -1822,7 +1873,7 @@ private:
     QList<QPersistentModelIndex> m_persistentIndexes;
     QModelIndexList m_nonPersistentIndexes;
 };
-
+#endif
 
 class ModelWithCustomRole : public QStringListModel
 {
@@ -1836,6 +1887,7 @@ public:
     }
 };
 
+#if QT_CONFIG(proxymodel)
 ListenerObject::ListenerObject(QAbstractProxyModel *parent)
     : QObject(parent), m_model(parent)
 {
@@ -1876,7 +1928,9 @@ void ListenerObject::slotReset()
         QVERIFY(!idx.isValid());
     }
 }
+#endif
 
+#if QT_CONFIG(sortfilterproxymodel)
 void tst_QAbstractItemModel::testReset()
 {
     QSignalSpy beforeResetSpy(m_model, &DynamicTreeModel::modelAboutToBeReset);
@@ -1931,6 +1985,7 @@ void tst_QAbstractItemModel::testReset()
     // After being reset the proxy must be queried again.
     QCOMPARE(nullProxy->roleNames().value(Qt::UserRole + 1), QByteArray());
 }
+#endif
 
 class CustomRoleModel : public QStringListModel
 {

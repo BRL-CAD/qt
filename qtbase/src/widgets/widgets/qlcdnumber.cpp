@@ -1,5 +1,6 @@
 // Copyright (C) 2016 The Qt Company Ltd.
 // SPDX-License-Identifier: LicenseRef-Qt-Commercial OR LGPL-3.0-only OR GPL-2.0-only OR GPL-3.0-only
+// Qt-Security score:critical reason:data-parser
 
 #include "qlcdnumber.h"
 
@@ -38,7 +39,7 @@ public:
     \ingroup basicwidgets
     \inmodule QtWidgets
 
-    \image windows-lcdnumber.png
+    \image fusion-lcdnumber.png {"1234" with LCD-like digital appearance}
 
     It can display a number in just about any size. It can display
     decimal, hexadecimal, octal or binary numbers. It is easy to
@@ -1123,7 +1124,7 @@ void QLCDNumberPrivate::drawSegment(const QPoint &pos, char segmentNo, QPainter 
 
 /*!
     \property QLCDNumber::segmentStyle
-    \brief the style of the LCDNumber
+    \brief the style of the LCDNumber.
 
     \table
     \header \li Style \li Result

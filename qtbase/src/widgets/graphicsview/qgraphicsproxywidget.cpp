@@ -1,5 +1,6 @@
 // Copyright (C) 2016 The Qt Company Ltd.
 // SPDX-License-Identifier: LicenseRef-Qt-Commercial OR LGPL-3.0-only OR GPL-2.0-only OR GPL-3.0-only
+// Qt-Security score:significant reason:default
 
 #include "qglobal.h"
 
@@ -73,6 +74,7 @@ QT_BEGIN_NAMESPACE
     contents rect labeled.
 
     \image qgraphicsproxywidget-embed.png
+           {Proxy widget and its embedded widget with their positions}
 
     Alternatively, you can start by creating a new QGraphicsProxyWidget item,
     and then call setWidget() to embed a QWidget later. The widget() function
@@ -295,6 +297,15 @@ void QGraphicsProxyWidgetPrivate::sendWidgetMouseEvent(QGraphicsSceneMouseEvent 
 #endif
     }
 
+#ifndef QT_NO_CURSOR
+    // Keep cursor in sync
+    if (lastWidgetUnderMouse) {
+        QCursor widgetsCursor = lastWidgetUnderMouse->cursor();
+        if (q->cursor() != widgetsCursor)
+            q->setCursor(widgetsCursor);
+    }
+#endif
+
     event->setAccepted(mouseEvent.isAccepted());
 }
 
@@ -340,10 +351,10 @@ QWidget *QGraphicsProxyWidgetPrivate::findFocusChild(QWidget *child, bool next) 
 
     // Run around the focus chain until we find a widget that can take tab focus.
     if (!child) {
-        child = next ? (QWidget *)widget : widget->d_func()->focus_prev;
+        child = next ? widget.data() : widget->previousInFocusChain();
     } else {
-        child = next ? child->d_func()->focus_next : child->d_func()->focus_prev;
-        if ((next && child == widget) || (!next && child == widget->d_func()->focus_prev)) {
+        child = next ? child->nextInFocusChain() : child->previousInFocusChain();
+        if ((next && child == widget) || (!next && child == widget->previousInFocusChain())) {
              return nullptr;
         }
     }
@@ -360,8 +371,8 @@ QWidget *QGraphicsProxyWidgetPrivate::findFocusChild(QWidget *child, bool next) 
             && !(child->d_func()->extra && child->d_func()->extra->focus_proxy)) {
             return child;
         }
-        child = next ? child->d_func()->focus_next : child->d_func()->focus_prev;
-    } while (child != oldChild && !(next && child == widget) && !(!next && child == widget->d_func()->focus_prev));
+        child = next ? child->nextInFocusChain() : child->previousInFocusChain();
+    } while (child != oldChild && !(next && child == widget) && !(!next && child == widget->previousInFocusChain()));
     return nullptr;
 }
 

@@ -1,5 +1,6 @@
 // Copyright (C) 2019 The Qt Company Ltd.
 // SPDX-License-Identifier: LicenseRef-Qt-Commercial OR LGPL-3.0-only OR GPL-2.0-only OR GPL-3.0-only
+// Qt-Security score:significant reason:default
 
 #include "qtextedit_p.h"
 #if QT_CONFIG(lineedit)
@@ -21,7 +22,6 @@
 #include <qmenu.h>
 #endif
 #include <qstyle.h>
-#include <qtimer.h>
 #if QT_CONFIG(accessibility)
 #include <qaccessible.h>
 #endif
@@ -36,6 +36,7 @@
 #include <qapplication.h>
 #include <private/qapplication_p.h>
 #include <limits.h>
+#include <qtextobject.h>
 #include <qtexttable.h>
 #include <qvariant.h>
 
@@ -170,8 +171,9 @@ void QTextEditPrivate::init(const QString &html)
     if (!html.isEmpty())
         control->setHtml(html);
 
-    hbar->setSingleStep(20);
-    vbar->setSingleStep(20);
+    const auto singleStep = defaultSingleStep();
+    hbar->setSingleStep(singleStep);
+    vbar->setSingleStep(singleStep);
 
     viewport->setBackgroundRole(QPalette::Base);
     q->setMouseTracking(true);
@@ -362,8 +364,6 @@ void QTextEditPrivate::ensureVisible(const QRectF &_rect)
 
     \ingroup richtext-processing
     \inmodule QtWidgets
-
-    \tableofcontents
 
     \section1 Introduction and Concepts
 
@@ -715,7 +715,14 @@ bool QTextEdit::fontItalic() const
 QColor QTextEdit::textColor() const
 {
     Q_D(const QTextEdit);
-    return d->control->textCursor().charFormat().foreground().color();
+
+    const auto fg = d->control->textCursor().charFormat().foreground();
+    if (fg.style() == Qt::NoBrush) {
+        const auto context = d->control->getPaintContext(const_cast<QTextEdit *>(this));
+        return context.palette.color(QPalette::Text);
+    }
+
+    return fg.color();
 }
 
 /*!
@@ -1315,8 +1322,7 @@ void QTextEdit::keyPressEvent(QKeyEvent *e)
             break;
         case Qt::Key_Back:
         case Qt::Key_No:
-            if (!QApplicationPrivate::keypadNavigationEnabled()
-                    || (QApplicationPrivate::keypadNavigationEnabled() && !hasEditFocus())) {
+            if (!QApplicationPrivate::keypadNavigationEnabled() || !hasEditFocus()) {
                 e->ignore();
                 return;
             }
@@ -1613,7 +1619,10 @@ void QTextEditPrivate::paint(QPainter *p, QPaintEvent *e)
         const QColor col = control->palette().placeholderText().color();
         p->setPen(col);
         const int margin = int(doc->documentMargin());
-        p->drawText(viewport->rect().adjusted(margin, margin, -margin, -margin), Qt::AlignTop | Qt::TextWordWrap, placeholderText);
+        QRectF boundingRect = layout ? layout->frameBoundingRect(doc->rootFrame()) : viewport->rect();
+        p->drawText(boundingRect.adjusted(margin, margin, -margin, -margin),
+                    Qt::AlignTop | Qt::TextWordWrap,
+                    placeholderText);
     }
 }
 

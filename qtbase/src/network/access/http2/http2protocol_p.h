@@ -1,5 +1,6 @@
 // Copyright (C) 2021 The Qt Company Ltd.
 // SPDX-License-Identifier: LicenseRef-Qt-Commercial OR LGPL-3.0-only OR GPL-2.0-only OR GPL-3.0-only
+// Qt-Security score:significant reason:default
 
 #ifndef HTTP2PROTOCOL_P_H
 #define HTTP2PROTOCOL_P_H
@@ -18,7 +19,6 @@
 #include <QtNetwork/qnetworkreply.h>
 #include <QtCore/qloggingcategory.h>
 #include <QtCore/qmetatype.h>
-#include <QtCore/private/qglobal_p.h>
 #include <QtCore/qmap.h>
 
 #include <vector>
@@ -117,7 +117,7 @@ const qint32 maxSessionReceiveWindowSize((quint32(1) << 31) - 1);
 // Presumably, we never use up to 100 streams so let it be 10 simultaneous:
 const qint32 qtDefaultStreamReceiveWindowSize = maxSessionReceiveWindowSize / 10;
 
-struct Frame configurationToSettingsFrame(const QHttp2Configuration &configuration);
+struct Frame Q_AUTOTEST_EXPORT configurationToSettingsFrame(const QHttp2Configuration &configuration);
 QByteArray settingsFrameToBase64(const Frame &settingsFrame);
 void appendProtocolUpgradeHeaders(const QHttp2Configuration &configuration, QHttpNetworkRequest *request);
 std::vector<uchar> assemble_hpack_block(const std::vector<Frame> &frames);
@@ -132,7 +132,7 @@ enum class FrameStatus
     goodFrame
 };
 
-enum Http2Error
+enum Http2Error : quint32
 {
     // Old-style enum to avoid excessive name
     // qualification ...

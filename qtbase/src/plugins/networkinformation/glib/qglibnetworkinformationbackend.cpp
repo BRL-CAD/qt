@@ -1,5 +1,6 @@
 // Copyright (C) 2021 Ilya Fedin <fedin-ilja2010@ya.ru>
 // SPDX-License-Identifier: LicenseRef-Qt-Commercial OR LGPL-3.0-only OR GPL-2.0-only OR GPL-3.0-only
+// Qt-Security score:significant reason:default
 
 #include <QtNetwork/private/qnetworkinformation_p.h>
 
@@ -31,7 +32,11 @@ QNetworkInformation::Reachability reachabilityFromGNetworkConnectivity(GNetworkC
 }
 }
 
-static QString backendName = QStringLiteral("glib");
+static const QString &backendName()
+{
+    static auto name = u"glib"_s;
+    return name;
+}
 
 class QGlibNetworkInformationBackend : public QNetworkInformationBackend
 {
@@ -40,7 +45,7 @@ public:
     QGlibNetworkInformationBackend();
     ~QGlibNetworkInformationBackend();
 
-    QString name() const override { return backendName; }
+    QString name() const override { return backendName(); }
     QNetworkInformation::Features featuresSupported() const override
     {
         if (!isValid())
@@ -65,6 +70,7 @@ private:
 
     GNetworkMonitor *networkMonitor = nullptr;
     gulong connectivityHandlerId = 0;
+    gulong networkHandlerId = 0;
     gulong meteredHandlerId = 0;
 };
 
@@ -76,7 +82,7 @@ class QGlibNetworkInformationBackendFactory : public QNetworkInformationBackendF
 public:
     QGlibNetworkInformationBackendFactory() = default;
     ~QGlibNetworkInformationBackendFactory() = default;
-    QString name() const override { return backendName; }
+    QString name() const override { return backendName(); }
     QNetworkInformation::Features featuresSupported() const override
     {
         return QGlibNetworkInformationBackend::featuresSupportedStatic();
@@ -104,6 +110,10 @@ QGlibNetworkInformationBackend::QGlibNetworkInformationBackend()
     connectivityHandlerId = g_signal_connect_swapped(networkMonitor, "notify::connectivity",
                                                      G_CALLBACK(updateConnectivity), this);
 
+    // needed until GLib 2.86 for netlink support
+    networkHandlerId = g_signal_connect_swapped(networkMonitor, "notify::network-available",
+                                                     G_CALLBACK(updateConnectivity), this);
+
     meteredHandlerId = g_signal_connect_swapped(networkMonitor, "notify::network-metered",
                                                 G_CALLBACK(updateMetered), this);
 }
@@ -111,6 +121,7 @@ QGlibNetworkInformationBackend::QGlibNetworkInformationBackend()
 QGlibNetworkInformationBackend::~QGlibNetworkInformationBackend()
 {
     g_signal_handler_disconnect(networkMonitor, meteredHandlerId);
+    g_signal_handler_disconnect(networkMonitor, networkHandlerId);
     g_signal_handler_disconnect(networkMonitor, connectivityHandlerId);
 }
 

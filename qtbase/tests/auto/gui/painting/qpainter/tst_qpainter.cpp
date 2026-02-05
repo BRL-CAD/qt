@@ -171,6 +171,7 @@ private slots:
 #endif
 
     void radialGradient_QTBUG120332_ubsan();
+    void radialGradient_QTBUG130992_crash();
     void fpe_pixmapTransform();
     void fpe_zeroLengthLines();
     void fpe_divByZero();
@@ -280,11 +281,17 @@ private slots:
 
     void fillPolygon();
 
+    void textOnArgb32();
     void drawImageAtPointF();
     void scaledDashes();
 #if QT_CONFIG(raster_fp)
     void hdrColors();
 #endif
+
+    void alphaBlitToNonAlphaFormats_data();
+    void alphaBlitToNonAlphaFormats();
+
+    void floatRounding();
 
 private:
     void fillData();
@@ -1739,6 +1746,25 @@ void tst_QPainter::setClipRect()
         p.setClipRect(QRectF(10.5, 10.5, 10.5, -10.5));
         QVERIFY(p.clipRegion().isEmpty());
     }
+
+    // extreme transform, values reverse-engineered from oss-fuzz issue 406541912
+    // crashed with a failed assert due to an integer overflow
+    {
+        QPainter p(&img);
+        p.setTransform(QTransform(37.7, 0., 0.,
+                                  0., 233., 0.,
+                                  18.85, -163099999883.5, 1.));
+        p.setClipRect(QRect(0, 0, 10, 1), Qt::ReplaceClip);
+    }
+
+    // the same extreme transform, edited to overflow on the x-axis instead
+    {
+        QPainter p(&img);
+        p.setTransform(QTransform(233., 0., 0.,
+                                  0., 37.7, 0.,
+                                  -163099999883.5, 18.85, 1.));
+        p.setClipRect(QRect(0, 0, 1, 10), Qt::ReplaceClip);
+    }
 }
 
 /*
@@ -2784,7 +2810,7 @@ void tst_QPainter::monoImages()
     for (int i = 1; i < QImage::NImageFormats; ++i) {
         for (int j = 0; j < numColorPairs; ++j) {
             const QImage::Format format = QImage::Format(i);
-            if (format == QImage::Format_Indexed8)
+            if (format == QImage::Format_Indexed8 || format == QImage::Format_CMYK8888)
                 continue;
 
             QImage img(2, 2, format);
@@ -2846,7 +2872,7 @@ void tst_QPainter::monoImages()
 
 #if defined(Q_OS_DARWIN) || defined(Q_OS_FREEBSD) || defined(Q_OS_ANDROID)
 #  define TEST_FPE_EXCEPTIONS
-#elif defined(Q_OS_LINUX) && defined(__GLIBC__)
+#elif defined(__GLIBC__)
 #  define TEST_FPE_EXCEPTIONS
 #elif defined(Q_OS_WIN) && defined(Q_CC_GNU)
 #  define TEST_FPE_EXCEPTIONS
@@ -3554,9 +3580,13 @@ void tst_QPainter::drawImage_data()
 
     for (int srcFormat = QImage::Format_Mono; srcFormat < QImage::NImageFormats; ++srcFormat) {
         for (int dstFormat = QImage::Format_Mono; dstFormat < QImage::NImageFormats; ++dstFormat) {
-            // Indexed8 can't be painted to, and Alpha8 can't hold a color.
-            if (dstFormat == QImage::Format_Indexed8 || dstFormat == QImage::Format_Alpha8)
+            // Indexed8 and CMYK8888 can't be painted to, and Alpha8 can't hold a color.
+            if (dstFormat == QImage::Format_Indexed8 ||
+                dstFormat == QImage::Format_CMYK8888 ||
+                dstFormat == QImage::Format_Alpha8) {
                 continue;
+            }
+
             for (int odd_x = 0; odd_x <= 1; ++odd_x) {
                 for (int odd_width = 0; odd_width <= 1; ++odd_width) {
                     QTest::addRow("srcFormat %d, dstFormat %d, odd x: %d, odd width: %d",
@@ -3814,26 +3844,23 @@ void tst_QPainter::linearGradientSymmetry_data()
     QTest::addColumn<QGradientStops>("stops");
 
     if (sizeof(qreal) != sizeof(float)) {
-        QGradientStops stops;
-        stops << qMakePair(qreal(0.0), QColor(Qt::blue));
-        stops << qMakePair(qreal(0.2), QColor(220, 220, 220, 0));
-        stops << qMakePair(qreal(0.6), QColor(Qt::red));
-        stops << qMakePair(qreal(0.9), QColor(220, 220, 220, 255));
-        stops << qMakePair(qreal(1.0), QColor(Qt::black));
+        QGradientStops stops = {{qreal(0.0), QColor(Qt::blue)},
+                                {qreal(0.2), QColor(220, 220, 220, 0)},
+                                {qreal(0.6), QColor(Qt::red)},
+                                {qreal(0.9), QColor(220, 220, 220, 255)},
+                                {qreal(1.0), QColor(Qt::black)}};
         QTest::newRow("multiple stops") << stops;
     }
 
     {
-        QGradientStops stops;
-        stops << qMakePair(qreal(0.0), QColor(Qt::blue));
-        stops << qMakePair(qreal(1.0), QColor(Qt::black));
+        QGradientStops stops = {{qreal(0.0), QColor(Qt::blue)},
+                                {qreal(1.0), QColor(Qt::black)}};
         QTest::newRow("two stops") << stops;
     }
 
     if (sizeof(qreal) != sizeof(float)) {
-        QGradientStops stops;
-        stops << qMakePair(qreal(0.3), QColor(Qt::blue));
-        stops << qMakePair(qreal(0.6), QColor(Qt::black));
+        QGradientStops stops = {{qreal(0.3), QColor(Qt::blue)},
+                                {qreal(0.6), QColor(Qt::black)}};
         QTest::newRow("two stops 2") << stops;
     }
 }
@@ -3859,7 +3886,7 @@ void tst_QPainter::linearGradientSymmetry()
     pb.fillRect(b.rect(), inverseGradient(gradient));
     pb.end();
 
-    b = b.mirrored(true);
+    b = b.flipped(Qt::Horizontal | Qt::Vertical);
     QCOMPARE(a, b);
 }
 
@@ -3884,12 +3911,10 @@ void tst_QPainter::gradientPixelFormat()
     QImage a(8, 64, QImage::Format_ARGB32_Premultiplied);
     QImage b(8, 64, format);
 
-
-    QGradientStops stops;
-    stops << qMakePair(qreal(0.0), QColor(Qt::blue));
-    stops << qMakePair(qreal(0.3), QColor(Qt::red));
-    stops << qMakePair(qreal(0.6), QColor(Qt::green));
-    stops << qMakePair(qreal(1.0), QColor(Qt::black));
+    QGradientStops stops = {{qreal(0.0), QColor(Qt::blue)},
+                            {qreal(0.3), QColor(Qt::red)},
+                            {qreal(0.6), QColor(Qt::green)},
+                            {qreal(1.0), QColor(Qt::black)}};
 
     a.fill(0);
     b.fill(0);
@@ -3920,6 +3945,19 @@ void tst_QPainter::radialGradient_QTBUG120332_ubsan()
     QRadialGradient gradient(center, 0.5, focal, 0.5);
     gradient.setColorAt(0, Qt::blue);
     gradient.setColorAt(1, Qt::red);
+    painter.fillRect(image.rect(), QBrush(gradient));
+}
+
+void tst_QPainter::radialGradient_QTBUG130992_crash()
+{
+    // Check if Radial Gradient will crash on extreme values
+    // The crash was found by oss-fuzz, see
+    // https://issues.oss-fuzz.com/issues/42533347
+    QImage image(8, 8, QImage::Format_ARGB32_Premultiplied);
+    QPainter painter(&image);
+
+    constexpr qreal hugeValue = 1.1E37;
+    QRadialGradient gradient(hugeValue, 0.5, 0.5, hugeValue, 0.5);
     painter.fillRect(image.rect(), QBrush(gradient));
 }
 
@@ -5456,6 +5494,31 @@ void tst_QPainter::fillPolygon()
     }
 }
 
+void tst_QPainter::textOnArgb32()
+{
+    QImage backing(100, 20, QImage::Format_RGB32);
+    backing.fill(Qt::white);
+    QImage img(100, 20, QImage::Format_ARGB32);
+    img.fill(Qt::transparent); // Filled with transparent black
+
+    QPainter imagePainter(&img);
+    imagePainter.setPen(Qt::red);
+    imagePainter.setFont(QFontDatabase::systemFont(QFontDatabase::GeneralFont));
+    imagePainter.setRenderHints(QPainter::TextAntialiasing);
+    imagePainter.drawText(img.rect(), Qt::AlignCenter,"Text example");
+    imagePainter.end();
+    imagePainter.begin(&backing);
+    imagePainter.drawImage(backing.rect(), img);
+    imagePainter.end();
+    for (int y = 0; y < backing.height(); ++y) {
+        for (int x = 0; x < backing.width(); ++x) {
+            const uint32_t px = backing.pixel(x, y);
+            // Red over white, should always be full red.
+            QCOMPARE(qRed(px), 255);
+        }
+    }
+}
+
 void tst_QPainter::drawImageAtPointF()
 {
     // Just test we do not crash
@@ -5542,6 +5605,129 @@ void tst_QPainter::hdrColors()
     QCOMPARE(img2.pixelColor(5, 5), color);
 }
 #endif
+
+void tst_QPainter::alphaBlitToNonAlphaFormats_data()
+{
+    QTest::addColumn<QImage::Format>("format");
+
+    for (int i = QImage::Format_Invalid; i < QImage::NImageFormats; ++i) {
+        auto imageFormat = QImage::Format(i);
+        auto pixelFormat = QImage::toPixelFormat(imageFormat);
+        if (pixelFormat.colorModel() != QPixelFormat::RGB)
+            continue;
+        if (pixelFormat.alphaUsage() == QPixelFormat::UsesAlpha)
+            continue;
+        QTest::addRow("%s", QDebug::toBytes(imageFormat).mid(15).data()) << imageFormat;
+    }
+}
+
+void tst_QPainter::alphaBlitToNonAlphaFormats()
+{
+    QFETCH(QImage::Format, format);
+
+    {
+        // Test consistent reporting of alpha 1.0 with different ways of
+        // filling (or not filling) the image.
+
+        QColor fillColors[] = {
+            QColor(),
+            QColor::fromRgbF(0, 0, 0, 1),
+            QColor::fromRgbF(1, 1, 1, 1),
+            QColor::fromRgbF(0, 0, 0, 0),
+            QColor::fromRgbF(1, 1, 1, 0),
+        };
+
+        for (auto fillColor : fillColors) {
+            QImage image(1, 1, format);
+            if (fillColor.isValid())
+                // Filling with an explicit color should always report an alpha
+                // of 1.0 for non-alpha formats, regardless of the fill.
+                image.fill(fillColor);
+            else {
+                // Test that the logic for ensuring alpha 1.0 isn't only handled
+                // during the fill, by zero-initializing the underlying data. In
+                // this case we should still report an alpha of 1.0.
+                memset(image.bits(), 0, image.sizeInBytes());
+            }
+
+            QCOMPARE(qAlpha(image.pixel(0, 0)), 255);
+            QCOMPARE(image.pixelColor(0, 0).alphaF(), 1.0);
+        }
+    }
+
+    for (int i = 0; i < 2; ++i) {
+        // Attempt to test both non-SIMD and SIMD paths. The latter is
+        // chosen for images wider than 4-16 pixels according to Allan.
+        auto size = i ? 32 : 1;
+        QImage image(size, size, format);
+        image.fill(Qt::black);
+        QCOMPARE(image.pixelColor(0, 0).alphaF(), 1.0);
+
+        static const auto semiTransparentColor = QColor::fromRgbF(0.2, 0.4, 0.6, 0.8);
+
+        auto testAlpha = [&](std::function<void(QPainter*)> paintFunction) {
+            QImage paintedImage = image;
+            QPainter painter(&paintedImage);
+            QVERIFY(painter.isActive());
+
+            painter.setCompositionMode(QPainter::CompositionMode_Source);
+            paintFunction(&painter);
+
+            QCOMPARE(paintedImage.pixelColor(0, 0).alphaF(), 1.0);
+
+            // Try reading the raw data, to not be affected by pixelColor/pixel()
+            auto argbImage = paintedImage.convertToFormat(QImage::Format_ARGB32_Premultiplied);
+            QCOMPARE(qAlpha(reinterpret_cast<const QRgb *>(argbImage.constBits())[0]), 255);
+        };
+
+        QTest::ThrowOnFailEnabler throwOnFail;
+
+        // Test consistent reporting of alpha 1.0 after drawLine with
+        // semi-transparent pen color and source composition mode.
+        testAlpha([&](QPainter *painter) {
+            painter->setPen(semiTransparentColor);
+            painter->drawLine(QPoint(0, 0), QPoint(size, size));
+        });
+
+        // Test consistent reporting of alpha 1.0 after fillRect with
+        // semi-transparent fill color and source composition mode.
+        testAlpha([&](QPainter *painter) {
+            painter->fillRect(QRect(0, 0, size, size), semiTransparentColor);
+        });
+
+        // Test consistent reporting of alpha 1.0 after drawImage with
+        // semi-transparent image and source composition mode.
+        testAlpha([&](QPainter *painter) {
+            QImage alphaImage(size, size, QImage::Format_ARGB32_Premultiplied);
+            alphaImage.fill(semiTransparentColor);
+            painter->drawImage(QPoint(0, 0), alphaImage);
+        });
+    }
+}
+
+void tst_QPainter::floatRounding()
+{
+    // oss-fuzz issue 429123947
+    // The following triggered an assert in QDashStroker::processCurrentSubpath(): "dpos >= 0"
+    // when it expected the calculation's result to be zero but it was actually smaller:
+    // qreal(4) + qreal(0.1) - qreal(0.1) - qreal(4)
+    // actual result: -4.440892098500626e-16
+    QImage img(5, 5, QImage::Format_RGB888);
+    QPainter p(&img);
+
+    QList<qreal> pattern {0.1, 0.3, 0.1, 0.1, 0.3, 0.1};
+    QPainterPathStroker stroker;
+    stroker.setDashPattern(pattern);
+
+    QPainterPath pp;
+    pp.moveTo(4.0, 0.0);
+    pp.lineTo(0.1, 0.0);
+    pp.lineTo(0.0, 0.0);
+    pp.lineTo(0.0, 5.0);
+
+    QPolygonF poly = stroker.createStroke(pp).toFillPolygon();
+    p.drawPolygon(poly);
+}
 
 QTEST_MAIN(tst_QPainter)
 

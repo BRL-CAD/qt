@@ -1,5 +1,6 @@
 // Copyright (C) 2016 The Qt Company Ltd.
 // SPDX-License-Identifier: LicenseRef-Qt-Commercial OR LGPL-3.0-only OR GPL-2.0-only OR GPL-3.0-only
+// Qt-Security score:significant reason:default
 
 #ifndef QWIDGETREPAINTMANAGER_P_H
 #define QWIDGETREPAINTMANAGER_P_H
@@ -16,7 +17,6 @@
 //
 
 #include <QtWidgets/private/qtwidgetsglobal_p.h>
-#include <QDebug>
 #include <QtWidgets/qwidget.h>
 #include <private/qwidget_p.h>
 #include <QtGui/qbackingstore.h>
@@ -26,8 +26,6 @@ QT_BEGIN_NAMESPACE
 class QPlatformTextureList;
 class QPlatformTextureListWatcher;
 class QWidgetRepaintManager;
-class QRhi;
-class QRhiSwapChain;
 
 class Q_WIDGETS_EXPORT QWidgetRepaintManager
 {
@@ -71,8 +69,6 @@ public:
     bool isDirty() const;
 
     bool bltRect(const QRect &rect, int dx, int dy, QWidget *widget);
-
-    QRhi *rhi() const;
 
 private:
     void updateLists(QWidget *widget);

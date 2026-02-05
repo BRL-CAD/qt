@@ -267,11 +267,14 @@ QList<QTextOption::Tab> QTextOption::tabs() const
   \value ShowTabsAndSpaces Visualize spaces with little dots, and tabs with little arrows. Non-breaking spaces are
             shown differently to breaking spaces.
   \value ShowLineAndParagraphSeparators Visualize line and paragraph separators with appropriate symbol characters.
-  \value ShowDocumentTerminator Visualize the end of the document with a section sign. This enum value was added
-            in Qt 5.7.
+  \value [since 5.7] ShowDocumentTerminator Visualize the end of the document with a section sign.
+  \value [since 6.9] ShowDefaultIgnorables Render normally non-visual characters if supported by font.
   \value AddSpaceForLineAndParagraphSeparators While determining the line-break positions take into account the
             space added for drawing a separator character.
   \value SuppressColors Suppress all color changes in the character formats (except the main selection).
+  \value [since 6.9] DisableEmojiParsing By default, Qt will detect emoji sequences in input strings
+    and prioritize using color fonts to display them. This extra step can be disabled by setting the
+    DisableEmojiParsing flag if it is known in advance that it will not be needed.
 */
 
 /*!
@@ -329,7 +332,7 @@ QList<QTextOption::Tab> QTextOption::tabs() const
 */
 
 /*!
-    \variable Tab::position
+    \variable QTextOption::Tab::position
     Distance from the start of the paragraph.
     The position of a tab is from the start of the paragraph which implies that when
     the alignment of the paragraph is set to centered, the tab is interpreted to be

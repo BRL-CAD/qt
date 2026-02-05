@@ -1,5 +1,6 @@
 // Copyright (C) 2016 The Qt Company Ltd.
 // SPDX-License-Identifier: LicenseRef-Qt-Commercial OR LGPL-3.0-only OR GPL-2.0-only OR GPL-3.0-only
+// Qt-Security score:significant reason:default
 
 #include "qwindowsthemedata_p.h"
 #include "qwindowsvistastyle_p_p.h"
@@ -23,7 +24,7 @@ HTHEME QWindowsThemeData::handle()
         return nullptr;
 
     if (!htheme)
-        htheme = QWindowsVistaStylePrivate::createTheme(theme, QWindowsVistaStylePrivate::winId(widget));
+        htheme = QWindowsVistaStylePrivate::createTheme(theme, widget);
     return htheme;
 }
 

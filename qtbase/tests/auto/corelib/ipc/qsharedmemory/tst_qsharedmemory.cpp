@@ -529,13 +529,13 @@ void tst_QSharedMemory::emptyMemory()
 void tst_QSharedMemory::readOnly()
 {
 #if !QT_CONFIG(process)
-    QSKIP("No qprocess support", SkipAll);
+    QSKIP("No qprocess support");
 #elif defined(Q_OS_MACOS)
-    QSKIP("QTBUG-59936: Times out on macOS", SkipAll);
+    QSKIP("QTBUG-59936: Times out on macOS");
 #elif defined(Q_OS_WIN)
     QSKIP("This test opens a crash dialog on Windows.");
 #elif defined(__SANITIZE_ADDRESS__) || __has_feature(address_sanitizer)
-    QSKIP("ASan prevents the crash this test is looking for.", SkipAll);
+    QSKIP("ASan prevents the crash this test is looking for.");
 #else
     QNativeIpcKey key = rememberKey("readonly_segfault");
 
@@ -583,6 +583,10 @@ void tst_QSharedMemory::attachBeforeCreate()
  */
 void tst_QSharedMemory::useTooMuchMemory()
 {
+    if (QSysInfo::kernelType() == QLatin1String("linux")
+        && QSysInfo::currentCpuArchitecture() == QLatin1String("arm64"))
+        QSKIP("This test is unstable: QTBUG-119321");
+
 #ifdef Q_OS_LINUX
     bool success = true;
     int count = 0;
@@ -856,7 +860,7 @@ void tst_QSharedMemory::simpleProcessProducerConsumer_data()
 void tst_QSharedMemory::simpleProcessProducerConsumer()
 {
 #if !QT_CONFIG(process)
-    QSKIP("No qprocess support", SkipAll);
+    QSKIP("No qprocess support");
 #else
     QFETCH(int, processes);
 

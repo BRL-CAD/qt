@@ -39,11 +39,13 @@ public:
 
     QVariant themeHint(ThemeHint hint) const override;
     Qt::ColorScheme colorScheme() const override;
+    Qt::ContrastPreference contrastPreference() const override;
     QString standardButtonText(int button) const override;
     QKeySequence standardButtonShortcut(int button) const override;
 
     static const char *name;
 
+    void requestColorScheme(Qt::ColorScheme scheme) override;
     void handleSystemThemeChange();
 
 #ifndef QT_NO_SHORTCUT

@@ -14,11 +14,12 @@
 
 #if QT_CONFIG(accessibility)
 
+#include <QtGui/private/qaccessiblehelper_p.h>
+
 QT_BEGIN_NAMESPACE
 
 #if QT_CONFIG(menu)
 
-QString qt_accStripAmp(const QString &text);
 QString qt_accHotKey(const QString &text);
 
 QAccessibleInterface *getOrCreateMenu(QWidget *menu, QAction *action)
@@ -32,7 +33,7 @@ QAccessibleInterface *getOrCreateMenu(QWidget *menu, QAction *action)
 }
 
 QAccessibleMenu::QAccessibleMenu(QWidget *w)
-: QAccessibleWidget(w)
+: QAccessibleWidgetV2(w)
 {
     Q_ASSERT(menu());
 }
@@ -57,7 +58,7 @@ QAccessibleInterface *QAccessibleMenu::childAt(int x, int y) const
 
 QString QAccessibleMenu::text(QAccessible::Text t) const
 {
-    QString tx = QAccessibleWidget::text(t);
+    QString tx = QAccessibleWidgetV2::text(t);
     if (!tx.isEmpty())
         return tx;
 
@@ -97,7 +98,7 @@ QAccessibleInterface *QAccessibleMenu::parent() const
             }
         }
     }
-    return QAccessibleWidget::parent();
+    return QAccessibleWidgetV2::parent();
 }
 
 int QAccessibleMenu::indexOfChild( const QAccessibleInterface *child) const
@@ -111,7 +112,7 @@ int QAccessibleMenu::indexOfChild( const QAccessibleInterface *child) const
 
 #if QT_CONFIG(menubar)
 QAccessibleMenuBar::QAccessibleMenuBar(QWidget *w)
-    : QAccessibleWidget(w, QAccessible::MenuBar)
+    : QAccessibleWidgetV2(w, QAccessible::MenuBar)
 {
     Q_ASSERT(menuBar());
 }
@@ -259,7 +260,7 @@ QAccessible::State QAccessibleMenuItem::state() const
             s.focused = true;
 #endif
     }
-    if (own && own->style()->styleHint(QStyle::SH_Menu_MouseTracking))
+    if (own && own->style()->styleHint(QStyle::SH_Menu_MouseTracking, nullptr, own))
         s.hotTracked = true;
     if (m_action->isSeparator() || !m_action->isEnabled())
         s.disabled = true;

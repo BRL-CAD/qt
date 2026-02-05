@@ -1,5 +1,6 @@
 // Copyright (C) 2023 The Qt Company Ltd.
 // SPDX-License-Identifier: LicenseRef-Qt-Commercial OR LGPL-3.0-only OR GPL-2.0-only OR GPL-3.0-only
+// Qt-Security score:significant reason:default
 
 #ifndef QDIALOGBUTTONBOX_P_H
 #define QDIALOGBUTTONBOX_P_H
@@ -16,6 +17,7 @@
 //
 
 #include <private/qwidget_p.h>
+#include <private/qflatmap_p.h>
 #include <qdialogbuttonbox.h>
 
 QT_BEGIN_NAMESPACE
@@ -42,8 +44,8 @@ public:
     QDialogButtonBoxPrivate(Qt::Orientation orient);
 
     QList<QAbstractButton *> buttonLists[QDialogButtonBox::NRoles];
-    QHash<QPushButton *, QDialogButtonBox::StandardButton> standardButtonHash;
-    QHash<QAbstractButton *, QDialogButtonBox::ButtonRole> hiddenButtons;
+    QVarLengthFlatMap<QPushButton *, QDialogButtonBox::StandardButton, 8> standardButtonMap;
+    QVarLengthFlatMap<QAbstractButton *, QDialogButtonBox::ButtonRole, 8> hiddenButtons;
 
     Qt::Orientation orientation;
     QDialogButtonBox::ButtonLayout layoutPolicy;

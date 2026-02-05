@@ -39,7 +39,14 @@ TESTS = ['assert', 'badxml', 'benchlibcallgrind', 'benchlibcounting',
          'printdatatags', 'printdatatagswithglobaltags', 'qexecstringlist',
          'signaldumper', 'silent', 'silent_fatal', 'singleskip', 'skip',
          'skipblacklisted', 'skipcleanup', 'skipcleanuptestcase', 'skipinit',
-         'skipinitdata', 'sleep', 'strcmp', 'subtest', 'testlib', 'tuplediagnostics',
+         'skipinitdata',
+         'sleep',
+         'strcmp',
+         'subtest',
+         'testlib',
+         'threewaycompare',
+         'throwonfailandskip',
+         'tuplediagnostics',
          'verbose1', 'verbose2', 'verifyexceptionthrown', 'warnings', 'watchdog',
          'junit', 'keyboard']
 
@@ -124,7 +131,11 @@ class Cleaner (object):
         scriptPath = os.path.dirname(os.path.abspath(__file__))
         hereNames, depth = scriptPath.split(os.path.sep), 5
         hereNames = hereNames[-depth:] # path components from qtbase down
-        assert hereNames[0] == 'qtbase', ('Script moved: please correct depth', hereNames)
+        # don't check hereNames[0]: the qtbase checkout might not be named 'qtbase'
+        assert hereNames[1] == 'tests', ('Script moved: please correct depth', hereNames)
+        assert hereNames[2] == 'auto', ('Script moved: please correct depth', hereNames)
+        assert hereNames[3] == 'testlib', ('Script moved: please correct depth', hereNames)
+        assert hereNames[4] == 'selftests', ('Script moved: please correct depth', hereNames)
         qtbase_dir = os.path.realpath(os.path.join(scriptPath, '..', '..', '..', '..'))
         qtver = Cleaner._read_qt_version(qtbase_dir)
         hereNames = tuple(hereNames)
@@ -204,7 +215,7 @@ del re
 
 # Keep in sync with tst_selftests.cpp's testEnvironment():
 def baseEnv(platname=None,
-            keep=('PATH', 'QT_QPA_PLATFORM', 'ASAN_OPTIONS'),
+            keep=('PATH', 'QT_QPA_PLATFORM', 'QTEST_THROW_ON_FAIL', 'QTEST_THROW_ON_SKIP', 'ASAN_OPTIONS'),
             posix=('HOME', 'USER', 'QEMU_SET_ENV', 'QEMU_LD_PREFIX'),
             nonapple=('DISPLAY', 'XAUTHORITY', 'XAUTHLOCALHOSTNAME'), # and XDG_*
             # Don't actually know how to test for QNX, so this is ignored:
@@ -233,7 +244,7 @@ def baseEnv(platname=None,
             keep += preserveLib
 
         cached = dict(
-            LC_ALL = 'en-US.UTF-8', # Use standard locale
+            LC_ALL = 'C.UTF-8', # Use standard locale
             # Avoid interference from any qtlogging.ini files, e.g. in
             # /etc/xdg/QtProject/, (must match tst_selftests.cpp's
             # processEnvironment()'s value):

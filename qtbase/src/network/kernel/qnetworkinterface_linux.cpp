@@ -1,5 +1,6 @@
 // Copyright (C) 2017 Intel Corporation.
 // SPDX-License-Identifier: LicenseRef-Qt-Commercial OR LGPL-3.0-only OR GPL-2.0-only OR GPL-3.0-only
+// Qt-Security score:significant reason:trusted-data
 
 #include "qnetworkinterface.h"
 #include "qnetworkinterface_p.h"
@@ -9,6 +10,7 @@
 
 #include <qendian.h>
 #include <qobjectdefs.h>
+#include <qscopeguard.h>
 #include <qvarlengtharray.h>
 
 // according to rtnetlink(7)
@@ -85,28 +87,6 @@ static QNetworkInterface::InterfaceType probeIfType(int socket, struct ifreq *re
 
 
 namespace {
-struct NetlinkSocket
-{
-    int sock;
-    NetlinkSocket(int bufferSize)
-    {
-        sock = qt_safe_socket(AF_NETLINK, SOCK_DGRAM, NETLINK_ROUTE);
-        if (Q_UNLIKELY(sock == -1))
-            qErrnoWarning("Could not create AF_NETLINK socket");
-
-        // set buffer length
-        socklen_t len = sizeof(bufferSize);
-        setsockopt(sock, SOL_SOCKET, SO_SNDBUF, &bufferSize, len);
-    }
-
-    ~NetlinkSocket()
-    {
-        if (sock != -1)
-            qt_safe_close(sock);
-    }
-
-    operator int() const { return sock; }
-};
 
 template <typename Lambda> struct ProcessNetlinkRequest
 {
@@ -406,9 +386,17 @@ QList<QNetworkInterfacePrivate *> QNetworkInterfaceManager::scan()
 {
     // open netlink socket
     QList<QNetworkInterfacePrivate *> result;
-    NetlinkSocket sock(BufferSize);
-    if (Q_UNLIKELY(sock == -1))
+    int sock = qt_safe_socket(AF_NETLINK, SOCK_DGRAM, NETLINK_ROUTE);
+    if (sock == -1) {
+        qErrnoWarning("Could not create AF_NETLINK socket");
         return result;
+    }
+
+    const auto sg = qScopeGuard([&] { qt_safe_close(sock); });
+
+    // set buffer length
+    const int bufferSize = BufferSize;
+    setsockopt(sock, SOL_SOCKET, SO_SNDBUF, &bufferSize, sizeof(bufferSize));
 
     QByteArray buffer(BufferSize, Qt::Uninitialized);
     char *buf = buffer.data();

@@ -5,7 +5,6 @@
 package org.qtproject.qt.android;
 
 import android.annotation.SuppressLint;
-import android.app.Activity;
 import android.content.Context;
 import android.content.res.ColorStateList;
 import android.content.res.Configuration;
@@ -16,8 +15,6 @@ import android.graphics.Bitmap;
 import android.graphics.Bitmap.Config;
 import android.graphics.Canvas;
 import android.graphics.NinePatch;
-import android.graphics.Paint;
-import android.graphics.PorterDuff;
 import android.graphics.Rect;
 import android.graphics.drawable.AnimatedStateListDrawable;
 import android.graphics.drawable.AnimationDrawable;
@@ -49,20 +46,20 @@ import org.json.JSONObject;
 import org.xmlpull.v1.XmlPullParser;
 
 import java.io.File;
-import java.io.FileNotFoundException;
 import java.io.FileOutputStream;
 import java.io.IOException;
 import java.io.OutputStreamWriter;
 import java.lang.reflect.Field;
+import java.nio.file.Files;
+import java.nio.file.Paths;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.HashMap;
 import java.util.Map;
 import java.util.Objects;
 
-
-public class ExtractStyle {
-
+@SuppressWarnings("deprecation")
+class ExtractStyle {
     // This used to be retrieved from android.R.styleable.ViewDrawableStates field via reflection,
     // but since the access to that is restricted, we need to have hard-coded here.
     final int[] viewDrawableStatesState = new int[]{
@@ -149,7 +146,7 @@ public class ExtractStyle {
         return (config.uiMode & Configuration.UI_MODE_NIGHT_MASK) == Configuration.UI_MODE_NIGHT_YES;
     }
 
-    public static String setup(Context context, String extractOption, int dpi) {
+    static String setup(Context context, String extractOption, int dpi) {
 
         String dataDir = context.getApplicationInfo().dataDir;
         m_stylePath = dataDir + "/qt-reserved-files/android-style/" + dpi + "/";
@@ -189,7 +186,7 @@ public class ExtractStyle {
         return m_stylePath;
     }
 
-    public static void runIfNeeded(Context context, boolean extractDarkMode) {
+    static void runIfNeeded(Context context, boolean extractDarkMode) {
         if (m_stylePath == null)
             return;
         if (extractDarkMode) {
@@ -203,7 +200,7 @@ public class ExtractStyle {
         }
     }
 
-    public ExtractStyle(Context context, String extractPath, boolean minimal) {
+    ExtractStyle(Context context, String extractPath, boolean minimal) {
         m_minimal = minimal;
         m_extractPath = extractPath + "/";
         boolean dirCreated = new File(m_extractPath).mkdirs();
@@ -602,7 +599,7 @@ public class ExtractStyle {
         try {
             Class<?> rippleDrawableClass = Class.forName("android.graphics.drawable.RippleDrawable");
             final Object mState = getAccessibleField(rippleDrawableClass, "mState").get(drawable);
-            ripple.put("mask", getDrawable((Drawable) getAccessibleField(rippleDrawableClass, "mMask").get(drawable), filename, padding));
+            ripple.put("mask", getDrawable(getAccessibleField(rippleDrawableClass, "mMask").get(drawable), filename, padding));
             if (mState != null) {
                 ripple.put("maxRadius", getAccessibleField(mState.getClass(), "mMaxRadius").getInt(mState));
                 ColorStateList color = (ColorStateList) getAccessibleField(mState.getClass(), "mColor").get(mState);
@@ -695,7 +692,7 @@ public class ExtractStyle {
             }
             json.put("nodes", nodes);
         }
-        json.put("isClip", (Boolean) pathClass.getMethod("isClipPath").invoke(path));
+        json.put("isClip", pathClass.getMethod("isClipPath").invoke(path));
 
         if (tryGetAccessibleField(pathClass, "mStrokeColor") == null)
             return json; // not VFullPath
@@ -709,8 +706,8 @@ public class ExtractStyle {
         json.put("trimPathStart", getAccessibleField(pathClass, "mTrimPathStart").getFloat(path));
         json.put("trimPathEnd", getAccessibleField(pathClass, "mTrimPathEnd").getFloat(path));
         json.put("trimPathOffset", getAccessibleField(pathClass, "mTrimPathOffset").getFloat(path));
-        json.put("strokeLineCap", (Paint.Cap) getAccessibleField(pathClass, "mStrokeLineCap").get(path));
-        json.put("strokeLineJoin", (Paint.Join) getAccessibleField(pathClass, "mStrokeLineJoin").get(path));
+        json.put("strokeLineCap", getAccessibleField(pathClass, "mStrokeLineCap").get(path));
+        json.put("strokeLineJoin", getAccessibleField(pathClass, "mStrokeLineJoin").get(path));
         json.put("strokeMiterlimit", getAccessibleField(pathClass, "mStrokeMiterlimit").getFloat(path));
         return json;
     }
@@ -753,7 +750,7 @@ public class ExtractStyle {
             final ColorStateList mTint = (ColorStateList) getAccessibleField(stateClass, "mTint").get(state);
             if (mTint != null) {
                 json.put("tintList", getColorStateList(mTint));
-                json.put("tintMode", (PorterDuff.Mode) getAccessibleField(stateClass, "mTintMode").get(state));
+                json.put("tintMode", getAccessibleField(stateClass, "mTintMode").get(state));
             }
             final Object mVPathRenderer = getAccessibleField(stateClass, "mVPathRenderer").get(state);
             final Class<?> VPathRendererClass = Objects.requireNonNull(mVPathRenderer).getClass();
@@ -770,7 +767,7 @@ public class ExtractStyle {
         return json;
     }
 
-    public JSONObject getDrawable(Object drawable, String filename, Rect padding) {
+    JSONObject getDrawable(Object drawable, String filename, Rect padding) {
         if (drawable == null || m_minimal)
             return null;
 
@@ -793,9 +790,9 @@ public class ExtractStyle {
                     json.put("gravity", bitmapDrawable.getGravity());
                     json.put("tileModeX", bitmapDrawable.getTileModeX());
                     json.put("tileModeY", bitmapDrawable.getTileModeY());
-                    json.put("antialias", (Boolean) BitmapDrawable.class.getMethod("hasAntiAlias").invoke(bitmapDrawable));
-                    json.put("mipMap", (Boolean) BitmapDrawable.class.getMethod("hasMipMap").invoke(bitmapDrawable));
-                    json.put("tintMode", (PorterDuff.Mode) BitmapDrawable.class.getMethod("getTintMode").invoke(bitmapDrawable));
+                    json.put("antialias", BitmapDrawable.class.getMethod("hasAntiAlias").invoke(bitmapDrawable));
+                    json.put("mipMap", BitmapDrawable.class.getMethod("hasMipMap").invoke(bitmapDrawable));
+                    json.put("tintMode", BitmapDrawable.class.getMethod("getTintMode").invoke(bitmapDrawable));
                     ColorStateList tintList = (ColorStateList) BitmapDrawable.class.getMethod("getTint").invoke(bitmapDrawable);
                     if (tintList != null)
                         json.put("tintList", getColorStateList(tintList));
@@ -951,11 +948,11 @@ public class ExtractStyle {
         return sortedAttrs;
     }
 
-    public void extractViewInformation(int styleName, JSONObject json, String qtClassName) {
+    void extractViewInformation(int styleName, JSONObject json, String qtClassName) {
         extractViewInformation(styleName, json, qtClassName, null);
     }
 
-    public void extractViewInformation(int styleName, JSONObject json, String qtClassName, AttributeSet attributeSet) {
+    void extractViewInformation(int styleName, JSONObject json, String qtClassName, AttributeSet attributeSet) {
         try {
             TypedValue typedValue = new TypedValue();
             Context ctx = new ContextThemeWrapper(m_context, m_theme);
@@ -1077,13 +1074,13 @@ public class ExtractStyle {
         }
     }
 
-    public JSONObject extractTextAppearance(int styleName)
+    JSONObject extractTextAppearance(int styleName)
     {
         return extractTextAppearance(styleName, false);
     }
 
     @SuppressLint("ResourceType")
-    public JSONObject extractTextAppearance(int styleName, boolean subStyle)
+    JSONObject extractTextAppearance(int styleName, boolean subStyle)
     {
         final int[] attributes = new int[]{
                 android.R.attr.textSize,
@@ -1135,11 +1132,11 @@ public class ExtractStyle {
         return json;
     }
 
-    public JSONObject extractTextAppearanceInformation(int styleName, String qtClass) {
+    JSONObject extractTextAppearanceInformation(int styleName, String qtClass) {
         return extractTextAppearanceInformation(styleName, qtClass, android.R.attr.textAppearance, null);
     }
 
-    public JSONObject extractTextAppearanceInformation(int styleName, String qtClass, int textAppearance, AttributeSet attributeSet) {
+    JSONObject extractTextAppearanceInformation(int styleName, String qtClass, int textAppearance, AttributeSet attributeSet) {
         JSONObject json = new JSONObject();
         extractViewInformation(styleName, json, qtClass, attributeSet);
 
@@ -1371,7 +1368,7 @@ public class ExtractStyle {
         return json;
     }
 
-    public JSONObject extractImageViewInformation(int styleName, String qtClassName) {
+    JSONObject extractImageViewInformation(int styleName, String qtClassName) {
         JSONObject json = new JSONObject();
         try {
             extractViewInformation(styleName, json, qtClassName);
@@ -1805,11 +1802,11 @@ public class ExtractStyle {
         private boolean m_addComma = false;
         private int m_indentLevel = 0;
 
-        public SimpleJsonWriter(String filePath) throws FileNotFoundException {
-            m_writer = new OutputStreamWriter(new FileOutputStream(filePath));
+        SimpleJsonWriter(String filePath) throws IOException {
+            m_writer = new OutputStreamWriter(Files.newOutputStream(Paths.get(filePath)));
         }
 
-        public void close() throws IOException {
+        void close() throws IOException {
             m_writer.close();
         }
 
@@ -1850,7 +1847,7 @@ public class ExtractStyle {
     static class DrawableCache {
         JSONObject object;
         Object drawable;
-        public DrawableCache(JSONObject json, Object drawable) {
+        DrawableCache(JSONObject json, Object drawable) {
             object = json;
             this.drawable = drawable;
         }

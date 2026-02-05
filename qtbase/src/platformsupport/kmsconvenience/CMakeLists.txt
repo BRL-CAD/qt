@@ -1,7 +1,7 @@
 # Copyright (C) 2022 The Qt Company Ltd.
 # SPDX-License-Identifier: BSD-3-Clause
 
-qt_find_package(Libdrm)
+qt_find_package(Libdrm MODULE)
 
 #####################################################################
 ## KmsSupportPrivate Module:
@@ -19,4 +19,5 @@ qt_internal_add_module(KmsSupportPrivate
         Libdrm::Libdrm
         Qt::CorePrivate
         Qt::GuiPrivate
+    NO_GENERATE_CPP_EXPORTS
 )

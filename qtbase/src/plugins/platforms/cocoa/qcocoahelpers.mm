@@ -8,8 +8,6 @@
 #include "qcocoahelpers.h"
 #include "qnsview.h"
 
-#include <QtCore>
-#include <QtGui>
 #include <qpa/qplatformscreen.h>
 #include <private/qguiapplication_p.h>
 #include <private/qwindow_p.h>
@@ -27,7 +25,6 @@ Q_LOGGING_CATEGORY(lcQpaInputMethods, "qt.qpa.input.methods")
 Q_LOGGING_CATEGORY(lcQpaScreen, "qt.qpa.screen", QtCriticalMsg);
 Q_LOGGING_CATEGORY(lcQpaApplication, "qt.qpa.application");
 Q_LOGGING_CATEGORY(lcQpaClipboard, "qt.qpa.clipboard")
-Q_LOGGING_CATEGORY(lcInputDevices, "qt.qpa.input.devices")
 Q_LOGGING_CATEGORY(lcQpaDialogs, "qt.qpa.dialogs")
 Q_LOGGING_CATEGORY(lcQpaMenus, "qt.qpa.menus")
 
@@ -472,6 +469,8 @@ QT_END_NAMESPACE
 
 @end // QNSPanelContentsWrapper
 
+QT_BEGIN_NAMESPACE
+
 // -------------------------------------------------------------------------
 
 InputMethodQueryResult queryInputMethod(QObject *object, Qt::InputMethodQueries queries)
@@ -512,3 +511,5 @@ QDebug operator<<(QDebug debug, SEL selector)
     debug << NSStringFromSelector(selector);
     return debug;
 }
+
+QT_END_NAMESPACE

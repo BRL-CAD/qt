@@ -107,11 +107,11 @@ public:
     {
         if (!deref()) {
             (*this)->destroyAll();
-            free(d);
+            Data::deallocate(d);
         }
     }
 
-    bool isNull() const noexcept
+    constexpr bool isNull() const noexcept
     {
         return !ptr;
     }
@@ -345,7 +345,9 @@ public:
         const auto capacityBegin = begin() - offset;
         const auto prependBufferEnd = begin();
 
-        if constexpr (!std::is_nothrow_constructible_v<T, decltype(std::invoke(proj, *first))>) {
+        if constexpr (!std::is_nothrow_constructible_v<T, decltype(std::invoke(proj, *first))>
+                      || !std::is_nothrow_invocable_v<Projection, decltype(*first)>)
+        {
             // If construction can throw, and we have freeSpaceAtBegin(),
             // it's easiest to just clear the container and start fresh.
             // The alternative would be to keep track of two active, disjoint ranges.
@@ -394,7 +396,9 @@ public:
                     dst = std::uninitialized_copy(first, last, dst);
                     break;
                 } else if constexpr (IsFwdIt && !IsIdentity
-                           && std::is_nothrow_constructible_v<T, decltype(std::invoke(proj, *first))>) {
+                           && std::is_nothrow_constructible_v<T, decltype(std::invoke(proj, *first))>
+                           && std::is_nothrow_invocable_v<Projection, decltype(*first)>)
+                {
                     for (; first != last; ++dst, ++first)   // uninitialized_copy with projection
                         q20::construct_at(dst, std::invoke(proj, *first));
                     break;
@@ -432,12 +436,25 @@ public:
         return std::move(*this);
     }
 
+    void appendInitialize(qsizetype newSize)
+    {
+        Q_ASSERT(this->isMutable());
+        Q_ASSERT(!this->isShared());
+        Q_ASSERT(newSize > this->size);
+        Q_ASSERT(newSize - this->size <= this->freeSpaceAtEnd());
+
+        T *const b = this->begin() + this->size;
+        T *const e = this->begin() + newSize;
+        q17::uninitialized_value_construct(b, e);
+        this->size = newSize;
+    }
+
     // forwards from QArrayData
     qsizetype allocatedCapacity() noexcept { return d ? d->allocatedCapacity() : 0; }
     qsizetype constAllocatedCapacity() const noexcept { return d ? d->constAllocatedCapacity() : 0; }
     void ref() noexcept { if (d) d->ref(); }
     bool deref() noexcept { return !d || d->deref(); }
-    bool isMutable() const noexcept { return d; }
+    bool isMutable() const noexcept { return d; } // Returns false if this object is fromRawData()
     bool isShared() const noexcept { return !d || d->isShared(); }
     bool isSharedWith(const QArrayDataPointer &other) const noexcept { return d && d == other.d; }
     bool needsDetach() const noexcept { return !d || d->needsDetach(); }

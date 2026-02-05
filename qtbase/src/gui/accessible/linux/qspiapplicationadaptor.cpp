@@ -20,7 +20,7 @@
 
 QT_BEGIN_NAMESPACE
 
-using namespace Qt::Literals::StringLiterals;
+using namespace Qt::StringLiterals;
 
 /*!
     \class QSpiApplicationAdaptor
@@ -162,9 +162,10 @@ bool QSpiApplicationAdaptor::eventFilter(QObject *target, QEvent *event)
                         SLOT(notifyKeyboardListenerError(QDBusError,QDBusMessage)), timeout);
         if (sent) {
             //queue the event and send it after callback
-            keyEvents.enqueue(QPair<QPointer<QObject>, QKeyEvent*> (QPointer<QObject>(target), copyKeyEvent(keyEvent)));
+            keyEvents.enqueue(std::pair{QPointer<QObject>(target), copyKeyEvent(keyEvent)});
             return true;
         }
+        break;
     }
     default:
         break;
@@ -187,10 +188,10 @@ void QSpiApplicationAdaptor::notifyKeyboardListenerCallback(const QDBusMessage& 
     }
     Q_ASSERT(message.arguments().size() == 1);
     if (message.arguments().at(0).toBool() == true) {
-        QPair<QPointer<QObject>, QKeyEvent*> event = keyEvents.dequeue();
+        std::pair<QPointer<QObject>, QKeyEvent*> event = keyEvents.dequeue();
         delete event.second;
     } else {
-        QPair<QPointer<QObject>, QKeyEvent*> event = keyEvents.dequeue();
+        std::pair<QPointer<QObject>, QKeyEvent*> event = keyEvents.dequeue();
         if (event.first)
             QCoreApplication::postEvent(event.first.data(), event.second);
     }
@@ -200,7 +201,7 @@ void QSpiApplicationAdaptor::notifyKeyboardListenerError(const QDBusError& error
 {
     qWarning() << "QSpiApplication::keyEventError " << error.name() << error.message();
     while (!keyEvents.isEmpty()) {
-        QPair<QPointer<QObject>, QKeyEvent*> event = keyEvents.dequeue();
+        std::pair<QPointer<QObject>, QKeyEvent*> event = keyEvents.dequeue();
         if (event.first)
             QCoreApplication::postEvent(event.first.data(), event.second);
     }

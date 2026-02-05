@@ -4,7 +4,6 @@
 #ifndef QDEADLINETIMER_H
 #define QDEADLINETIMER_H
 
-#include <QtCore/qelapsedtimer.h>
 #include <QtCore/qmetatype.h>
 #include <QtCore/qnamespace.h>
 
@@ -57,19 +56,6 @@ public:
 
     static QDeadlineTimer addNSecs(QDeadlineTimer dt, qint64 nsecs) noexcept Q_DECL_PURE_FUNCTION;
     static QDeadlineTimer current(Qt::TimerType timerType = Qt::CoarseTimer) noexcept;
-
-    friend bool operator==(QDeadlineTimer d1, QDeadlineTimer d2) noexcept
-    { return d1.t1 == d2.t1; }
-    friend bool operator!=(QDeadlineTimer d1, QDeadlineTimer d2) noexcept
-    { return !(d1 == d2); }
-    friend bool operator<(QDeadlineTimer d1, QDeadlineTimer d2) noexcept
-    { return d1.t1 < d2.t1; }
-    friend bool operator<=(QDeadlineTimer d1, QDeadlineTimer d2) noexcept
-    { return d1 == d2 || d1 < d2; }
-    friend bool operator>(QDeadlineTimer d1, QDeadlineTimer d2) noexcept
-    { return d2 < d1; }
-    friend bool operator>=(QDeadlineTimer d1, QDeadlineTimer d2) noexcept
-    { return !(d1 < d2); }
 
     friend Q_CORE_EXPORT QDeadlineTimer operator+(QDeadlineTimer dt, qint64 msecs);
     friend QDeadlineTimer operator+(qint64 msecs, QDeadlineTimer dt)
@@ -138,6 +124,18 @@ public:
     { return dt = dt + value; }
 
 private:
+    friend bool comparesEqual(const QDeadlineTimer &lhs,
+                              const QDeadlineTimer &rhs) noexcept
+    {
+        return lhs.t1 == rhs.t1;
+    }
+    friend Qt::strong_ordering compareThreeWay(const QDeadlineTimer &lhs,
+                                               const QDeadlineTimer &rhs) noexcept
+    {
+        return Qt::compareThreeWay(lhs.t1, rhs.t1);
+    }
+    Q_DECLARE_STRONGLY_ORDERED(QDeadlineTimer)
+
     qint64 t1 = 0;
 #if QT_VERSION < QT_VERSION_CHECK(7, 0, 0)
     unsigned t2 = 0;

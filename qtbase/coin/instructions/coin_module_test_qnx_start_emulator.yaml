@@ -32,7 +32,7 @@ instructions:
 
             while :; do
                 echo "Waiting QEMU SSH coming up"
-                status=$(ssh -o BatchMode=yes -o ConnectTimeout=1 ${QEMUIPADDR} echo ok 2>&1)
+                status=$(ssh -o PreferredAuthentications=publickey -o BatchMode=yes -o ConnectTimeout=1 ${QEMUIPADDR} echo ok 2>&1)
                 RESULT=$?
                 if [ $RESULT -eq 0 ]; then
                     echo "QEMU SSH Connected ok"
@@ -73,8 +73,8 @@ instructions:
       condition: and
       conditions:
         - condition: property
-          property: target.osVersion
-          equals_value: QNX_710
+          property: target.os
+          equals_value: QNX
         - condition: property
           property: features
           not_contains_value: DisableTests

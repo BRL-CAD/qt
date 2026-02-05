@@ -7,14 +7,12 @@
 
 qt_internal_add_plugin(QWasmIntegrationPlugin
     OUTPUT_NAME qwasm
-    DEFAULT_IF ${QT_QPA_DEFAULT_PLATFORM} MATCHES wasm
+    DEFAULT_IF "wasm" IN_LIST QT_QPA_PLATFORMS
     PLUGIN_TYPE platforms
-    STATIC
     SOURCES
         main.cpp
         qwasmaccessibility.cpp qwasmaccessibility.h
         qwasmbase64iconstore.cpp qwasmbase64iconstore.h
-        qwasmclipboard.cpp qwasmclipboard.h
         qwasmcompositor.cpp qwasmcompositor.h
         qwasmcssstyle.cpp qwasmcssstyle.h
         qwasmcursor.cpp qwasmcursor.h
@@ -31,12 +29,10 @@ qt_internal_add_plugin(QWasmIntegrationPlugin
         qwasmservices.cpp qwasmservices.h
         qwasmtheme.cpp qwasmtheme.h
         qwasmwindow.cpp qwasmwindow.h
-        qwasmwindowclientarea.cpp qwasmwindowclientarea.h
         qwasmwindowtreenode.cpp qwasmwindowtreenode.h
         qwasmwindownonclientarea.cpp qwasmwindownonclientarea.h
         qwasminputcontext.cpp qwasminputcontext.h
-        qwasmwindowstack.cpp qwasmwindowstack.h
-        qwasmdrag.cpp qwasmdrag.h
+        qwasmwindowstack.h
     DEFINES
         QT_EGL_NO_X11
         QT_NO_FOREACH
@@ -45,11 +41,13 @@ qt_internal_add_plugin(QWasmIntegrationPlugin
         Qt::CorePrivate
         Qt::Gui
         Qt::GuiPrivate
+    ATTRIBUTION_FILE_DIR_PATHS
+        ../../../3rdparty/wasm
+    QT_LICENSE_ID QT_COMMERCIAL_OR_GPL3
 )
 
 # Resources:
 set(wasmfonts_resource_files
-    "${QtBase_SOURCE_DIR}/src/3rdparty/wasm/Vera.ttf"
     "${QtBase_SOURCE_DIR}/src/3rdparty/wasm/DejaVuSans.ttf"
     "${QtBase_SOURCE_DIR}/src/3rdparty/wasm/DejaVuSansMono.ttf"
 )
@@ -61,6 +59,16 @@ qt_internal_add_resource(QWasmIntegrationPlugin "wasmfonts"
         "${QtBase_SOURCE_DIR}/src/3rdparty/wasm"
     FILES
         ${wasmfonts_resource_files}
+)
+
+qt_internal_extend_target(QWasmIntegrationPlugin CONDITION QT_FEATURE_clipboard
+    SOURCES
+        qwasmclipboard.cpp qwasmclipboard.h
+)
+
+qt_internal_extend_target(QWasmIntegrationPlugin CONDITION QT_FEATURE_draganddrop
+    SOURCES
+        qwasmdrag.cpp qwasmdrag.h
 )
 
 qt_internal_extend_target(QWasmIntegrationPlugin CONDITION QT_FEATURE_opengl

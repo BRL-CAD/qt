@@ -171,6 +171,8 @@ int runMoc(int argc, char **argv)
 {
     QCoreApplication app(argc, argv);
     QCoreApplication::setApplicationVersion(QString::fromLatin1(QT_VERSION_STR));
+    // let moc identify itself as moc, even if the binary has been renamed
+    QCoreApplication::setApplicationName(QString::fromLatin1("moc"));
 
     bool autoInclude = true;
     bool defaultInclude = true;
@@ -279,6 +281,14 @@ int runMoc(int argc, char **argv)
     noNotesWarningsCompatOption.setFlags(QCommandLineOption::ShortOptionStyle);
     parser.addOption(noNotesWarningsCompatOption);
 
+    QCommandLineOption activeQtMode(QStringLiteral("active-qt"));
+    activeQtMode.setFlags(QCommandLineOption::HiddenFromHelp);
+    parser.addOption(activeQtMode);
+
+    QCommandLineOption qmlMacroWarningIsFatal(QStringLiteral("fatal-qml-macro-warning"));
+    qmlMacroWarningIsFatal.setFlags(QCommandLineOption::HiddenFromHelp);
+    parser.addOption(qmlMacroWarningIsFatal);
+
     QCommandLineOption noNotesOption(QStringLiteral("no-notes"));
     noNotesOption.setDescription(QStringLiteral("Do not display notes."));
     parser.addOption(noNotesOption);
@@ -336,6 +346,9 @@ int runMoc(int argc, char **argv)
         return 1;
 
     parser.process(arguments);
+
+    // used by ActiveQt's dumpcpp to suppress some functions
+    moc.activeQtMode = parser.isSet(activeQtMode);
 
     const QStringList files = parser.positionalArguments();
     output = parser.value(outputOption);
@@ -439,6 +452,8 @@ int runMoc(int argc, char **argv)
         moc.displayNotes = false;
     if (parser.isSet(noWarningsOption) || noNotesCompatValues.contains("w"_L1))
         moc.displayWarnings = moc.displayNotes = false;
+    if (parser.isSet(qmlMacroWarningIsFatal))
+        moc.qmlMacroWarningIsFatal = true;
 
     if (autoInclude) {
         qsizetype spos = filename.lastIndexOf(QDir::separator());
@@ -461,11 +476,14 @@ int runMoc(int argc, char **argv)
 
     if (filename.isEmpty()) {
         filename = QStringLiteral("standard input");
-        in.open(stdin, QIODevice::ReadOnly);
+        if (!in.open(stdin, QIODevice::ReadOnly)) {
+            fprintf(stderr, "moc: cannot open standard input: %s\n", qPrintable(in.errorString()));
+            return 1;
+        }
     } else {
         in.setFileName(filename);
         if (!in.open(QIODevice::ReadOnly)) {
-            fprintf(stderr, "moc: %s: No such file\n", qPrintable(filename));
+            fprintf(stderr, "moc: cannot open %s: %s\n", qPrintable(filename), qPrintable(in.errorString()));
             return 1;
         }
         moc.filename = filename.toLocal8Bit();
@@ -568,11 +586,17 @@ int runMoc(int argc, char **argv)
 
     if (pp.preprocessOnly) {
         fprintf(out.get(), "%s\n", composePreprocessorOutput(moc.symbols).constData());
+    } else if (moc.classList.isEmpty()) {
+        moc.note("No relevant classes found. No output generated.");
+        if (jsonOutput) {
+            const QJsonDocument jsonDoc(QJsonObject {
+                    { "outputRevision"_L1, mocOutputRevision },
+                    { "inputFile"_L1, QLatin1StringView(moc.strippedFileName()) }
+            });
+            fputs(jsonDoc.toJson().constData(), jsonOutput.get());
+        }
     } else {
-        if (moc.classList.isEmpty())
-            moc.note("No relevant classes found. No output generated.");
-        else
-            moc.generate(out.get(), jsonOutput.get());
+        moc.generate(out.get(), jsonOutput.get());
     }
 
     out.reset();

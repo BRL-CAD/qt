@@ -269,6 +269,36 @@
     \sa QCOMPARE_EQ(), QCOMPARE_NE(), QCOMPARE_LT(), QCOMPARE_LE(), QCOMPARE_GT()
 */
 
+/*! \macro QCOMPARE_3WAY(lhs, rhs, order)
+    \since 6.9
+
+    \relates QTest
+
+    The QCOMPARE_3WAY() macro applies the three-way comparison operator \c {<=>}
+    to the input expressions \a lhs and \a rhs, and checks if the result
+    is \a order.
+    If that is true, execution continues. If not, a
+    failure is recorded in the test log and the test function returns without
+    attempting any later checks.
+    The macro only accepts Qt:: and std:: ordering types as \a order
+    argument, otherwise it asserts.
+    \note \a order can be a Qt:: ordering type even if a
+    \c {decltype(lhs <=> rhs)} is a std one.
+    The result of \c {decltype(lhs <=> rhs)} operation should have the same
+    strength as \a order. Otherwise, applying the macro will result in
+    a compilation error. For example, if the result of \c {decltype(lhs <=> rhs)}
+    has a weak ordering type,  the \a order argument can't have partial
+    or strong ordering types.
+    \note The macro only works if the compiler supports the \c{<=>} operator,
+    and otherwise it statically asserts that the prerequisite feature
+    isn't available. Before a macro usage always check if
+    \c __cpp_lib_three_way_comparison is defined, and use QSKIP, if it isn't.
+
+    \include qtestcase.qdoc macro-usage-limitation
+
+    \include qtestcase.qdoc to-string-overload-desc
+*/
+
 /*! \macro QVERIFY_EXCEPTION_THROWN(expression, exceptiontype)
    \since 5.3
 
@@ -359,6 +389,11 @@
    is reached, a failure is recorded in the test log and the test won't be
    executed further.
 
+   //![chrono-timeout]
+   Since Qt 6.8, the \a timeout can also be a
+   \l{chrono_literals Symbol Index}{\c{std::chrono} literal} such as \c{2s}.
+   //![chrono-timeout]
+
    \note This macro can only be used in a test function that is invoked
    by the test framework.
 
@@ -390,9 +425,11 @@
    except that it outputs a verbose \a message when \a condition is still false
    after the specified \a timeout (in milliseconds). The \a message is a plain C string.
 
+   \include qtestcase.qdoc chrono-timeout
+
    Example:
    \code
-   QTRY_VERIFY2_WITH_TIMEOUT(list.size() > 2, QByteArray::number(list.size()).constData(), 10000);
+   QTRY_VERIFY2_WITH_TIMEOUT(list.size() > 2, QByteArray::number(list.size()).constData(), 10s);
    \endcode
 
    \note This macro can only be used in a test function that is invoked
@@ -419,7 +456,7 @@
    \note This macro can only be used in a test function that is invoked
    by the test framework.
 
-   \sa QTRY_VERIFY2_WITH_TIMEOUT(), QTRY_VERIFY2(), QVERIFY(), QCOMPARE(), QTRY_COMPARE(),
+   \sa QTRY_VERIFY2_WITH_TIMEOUT(), QTRY_VERIFY(), QVERIFY(), QCOMPARE(), QTRY_COMPARE(),
    QEXPECT_FAIL()
 */
 
@@ -433,6 +470,8 @@
    are equal or the \a timeout (in milliseconds) is reached.  Between each comparison, events
    will be processed.  If the timeout is reached, a failure is recorded in the
    test log and the test won't be executed further.
+
+   \include qtestcase.qdoc chrono-timeout
 
    \note This macro can only be used in a test function that is invoked
    by the test framework.
@@ -465,6 +504,8 @@
     comparison, events will be processed. If the timeout is reached, a failure
     is recorded in the test log and the test won't be executed further.
 
+    \include qtestcase.qdoc chrono-timeout
+
     \include qtestcase.qdoc macro-usage-limitation
 
     \sa QCOMPARE_EQ(), QTRY_COMPARE_EQ()
@@ -491,6 +532,8 @@
     \c true or the \a timeout (in milliseconds) is reached. Between each
     comparison, events will be processed. If the timeout is reached, a failure
     is recorded in the test log and the test won't be executed further.
+
+    \include qtestcase.qdoc chrono-timeout
 
     \include qtestcase.qdoc macro-usage-limitation
 
@@ -519,6 +562,8 @@
     comparison, events will be processed. If the timeout is reached, a failure
     is recorded in the test log and the test won't be executed further.
 
+    \include qtestcase.qdoc chrono-timeout
+
     \include qtestcase.qdoc macro-usage-limitation
 
     \sa QCOMPARE_LT(), QTRY_COMPARE_LT()
@@ -545,6 +590,8 @@
     \c true or the \a timeout (in milliseconds) is reached. Between each
     comparison, events will be processed. If the timeout is reached, a failure
     is recorded in the test log and the test won't be executed further.
+
+    \include qtestcase.qdoc chrono-timeout
 
     \include qtestcase.qdoc macro-usage-limitation
 
@@ -573,6 +620,8 @@
     comparison, events will be processed. If the timeout is reached, a failure
     is recorded in the test log and the test won't be executed further.
 
+    \include qtestcase.qdoc chrono-timeout
+
     \include qtestcase.qdoc macro-usage-limitation
 
     \sa QCOMPARE_GT(), QTRY_COMPARE_GT()
@@ -599,6 +648,8 @@
     \c true or the \a timeout (in milliseconds) is reached. Between each
     comparison, events will be processed. If the timeout is reached, a failure
     is recorded in the test log and the test won't be executed further.
+
+    \include qtestcase.qdoc chrono-timeout
 
     \include qtestcase.qdoc macro-usage-limitation
 
@@ -1363,6 +1414,17 @@
     moving the mouse pointer.
 */
 
+/*! \fn void QTest::wheelEvent(QWindow *window, QPointF pos, QPoint angleDelta, QPoint pixelDelta = QPoint(0, 0), Qt::KeyboardModifiers stateKey = Qt::NoModifier, Qt::ScrollPhase phase = Qt::NoScrollPhase)
+    \since 6.8
+
+    Simulates a wheel event within \a window at position \a pos in local
+    window coordinates. \a angleDelta contains the wheel rotation angle.
+    A positive value means forward rotation, and a negative one means backward.
+    \a pixelDelta contains the scrolling distance in pixels on screen. This value can be null.
+    The keyboard states at the time of the event are specified by \a stateKey.
+    The scrolling phase of the event is specified by \a phase.
+*/
+
 /*!
     \fn template <typename T1, typename T2> char *QTest::toString(const std::pair<T1, T2> &pair)
     \overload
@@ -1392,7 +1454,7 @@
 */
 
 /*!
-    \fn template<typename T> char *QTest::toString(const T &value)
+    \fn template <typename T> char *QTest::toString(const T &value)
 
     Returns a textual representation of \a value. This function is used by
     \l QCOMPARE() to output verbose information in case of a test failure.
@@ -1577,7 +1639,8 @@
 */
 
 /*!
-    \fn char *QTest::toString(QSizePolicy::ControlType ct)
+    \fn char *toString(QSizePolicy::ControlType ct)
+    \relates QTest
     \overload
     \since 5.5
 
@@ -1585,7 +1648,8 @@
 */
 
 /*!
-    \fn char *QTest::toString(QSizePolicy::ControlTypes cts)
+    \fn char *toString(QSizePolicy::ControlTypes cts)
+    \relates QTest
     \overload
     \since 5.5
 
@@ -1593,7 +1657,8 @@
 */
 
 /*!
-    \fn char *QTest::toString(QSizePolicy::Policy p)
+    \fn char *toString(QSizePolicy::Policy p)
+    \relates QTest
     \overload
     \since 5.5
 
@@ -1601,7 +1666,8 @@
 */
 
 /*!
-    \fn char *QTest::toString(QSizePolicy sp)
+    \fn char *toString(QSizePolicy sp)
+    \relates QTest
     \overload
     \since 5.5
 
@@ -1644,6 +1710,20 @@
 
     Example:
     \snippet code/src_qtestlib_qtestcase_snippet.cpp 25
+*/
+
+/*!
+    \class QTest::QTouchEventWidgetSequence
+    \inmodule QtTest
+    \brief The QTouchEventWidgetSequence class is used to simulate a sequence
+           of touch events for a widget.
+
+    To simulate a sequence of touch events on a widget, call
+    \l {QTest::touchEvent(QWidget*, QPointingDevice*, bool)}{QTest::touchEvent()}
+    with a pointer to a QWidget instance. Add touch events to the returned
+    QTouchEventWidgetSequence object by calling \l press(),
+    \l move(), \l release() and \l stationary(), and let the instance run out of
+    scope to commit the sequence to the event system.
 */
 
 /*!

@@ -1,5 +1,6 @@
 // Copyright (C) 2018 The Qt Company Ltd.
 // SPDX-License-Identifier: LicenseRef-Qt-Commercial OR LGPL-3.0-only OR GPL-2.0-only OR GPL-3.0-only
+// Qt-Security score:significant reason:default
 
 #include <QtCore/qrandom.h>
 
@@ -2587,7 +2588,7 @@ bool QXRenderGlyphCache::addGlyphs(const QTextItemInt &ti,
             }
         }
 
-        glyph = ft->loadGlyphFor(glyphs[i], spp, glyphFormat(), transform());
+        glyph = ft->loadGlyphFor(glyphs[i], spp, glyphFormat(), transform(), QColor());
 
         if (glyph == 0 || glyph->format != glyphFormat())
             return false;

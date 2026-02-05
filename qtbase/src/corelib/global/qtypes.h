@@ -6,16 +6,21 @@
 #define QTYPES_H
 
 #include <QtCore/qprocessordetection.h>
+#include <QtCore/qsystemdetection.h>
 #include <QtCore/qtconfigmacros.h>
 #include <QtCore/qassert.h>
 
 #ifdef __cplusplus
 #  include <cstddef>
+#  if defined(_HAS_STD_BYTE) && _HAS_STD_BYTE == 0
+#    error "Qt requires std::byte, but _HAS_STD_BYTE has been set to 0"
+#  endif
 #  include <cstdint>
 #  if defined(__STDCPP_FLOAT16_T__) && __has_include(<stdfloat>)
 // P1467 implementation - https://wg21.link/p1467
 #    include <stdfloat>
 #  endif // defined(__STDCPP_FLOAT16_T__) && __has_include(<stdfloat>)
+#  include <type_traits>
 #else
 #  include <assert.h>
 #endif
@@ -63,8 +68,16 @@ typedef unsigned long long quint64; /* 64 bit unsigned */
 typedef qint64 qlonglong;
 typedef quint64 qulonglong;
 
-#if defined(__SIZEOF_INT128__) && !defined(QT_NO_INT128)
-#  define QT_SUPPORTS_INT128 __SIZEOF_INT128__
+#ifdef Q_QDOC // QDoc always needs to see the typedefs
+#  define QT_SUPPORTS_INT128 16
+#elif defined(QT_COMPILER_SUPPORTS_INT128) && !defined(QT_NO_INT128)
+#  define QT_SUPPORTS_INT128 QT_COMPILER_SUPPORTS_INT128
+#  if defined(__GLIBCXX__) && defined(__STRICT_ANSI__) // -ansi/-std=c++NN instead of gnu++NN
+#    undef QT_SUPPORTS_INT128                          // breaks <type_traits> on libstdc++
+#  endif
+#  if defined(__clang__) && defined(_MSVC_STL_VERSION) // Clang with MSVC's STL
+#    undef QT_SUPPORTS_INT128                          // MSVC's STL doesn't support int128
+#  endif
 #else
 #  undef QT_SUPPORTS_INT128
 #endif
@@ -72,6 +85,11 @@ typedef quint64 qulonglong;
 #if defined(QT_SUPPORTS_INT128)
 __extension__ typedef __int128_t qint128;
 __extension__ typedef __uint128_t quint128;
+
+#ifdef __cplusplus
+static_assert(std::is_signed_v<qint128>,
+              "Qt requires <type_traits> and <limits> to work for q(u)int128.");
+#endif
 
 // limits:
 #  ifdef __cplusplus /* need to avoid c-style-casts in C++ mode */
@@ -189,7 +207,7 @@ typedef double qreal;
 
 #if defined(__cplusplus)
 /*
-  quintptr are qptrdiff is guaranteed to be the same size as a pointer, i.e.
+  quintptr and qptrdiff are guaranteed to be the same size as a pointer, i.e.
 
       sizeof(void *) == sizeof(quintptr)
       && sizeof(void *) == sizeof(qptrdiff)
@@ -263,13 +281,12 @@ using NativeFloat16Type = std::float16_t;
 // disabled due to https://github.com/llvm/llvm-project/issues/56963
 #  define QFLOAT16_IS_NATIVE        1
 using NativeFloat16Type = decltype(__FLT16_MAX__);
-#elif defined(Q_CC_GNU_ONLY) && defined(__FLT16_MAX__)
+#elif defined(Q_CC_GNU_ONLY) && defined(__FLT16_MAX__) && defined(__ARM_FP16_FORMAT_IEEE)
 #  define QFLOAT16_IS_NATIVE        1
-#  ifdef __ARM_FP16_FORMAT_IEEE
 using NativeFloat16Type = __fp16;
-#  else
+#elif defined(Q_CC_GNU_ONLY) && defined(__FLT16_MAX__) && defined(__SSE2__)
+#  define QFLOAT16_IS_NATIVE        1
 using NativeFloat16Type = _Float16;
-#  endif
 #else
 #  define QFLOAT16_IS_NATIVE        0
 using NativeFloat16Type = void;

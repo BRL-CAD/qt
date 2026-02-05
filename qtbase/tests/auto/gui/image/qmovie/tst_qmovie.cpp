@@ -8,11 +8,19 @@
 #include <QtTest/private/qpropertytesthelper_p.h>
 
 #include <QIODevice>
+#include <QElapsedTimer>
 #ifndef QT_NO_WIDGETS
 #include <QLabel>
 #endif
 #include <QMovie>
+
 #include <QProperty>
+#include <QtCore/qthread.h>
+
+#include <chrono>
+#include <memory>
+
+using namespace std::chrono_literals;
 
 class tst_QMovie : public QObject
 {
@@ -34,6 +42,8 @@ private slots:
     void construction();
     void playMovie_data();
     void playMovie();
+    void playMovieCreatedInThread_data() { playMovie_data(); }
+    void playMovieCreatedInThread();
     void jumpToFrame_data();
     void jumpToFrame();
     void frameDelay();
@@ -47,6 +57,12 @@ private slots:
 #ifndef QT_NO_ICO
     void multiFrameImage();
 #endif
+
+    void setScaledSize_data();
+    void setScaledSize();
+
+private:
+    void playMovieImpl(QMovie &movie);
 };
 
 // Testing get/set functions
@@ -122,10 +138,29 @@ void tst_QMovie::playMovie_data()
 void tst_QMovie::playMovie()
 {
     QFETCH(QString, fileName);
-    QFETCH(int, frameCount);
 
     QMovie movie(QFINDTESTDATA(fileName));
+    playMovieImpl(movie);
+}
 
+void tst_QMovie::playMovieCreatedInThread()
+{
+    QFETCH(const QString, fileName);
+
+    const auto app = QCoreApplication::instance()->thread();
+    std::unique_ptr<QMovie> movie;
+    const std::unique_ptr<QThread> t{QThread::create([&] {
+            movie = std::make_unique<QMovie>(QFINDTESTDATA(fileName));
+            movie->moveToThread(app);
+        })};
+    t->start();
+    QVERIFY(t->wait(30s));
+    QVERIFY(movie);
+    playMovieImpl(*movie);
+}
+
+void tst_QMovie::playMovieImpl(QMovie &movie)
+{
     QCOMPARE(movie.state(), QMovie::NotRunning);
     movie.setSpeed(1000);
     movie.start();
@@ -144,6 +179,8 @@ void tst_QMovie::playMovie()
     connect(&movie, SIGNAL(finished()), this, SLOT(exitLoopSlot()));
 
 #ifndef QT_NO_WIDGETS
+    QFETCH(int, frameCount);
+
     QLabel label;
     label.setMovie(&movie);
     label.show();
@@ -295,11 +332,41 @@ void tst_QMovie::multiFrameImage()
     movie.start();
     QTRY_COMPARE(finishedSpy.size(), 1);
     QCOMPARE_GE(playTimer.elapsed(), 100 * expectedFrameCount);
-    QCOMPARE(movie.nextFrameDelay(), 100);
+    const int delay = movie.nextFrameDelay(); // delay is equal to 100ms minus processing time
+    QCOMPARE_GE(delay, 50);
+    QCOMPARE_LE(delay, 100);
     QCOMPARE(errorSpy.size(), 0);
     QCOMPARE(frameChangedSpy.size(), expectedFrameCount);
 }
 #endif
+
+void tst_QMovie::setScaledSize_data()
+{
+    QTest::addColumn<QString>("fileName");
+    QTest::addColumn<QSize>("scaledSize");
+    QTest::addColumn<QSize>("expectedSize");
+
+    QTest::newRow("trolltech (50, 50)") << QString("animations/trolltech.gif") << QSize(50, 50) << QSize(50, 50);
+    QTest::newRow("trolltech (400, 400)") << QString("animations/trolltech.gif") << QSize(400, 400) << QSize(400, 400);
+    QTest::newRow("trolltech (50, 0)") << QString("animations/trolltech.gif") << QSize(50, 0) << QSize(50, 25);
+    QTest::newRow("trolltech (50, -1)") << QString("animations/trolltech.gif") << QSize(50, -1) << QSize(50, 25);
+    QTest::newRow("trolltech (0, 50)") << QString("animations/trolltech.gif") << QSize(0, 50) << QSize(100, 50);
+    QTest::newRow("trolltech (-1, 50)") << QString("animations/trolltech.gif") << QSize(-1, 50) << QSize(100, 50);
+}
+
+void tst_QMovie::setScaledSize()
+{
+    QFETCH(QString, fileName);
+    QFETCH(QSize, scaledSize);
+    QFETCH(QSize, expectedSize);
+
+    QMovie movie(QFINDTESTDATA(fileName));
+    movie.setScaledSize(scaledSize);
+
+    movie.start();
+    QCOMPARE(movie.currentFrameNumber(), 0);
+    QCOMPARE(movie.currentImage().size(), expectedSize);
+}
 
 QTEST_MAIN(tst_QMovie)
 #include "tst_qmovie.moc"

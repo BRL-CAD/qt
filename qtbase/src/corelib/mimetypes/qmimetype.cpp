@@ -7,6 +7,7 @@
 #include "qmimetype_p.h"
 #include "qmimedatabase_p.h"
 
+#include <QtCore/QCoreApplication>
 #include <QtCore/QDebug>
 #include <QtCore/QLocale>
 #include <QtCore/QHashFunctions>
@@ -24,6 +25,7 @@ using namespace Qt::StringLiterals;
     \brief The QMimeType class describes types of file or data, represented by a MIME type string.
 
     \since 5.0
+    \compares equality
 
     For instance a file named "readme.txt" has the MIME type "text/plain".
     The MIME type can be determined from the file name, or from the file
@@ -92,9 +94,7 @@ QMimeType::QMimeType(const QMimeTypePrivate &dd) :
 
 /*!
     \fn void QMimeType::swap(QMimeType &other);
-    Swaps QMimeType \a other with this QMimeType object.
-
-    This operation is very fast and never fails.
+    \memberswap{mime type}
 
     The swap() method helps with the implementation of assignment
     operators in an exception-safe way. For more information consult
@@ -111,22 +111,20 @@ QMimeType::~QMimeType()
 }
 
 /*!
-    \fn bool QMimeType::operator==(const QMimeType &other) const;
-    Returns \c true if \a other equals this QMimeType object, otherwise returns \c false.
+    \fn bool QMimeType::operator==(const QMimeType &lhs, const QMimeType &rhs);
+    Returns \c true if \a lhs equals to the \a rhs QMimeType object, otherwise
+    returns \c false.
     The name is the unique identifier for a mimetype, so two mimetypes with
     the same name, are equal.
  */
-bool QMimeType::operator==(const QMimeType &other) const
+bool comparesEqual(const QMimeType &lhs, const QMimeType &rhs) noexcept
 {
-    return d == other.d || d->name == other.d->name;
+    return lhs.d == rhs.d || lhs.d->name == rhs.d->name;
 }
 
 /*!
     \since 5.6
-    \relates QMimeType
-
-    Returns the hash value for \a key, using
-    \a seed to seed the calculation.
+    \qhashold{QMimeType}
  */
 size_t qHash(const QMimeType &key, size_t seed) noexcept
 {
@@ -134,8 +132,9 @@ size_t qHash(const QMimeType &key, size_t seed) noexcept
 }
 
 /*!
-    \fn bool QMimeType::operator!=(const QMimeType &other) const;
-    Returns \c true if \a other does not equal this QMimeType object, otherwise returns \c false.
+    \fn bool QMimeType::operator!=(const QMimeType &lhs, const QMimeType &rhs);
+    Returns \c true if QMimeType \a lhs is not equal to QMimeType \a rhs,
+    otherwise returns \c false.
  */
 
 /*!
@@ -182,47 +181,36 @@ QString QMimeType::name() const
     \property QMimeType::comment
     \brief the description of the MIME type to be displayed on user interfaces
 
-    The default language (QLocale().name()) is used to select the appropriate translation.
+    Returns a description for a MIME type, localized to the user's
+    current language settings.
 
     While this property was introduced in 5.10, the
     corresponding accessor method has always been there.
  */
 QString QMimeType::comment() const
 {
+    const auto isEnUs = [](QStringView lang) {
+        // All synonyms of en_US, according to CLDR likely subtag rules:
+        static constexpr QLatin1StringView usaIsh[] =
+                { "en_Latn_US"_L1, "en_US"_L1, "en_Latn"_L1, "en"_L1 };
+        return std::find(std::begin(usaIsh), std::end(usaIsh), lang) != std::end(usaIsh);
+    };
     const auto localeComments = QMimeDatabasePrivate::instance()->localeComments(d->name);
-
-    QStringList languageList = QLocale().uiLanguages(QLocale::TagSeparator::Underscore);
-    qsizetype defaultIndex = languageList.indexOf(u"en_US"_s);
-
-    // Include the default locale as fall-back.
-    if (defaultIndex >= 0) {
-        // en_US is generally the default, and may be omitted from the
-        // overtly-named locales in the MIME type's data (QTBUG-105007).
-        ++defaultIndex; // Skip over en_US.
-        // That's typically followed by en_Latn_US and en (in that order):
-        if (defaultIndex < languageList.size() && languageList.at(defaultIndex) == u"en_Latn_US")
-            ++defaultIndex;
-        if (defaultIndex < languageList.size() && languageList.at(defaultIndex) == u"en")
-            ++defaultIndex;
-    } else {
-        // Absent en-US, just append it:
-        defaultIndex = languageList.size();
-    }
-    languageList.insert(defaultIndex, u"default"_s);
+    const QStringList languageList = QLocale().uiLanguages(QLocale::TagSeparator::Underscore);
+    QString comment = localeComments.value(u"default"_s);
 
     for (const QString &language : std::as_const(languageList)) {
         const QString lang = language == "C"_L1 ? u"en_US"_s : language;
-        QString comm = localeComments.value(lang);
-        if (!comm.isEmpty())
-            return comm;
-        const qsizetype cut = lang.indexOf(u'_');
-        // If "de_CH" is missing, check for "de" (and similar):
-        if (cut != -1) {
-            comm = localeComments.value(lang.left(cut));
-            if (!comm.isEmpty())
-                return comm;
-        }
+        QString translated = localeComments.value(lang);
+        if (!translated.isEmpty())
+            return translated;
+        if (!comment.isEmpty() && isEnUs(lang))
+            return comment; // The default entry is assumed to be in en-US
     }
+    QString translated =
+            QCoreApplication::translate("QMimeType", comment.toUtf8().constData());
+    if (!translated.isEmpty())
+        return translated;
 
     // Use the mimetype name as fallback
     return d->name;

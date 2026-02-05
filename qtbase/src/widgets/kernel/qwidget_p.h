@@ -1,5 +1,6 @@
 // Copyright (C) 2020 The Qt Company Ltd.
 // SPDX-License-Identifier: LicenseRef-Qt-Commercial OR LGPL-3.0-only OR GPL-2.0-only OR GPL-3.0-only
+// Qt-Security score:significant reason:default
 
 #ifndef QWIDGET_P_H
 #define QWIDGET_P_H
@@ -41,6 +42,7 @@
 #include <private/qgesture_p.h>
 #include <qpa/qplatformbackingstore.h>
 #include <QtGui/private/qbackingstorerhisupport_p.h>
+#include <private/qapplication_p.h>
 
 #include <QtCore/qpointer.h>
 
@@ -64,8 +66,6 @@ class QWidgetItemV2;
 
 class QStyle;
 
-class QUnifiedToolbarSurface;
-
 // implemented in qshortcut.cpp
 bool qWidgetShortcutContextMatcher(QObject *object, Qt::ShortcutContext context);
 void qSendWindowChangeToTextureChildrenRecursively(QWidget *widget, QEvent::Type eventType);
@@ -82,6 +82,7 @@ public:
 
 protected:
     friend class QApplication;
+    friend class QApplicationPrivate;
     QRegion m_region;
 };
 
@@ -108,7 +109,7 @@ struct QTLWExtra {
     QRect frameStrut;
     QRect normalGeometry; // used by showMin/maximized/FullScreen
     Qt::WindowFlags savedFlags; // Save widget flags while showing fullscreen
-    QScreen *initialScreen; // Screen when passing a QDesktop[Screen]Widget as parent.
+    QPointer<QScreen> initialScreen; // Screen when passing a QDesktop[Screen]Widget as parent.
 
     std::vector<std::unique_ptr<QPlatformTextureList>> widgetTextures;
 
@@ -117,6 +118,7 @@ struct QTLWExtra {
     uint posIncludesFrame : 1;
     uint sizeAdjusted : 1;
     uint embedded : 1;
+    uint explicitContentsMarginsRespectsSafeArea: 1;
 };
 
 struct QWExtra {
@@ -205,7 +207,7 @@ public:
     Q_ENUM(Direction)
 
     // Functions.
-    explicit QWidgetPrivate(int version = QObjectPrivateVersion);
+    explicit QWidgetPrivate(decltype(QObjectPrivateVersion) = QObjectPrivateVersion);
     ~QWidgetPrivate();
 
     static QWidgetPrivate *get(QWidget *w) { return w->d_func(); }
@@ -386,7 +388,7 @@ public:
     void hide_helper();
     bool isExplicitlyHidden() const;
     void _q_showIfNotHidden();
-    void setVisible(bool);
+    virtual void setVisible(bool);
 
     void setEnabled_helper(bool);
     static void adjustFlags(Qt::WindowFlags &flags, QWidget *w = nullptr);
@@ -419,9 +421,9 @@ public:
     bool setMinimumSize_helper(int &minw, int &minh);
     bool setMaximumSize_helper(int &maxw, int &maxh);
     void setConstraints_sys();
-    bool pointInsideRectAndMask(const QPoint &) const;
-    QWidget *childAt_helper(const QPoint &, bool) const;
-    QWidget *childAtRecursiveHelper(const QPoint &p, bool) const;
+    bool pointInsideRectAndMask(const QPointF &) const;
+    QWidget *childAt_helper(const QPointF &, bool) const;
+    QWidget *childAtRecursiveHelper(const QPointF &p, bool) const;
     void updateGeometry_helper(bool forceUpdate);
 
     void getLayoutItemMargins(int *left, int *top, int *right, int *bottom) const;
@@ -563,7 +565,7 @@ public:
         Q_Q(QWidget);
         if (qApp->autoSipEnabled()) {
             QStyle::RequestSoftwareInputPanel behavior = QStyle::RequestSoftwareInputPanel(
-                    q->style()->styleHint(QStyle::SH_RequestSoftwareInputPanel));
+                    q->style()->styleHint(QStyle::SH_RequestSoftwareInputPanel, nullptr, q));
             if (!clickCausedFocus || behavior == QStyle::RSIP_OnMouseClick) {
                 QGuiApplication::inputMethod()->show();
             }
@@ -682,6 +684,7 @@ public:
 #if QT_CONFIG(accessibility)
     QString accessibleName;
     QString accessibleDescription;
+    QString accessibleIdentifier;
 #endif
 
     // Other variables.
@@ -732,6 +735,42 @@ public:
     uint usesRhiFlush : 1;
     uint childrenHiddenByWState : 1;
     uint childrenShownByExpose : 1;
+    uint dontSetExplicitShowHide : 1;
+    uint inheritStyleRecursionGuard : 1;
+
+    // *************************** Focus abstraction ************************************
+    enum class FocusDirection {
+        Previous,
+        Next,
+    };
+
+    enum class FocusChainRemovalRule {
+        EnsureFocusOut = 0x01,
+        AssertConsistency = 0x02,
+    };
+    Q_DECLARE_FLAGS(FocusChainRemovalRules, FocusChainRemovalRule)
+
+    // Getters
+    QWidget *nextPrevElementInFocusChain(FocusDirection direction) const;
+
+    // manipulators
+    bool removeFromFocusChain(FocusChainRemovalRules rules = FocusChainRemovalRules(),
+                              FocusDirection direction = FocusDirection::Next);
+    bool insertIntoFocusChain(FocusDirection direction, QWidget *position);
+    static bool insertIntoFocusChain(const QWidgetList &toBeInserted, FocusDirection direction, QWidget *position);
+    bool insertIntoFocusChainBefore(QWidget *position)
+    { return insertIntoFocusChain(FocusDirection::Previous, position); }
+    bool insertIntoFocusChainAfter(QWidget *position)
+    { return insertIntoFocusChain(FocusDirection::Next, position); }
+    static QWidgetList takeFromFocusChain(QWidget *from, QWidget *to,
+                                          FocusDirection direction = FocusDirection::Next);
+    void reparentFocusChildren(FocusDirection direction);
+    QWidget *determineLastFocusChild(QWidget *noFurtherThan);
+
+    // Initialization and tests
+    void initFocusChain();
+    bool isInFocusChain() const;
+    bool isFocusChainConsistent() const;
 
     // *************************** Platform specific ************************************
 #if defined(Q_OS_WIN)
@@ -848,11 +887,20 @@ inline void QWidgetPrivate::setSharedPainter(QPainter *painter)
     x->sharedPainter = painter;
 }
 
-inline bool QWidgetPrivate::pointInsideRectAndMask(const QPoint &p) const
+inline bool QWidgetPrivate::pointInsideRectAndMask(const QPointF &p) const
 {
     Q_Q(const QWidget);
-    return q->rect().contains(p) && (!extra || !extra->hasMask || q->testAttribute(Qt::WA_MouseNoMask)
-                                     || extra->mask.contains(p));
+
+    // Use QRectF::contains so that (0, -0.1) isn't in, with p.toPoint() it would be in.
+    // The -1 on right and bottom matches QRect semantics:
+    // (160,160) isn't contained in QRect(0, 0, 160, 160)
+    QRect r = q->rect();
+    r.setRight(qMax(-1, r.right() - 1));
+    r.setBottom(qMax(-1, r.bottom() - 1));
+
+    return r.toRectF().contains(p)
+            && (!extra || !extra->hasMask || q->testAttribute(Qt::WA_MouseNoMask)
+                || extra->mask.contains(p.toPoint() /* incorrect for the -0.1 case */));
 }
 
 inline QWidgetRepaintManager *QWidgetPrivate::maybeRepaintManager() const

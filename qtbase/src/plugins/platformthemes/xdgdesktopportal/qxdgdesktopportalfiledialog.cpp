@@ -1,9 +1,10 @@
 // Copyright (C) 2017-2018 Red Hat, Inc
 // SPDX-License-Identifier: LicenseRef-Qt-Commercial OR LGPL-3.0-only OR GPL-2.0-only OR GPL-3.0-only
+// Qt-Security score:significant reason:default
 
 #include "qxdgdesktopportalfiledialog_p.h"
 
-#include <private/qgenericunixservices_p.h>
+#include <private/qdesktopunixservices_p.h>
 #include <private/qguiapplication_p.h>
 #include <qpa/qplatformintegration.h>
 
@@ -80,7 +81,7 @@ public:
 
     QEventLoop loop;
     QString acceptLabel;
-    QString directory;
+    QUrl directory;
     QString title;
     QStringList nameFilters;
     QStringList mimeTypesFilters;
@@ -170,7 +171,7 @@ void QXdgDesktopPortalFileDialog::openPortal(Qt::WindowFlags windowFlags, Qt::Wi
     options.insert("directory"_L1, d->directoryMode);
 
     if (!d->directory.isEmpty())
-        options.insert("current_folder"_L1, QFile::encodeName(d->directory).append('\0'));
+        options.insert("current_folder"_L1, QFile::encodeName(d->directory.toLocalFile()).append('\0'));
 
     if (d->saveFile && !d->selectedFiles.isEmpty()) {
         // current_file for the file to be pre-selected, current_name for the file name to be
@@ -269,7 +270,7 @@ void QXdgDesktopPortalFileDialog::openPortal(Qt::WindowFlags windowFlags, Qt::Wi
     // TODO choices a(ssa(ss)s)
     // List of serialized combo boxes to add to the file chooser.
 
-    auto unixServices = dynamic_cast<QGenericUnixServices *>(
+    auto unixServices = dynamic_cast<QDesktopUnixServices *>(
             QGuiApplicationPrivate::platformIntegration()->services());
     if (parent && unixServices)
         message << unixServices->portalWindowIdentifier(parent);
@@ -318,7 +319,7 @@ void QXdgDesktopPortalFileDialog::setDirectory(const QUrl &directory)
         d->nativeFileDialog->setDirectory(directory);
     }
 
-    d->directory = directory.path();
+    d->directory = directory;
 }
 
 QUrl QXdgDesktopPortalFileDialog::directory() const

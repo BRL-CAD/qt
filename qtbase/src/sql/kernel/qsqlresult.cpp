@@ -1,5 +1,6 @@
 // Copyright (C) 2016 The Qt Company Ltd.
 // SPDX-License-Identifier: LicenseRef-Qt-Commercial OR LGPL-3.0-only OR GPL-2.0-only OR GPL-3.0-only
+// Qt-Security score:critical reason:data-parser
 
 #include "qsqlresult.h"
 
@@ -946,8 +947,6 @@ void QSqlResult::virtual_hook(int, void *)
 }
 
 /*! \internal
-    \since 4.2
-
     Executes a prepared query in batch mode if the driver supports it,
     otherwise emulates a batch execution using bindValue() and exec().
     QSqlDriver::hasFeature() can be used to find out whether a driver

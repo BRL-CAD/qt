@@ -6,6 +6,7 @@
 
 #include <QtCore/qhash.h>
 #include <QtCore/qcontainertools_impl.h>
+#include <QtCore/qttypetraits.h>
 
 #include <initializer_list>
 #include <iterator>
@@ -36,15 +37,18 @@ public:
     inline void swap(QSet<T> &other) noexcept { q_hash.swap(other.q_hash); }
 
 #ifndef Q_QDOC
-    template <typename U = T>
-    QTypeTraits::compare_eq_result_container<QSet, U> operator==(const QSet<T> &other) const
-    { return q_hash == other.q_hash; }
-    template <typename U = T>
-    QTypeTraits::compare_eq_result_container<QSet, U> operator!=(const QSet<T> &other) const
-    { return q_hash != other.q_hash; }
+private:
+    template <typename U = T, QTypeTraits::compare_eq_result_container<QSet, U> = true>
+    friend bool comparesEqual(const QSet &lhs, const QSet &rhs) noexcept
+    {
+        return lhs.q_hash == rhs.q_hash;
+    }
+    QT_DECLARE_EQUALITY_OPERATORS_HELPER(QSet, QSet, /* non-constexpr */, noexcept,
+            template <typename U = T, QTypeTraits::compare_eq_result_container<QSet, U> = true>)
+public:
 #else
-    bool operator==(const QSet &other) const;
-    bool operator!=(const QSet &other) const;
+    friend bool operator==(const QSet &lhs, const QSet &rhs) noexcept;
+    friend bool operator!=(const QSet &lhs, const QSet &rhs) noexcept;
 #endif
 
     inline qsizetype size() const { return q_hash.size(); }
@@ -60,7 +64,7 @@ public:
 
     inline void clear() { q_hash.clear(); }
 
-    inline bool remove(const T &value) { return q_hash.remove(value) != 0; }
+    bool remove(const T &value) { return q_hash.remove(value); }
 
     template <typename Pred>
     inline qsizetype removeIf(Pred predicate)
@@ -160,6 +164,7 @@ public:
     const_iterator find(const T &value) const { return q_hash.find(value); }
     inline const_iterator constFind(const T &value) const { return find(value); }
     QSet<T> &unite(const QSet<T> &other);
+    QSet &unite(QSet &&other);
     QSet<T> &intersect(const QSet<T> &other);
     bool intersects(const QSet<T> &other) const;
     QSet<T> &subtract(const QSet<T> &other);
@@ -181,30 +186,41 @@ public:
     // comfort
     inline QSet<T> &operator<<(const T &value) { insert(value); return *this; }
     inline QSet<T> &operator|=(const QSet<T> &other) { unite(other); return *this; }
+    QSet &operator|=(QSet &&other) { return unite(std::move(other)); }
     inline QSet<T> &operator|=(const T &value) { insert(value); return *this; }
     inline QSet<T> &operator&=(const QSet<T> &other) { intersect(other); return *this; }
     inline QSet<T> &operator&=(const T &value)
         { QSet<T> result; if (contains(value)) result.insert(value); return (*this = result); }
     inline QSet<T> &operator+=(const QSet<T> &other) { unite(other); return *this; }
+    QSet &operator+=(QSet &&other) { return unite(std::move(other)); }
     inline QSet<T> &operator+=(const T &value) { insert(value); return *this; }
     inline QSet<T> &operator-=(const QSet<T> &other) { subtract(other); return *this; }
     inline QSet<T> &operator-=(const T &value) { remove(value); return *this; }
 
     friend QSet operator|(const QSet &lhs, const QSet &rhs) { return QSet(lhs) |= rhs; }
     friend QSet operator|(QSet &&lhs, const QSet &rhs) { lhs |= rhs; return std::move(lhs); }
+    friend QSet operator|(const QSet &lhs, QSet &&rhs) { return lhs |= std::move(rhs); }
+    friend QSet operator|(QSet &&lhs, QSet &&rhs) { return std::move(lhs) |= std::move(rhs); }
 
     friend QSet operator&(const QSet &lhs, const QSet &rhs) { return QSet(lhs) &= rhs; }
     friend QSet operator&(QSet &&lhs, const QSet &rhs) { lhs &= rhs; return std::move(lhs); }
 
     friend QSet operator+(const QSet &lhs, const QSet &rhs) { return QSet(lhs) += rhs; }
     friend QSet operator+(QSet &&lhs, const QSet &rhs) { lhs += rhs; return std::move(lhs); }
+    friend QSet operator+(const QSet &lhs, QSet &&rhs) { return QSet(lhs) += std::move(rhs); }
+    friend QSet operator+(QSet &&lhs, QSet &&rhs) { return std::move(lhs) += std::move(rhs); }
 
     friend QSet operator-(const QSet &lhs, const QSet &rhs) { return QSet(lhs) -= rhs; }
     friend QSet operator-(QSet &&lhs, const QSet &rhs) { lhs -= rhs; return std::move(lhs); }
 
-    QList<T> values() const;
+    inline QList<T> values() const;
 
 private:
+    static inline QSet intersected_helper(const QSet &lhs, const QSet &rhs);
+
+    template <typename E>
+    void _emplace_or_overwrite(E &&e);
+
     Hash q_hash;
 };
 
@@ -236,23 +252,93 @@ Q_INLINE_TEMPLATE QSet<T> &QSet<T>::unite(const QSet<T> &other)
 }
 
 template <class T>
+Q_INLINE_TEMPLATE auto QSet<T>::unite(QSet &&other) -> QSet&
+{
+    if (other.isDetached() && size() < other.size()) {
+
+        // We can change the state of `other`, so take the smaller *this and
+        // insert it into the larger `other`, making sure we take equivalent
+        // elements from *this:
+
+        swap(other);
+
+        // Now: iterate over `other`, insert into *this, making sure we take
+        //      equivalent elements from `other`:
+
+        if (other.isDetached()) { // can move elements from `other`
+            for (auto &e : other)
+                _emplace_or_overwrite(std::move(e));
+        } else { // need to copy elements from `other`
+            for (const auto &e : std::as_const(other))
+                _emplace_or_overwrite(e);
+        }
+
+        return *this;
+    }
+
+    // in all other cases, the lvalue overload is not worse:
+    return unite(other);
+}
+
+template <class T>
+template <typename E>
+Q_INLINE_TEMPLATE void QSet<T>::_emplace_or_overwrite(E &&e)
+{
+    const auto r = q_hash.tryEmplace(std::forward<E>(e));
+    if (!r.inserted) {
+        // QHash never overwrites the key, but that's what we need
+        // here, so do it using private QHash API:
+        // NB: `e` was _not_ moved from by tryEmplace()!
+        typename Hash::Data::Bucket(r.iterator.i).node()->key = std::forward<E>(e);
+    }
+}
+
+template <class T>
 Q_INLINE_TEMPLATE QSet<T> &QSet<T>::intersect(const QSet<T> &other)
 {
-    QSet<T> copy1;
-    QSet<T> copy2;
-    if (size() <= other.size()) {
-        copy1 = *this;
-        copy2 = other;
+    if (q_hash.isSharedWith(other.q_hash)) {
+        // nothing to do
+    } else if (isEmpty() || other.isEmpty()) {
+        // any set intersected with the empty set is the empty set
+        clear();
+    } else if (q_hash.isDetached()) {
+        // do it in-place:
+        removeIf([&other] (const T &e) { return !other.contains(e); });
     } else {
-        copy1 = other;
-        copy2 = *this;
-        *this = copy1;
-    }
-    for (const auto &e : std::as_const(copy1)) {
-        if (!copy2.contains(e))
-            remove(e);
+        // don't detach *this just to remove some items; create a new set
+        *this = intersected_helper(*this, other);
     }
     return *this;
+}
+
+template <class T>
+// static
+auto QSet<T>::intersected_helper(const QSet &lhs, const QSet &rhs) -> QSet
+{
+    QSet r;
+
+    const auto l_size = lhs.size();
+    const auto r_size = rhs.size();
+    r.reserve((std::min)(l_size, r_size));
+
+    // Iterate the smaller of the two sets, but always take from lhs, for
+    // consistency with insert():
+
+    if (l_size <= r_size) {
+        // lhs is not larger
+        for (const auto &e : lhs) {
+            if (rhs.contains(e))
+                r.insert(e);
+        }
+    } else {
+        // rhs is smaller
+        for (const auto &e : rhs) {
+            if (const auto it = lhs.find(e); it != lhs.end())
+                r.insert(*it);
+        }
+    }
+
+    return r;
 }
 
 template <class T>
@@ -298,7 +384,7 @@ Q_INLINE_TEMPLATE bool QSet<T>::contains(const QSet<T> &other) const
 }
 
 template <typename T>
-Q_OUTOFLINE_TEMPLATE QList<T> QSet<T>::values() const
+QList<T> QSet<T>::values() const
 {
     QList<T> result;
     result.reserve(size());

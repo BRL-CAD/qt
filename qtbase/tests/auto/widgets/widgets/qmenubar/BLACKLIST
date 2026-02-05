@@ -1,5 +1,3 @@
-[check_menuPosition]
-ubuntu-22.04
 # QTBUG-87421
 [cornerWidgets]
 android

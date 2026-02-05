@@ -1,5 +1,6 @@
 // Copyright (C) 2016 The Qt Company Ltd.
 // SPDX-License-Identifier: LicenseRef-Qt-Commercial OR LGPL-3.0-only OR GPL-2.0-only OR GPL-3.0-only
+// Qt-Security score:significant reason:default
 
 
 /*!
@@ -88,7 +89,7 @@ static_assert(sizeof(QScopedPointer<QSslErrorPrivate>) == sizeof(std::unique_ptr
 class QSslErrorPrivate
 {
 public:
-    QSslError::SslError error;
+    QSslError::SslError error = QSslError::NoError;
     QSslCertificate certificate;
 };
 
@@ -102,8 +103,6 @@ public:
 QSslError::QSslError()
     : d(new QSslErrorPrivate)
 {
-    d->error = QSslError::NoError;
-    d->certificate = QSslCertificate();
 }
 
 /*!
@@ -115,7 +114,6 @@ QSslError::QSslError(SslError error)
     : d(new QSslErrorPrivate)
 {
     d->error = error;
-    d->certificate = QSslCertificate();
 }
 
 /*!
@@ -161,9 +159,7 @@ QSslError &QSslError::operator=(const QSslError &other)
 /*!
     \fn void QSslError::swap(QSslError &other)
     \since 5.0
-
-    Swaps this error instance with \a other. This function is very
-    fast and never fails.
+    \memberswap{error instance}
 */
 
 /*!
@@ -332,13 +328,12 @@ QSslCertificate QSslError::certificate() const
 }
 
 /*!
-    Returns the hash value for the \a key, using \a seed to seed the calculation.
     \since 5.4
-    \relates QHash
+    \qhashold{QHash}
 */
 size_t qHash(const QSslError &key, size_t seed) noexcept
 {
-    QtPrivate::QHashCombine hash;
+    QtPrivate::QHashCombine hash(seed);
     seed = hash(seed, key.error());
     seed = hash(seed, key.certificate());
     return seed;
@@ -351,7 +346,8 @@ QDebug operator<<(QDebug debug, const QSslError &error)
     debug << error.errorString();
     return debug;
 }
-QDebug operator<<(QDebug debug, const QSslError::SslError &error)
+
+QDebug print(QDebug debug, QSslError::SslError error)
 {
     debug << QSslError(error).errorString();
     return debug;

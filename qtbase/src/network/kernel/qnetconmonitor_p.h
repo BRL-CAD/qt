@@ -1,5 +1,6 @@
 // Copyright (C) 2019 The Qt Company Ltd.
 // SPDX-License-Identifier: LicenseRef-Qt-Commercial OR LGPL-3.0-only OR GPL-2.0-only OR GPL-3.0-only
+// Qt-Security score:significant reason:default
 
 #ifndef QNETCONMONITOR_P_H
 #define QNETCONMONITOR_P_H
@@ -8,7 +9,6 @@
 
 #include <QtCore/qloggingcategory.h>
 #include <QtNetwork/qhostaddress.h>
-#include <QtCore/qglobal.h>
 #include <QtCore/qobject.h>
 
 //
@@ -30,15 +30,24 @@ class Q_NETWORK_EXPORT QNetworkConnectionMonitor : public QObject
     Q_OBJECT
 
 public:
+#ifdef Q_OS_APPLE
+    enum class InterfaceType {
+        Unknown,
+        Ethernet,
+        Cellular,
+        WiFi,
+    };
+    Q_ENUM(InterfaceType)
+#endif
+
     QNetworkConnectionMonitor();
     QNetworkConnectionMonitor(const QHostAddress &local, const QHostAddress &remote = {});
     ~QNetworkConnectionMonitor();
 
     bool setTargets(const QHostAddress &local, const QHostAddress &remote);
     bool isReachable();
-
-#ifdef QT_PLATFORM_UIKIT
-    bool isWwan() const;
+#ifdef Q_OS_APPLE
+    InterfaceType getInterfaceType() const;
 #endif
 
     // Important: on Darwin you should not call isReachable/isWwan() after
@@ -54,9 +63,8 @@ Q_SIGNALS:
     // Important: connect to this using QueuedConnection. On Darwin
     // callback is coming on a special dispatch queue.
     void reachabilityChanged(bool isOnline);
-
-#ifdef QT_PLATFORM_UIKIT
-    void isWwanChanged(bool isWwan);
+#ifdef Q_OS_APPLE
+    void interfaceTypeChanged(InterfaceType type);
 #endif
 
 private:

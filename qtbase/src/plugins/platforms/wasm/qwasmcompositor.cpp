@@ -4,13 +4,24 @@
 #include "qwasmcompositor.h"
 #include "qwasmwindow.h"
 
+#include <private/qeventdispatcher_wasm_p.h>
+#include <private/qwasmsuspendresumecontrol_p.h>
+
 #include <qpa/qwindowsysteminterface.h>
 
 #include <emscripten/html5.h>
 
 using namespace emscripten;
 
-QWasmCompositor::QWasmCompositor(QWasmScreen *screen) : QObject(screen)
+bool QWasmCompositor::m_requestUpdateHoldEnabled = false;
+
+QWasmCompositor::QWasmCompositor(QWasmScreen *screen)
+: QObject(screen)
+, m_animationFrameHandler(QWasmAnimationFrameHandler([this](double frametime){
+       Q_UNUSED(frametime);
+       this->m_requestAnimationFrameId = -1;
+       this->deliverUpdateRequests();
+   }))
 {
     QWindowSystemInterface::setSynchronousWindowSystemEvents(true);
 }
@@ -18,7 +29,7 @@ QWasmCompositor::QWasmCompositor(QWasmScreen *screen) : QObject(screen)
 QWasmCompositor::~QWasmCompositor()
 {
     if (m_requestAnimationFrameId != -1)
-        emscripten_cancel_animation_frame(m_requestAnimationFrameId);
+        m_animationFrameHandler.cancelAnimationFrame(m_requestAnimationFrameId);
 
     // TODO(mikolaj.boc): Investigate if m_isEnabled is needed at all. It seems like a frame should
     // not be generated after this instead.
@@ -41,16 +52,33 @@ void QWasmCompositor::setEnabled(bool enabled)
     m_isEnabled = enabled;
 }
 
-void QWasmCompositor::requestUpdateWindow(QWasmWindow *window, UpdateRequestDeliveryType updateType)
+// requestUpdate delivery is initially disabled at startup, while Qt completes
+// startup tasks such as font loading. This function enables requestUpdate delivery
+// again.
+bool QWasmCompositor::releaseRequestUpdateHold()
+{
+    const bool wasEnabled = m_requestUpdateHoldEnabled;
+    m_requestUpdateHoldEnabled = false;
+    return wasEnabled;
+}
+
+void QWasmCompositor::requestUpdateWindow(QWasmWindow *window, const QRect &updateRect, UpdateRequestDeliveryType updateType)
 {
     auto it = m_requestUpdateWindows.find(window);
     if (it == m_requestUpdateWindows.end()) {
-        m_requestUpdateWindows.insert(window, updateType);
+        m_requestUpdateWindows.insert(window, std::make_tuple(updateRect, updateType));
     } else {
         // Already registered, but upgrade ExposeEventDeliveryType to UpdateRequestDeliveryType.
         // if needed, to make sure QWindow::updateRequest's are matched.
-        if (it.value() == ExposeEventDelivery && updateType == UpdateRequestDelivery)
-            it.value() = UpdateRequestDelivery;
+        if (std::get<0>(it.value()) != updateRect) {
+            QRegion region;
+            region |= std::get<0>(it.value());
+            region |= updateRect;
+            std::get<0>(it.value()) = region.boundingRect();
+        }
+        if (std::get<1>(it.value()) == ExposeEventDelivery &&
+            updateType == UpdateRequestDelivery)
+            std::get<1>(it.value()) = UpdateRequestDelivery;
     }
 
     requestUpdate();
@@ -62,17 +90,10 @@ void QWasmCompositor::requestUpdate()
     if (m_requestAnimationFrameId != -1)
         return;
 
-    static auto frame = [](double frameTime, void *context) -> int {
-        Q_UNUSED(frameTime);
+    if (m_requestUpdateHoldEnabled)
+        return;
 
-        QWasmCompositor *compositor = reinterpret_cast<QWasmCompositor *>(context);
-
-        compositor->m_requestAnimationFrameId = -1;
-        compositor->deliverUpdateRequests();
-
-        return 0;
-    };
-    m_requestAnimationFrameId = emscripten_request_animation_frame(frame, this);
+    m_requestAnimationFrameId = m_animationFrameHandler.requestAnimationFrame();
 }
 
 void QWasmCompositor::deliverUpdateRequests()
@@ -89,15 +110,20 @@ void QWasmCompositor::deliverUpdateRequests()
     m_inDeliverUpdateRequest = true;
     for (auto it = requestUpdateWindows.constBegin(); it != requestUpdateWindows.constEnd(); ++it) {
         auto *window = it.key();
-        UpdateRequestDeliveryType updateType = it.value();
-        deliverUpdateRequest(window, updateType);
+
+        const QRect updateRect = std::get<0>(it.value());
+        const UpdateRequestDeliveryType updateType = std::get<1>(it.value());
+        deliverUpdateRequest(window, updateRect, updateType);
     }
 
     m_inDeliverUpdateRequest = false;
     frame(requestUpdateWindows.keys());
 }
 
-void QWasmCompositor::deliverUpdateRequest(QWasmWindow *window, UpdateRequestDeliveryType updateType)
+void QWasmCompositor::deliverUpdateRequest(
+    QWasmWindow *window,
+    const QRect &updateRect,
+    UpdateRequestDeliveryType updateType)
 {
     QWindow *qwindow = window->window();
 
@@ -109,7 +135,6 @@ void QWasmCompositor::deliverUpdateRequest(QWasmWindow *window, UpdateRequestDel
     // type. If the window has not yet been exposed then we must expose it first regardless
     // of update type. The deliverUpdateRequest must still be sent in this case in order
     // to maintain correct window update state.
-    QRect updateRect(QPoint(0, 0), qwindow->geometry().size());
     if (updateType == UpdateRequestDelivery) {
         if (qwindow->isExposed() == false)
             QWindowSystemInterface::handleExposeEvent(qwindow, updateRect);
@@ -119,12 +144,12 @@ void QWasmCompositor::deliverUpdateRequest(QWasmWindow *window, UpdateRequestDel
     }
 }
 
-void QWasmCompositor::handleBackingStoreFlush(QWindow *window)
+void QWasmCompositor::handleBackingStoreFlush(QWindow *window, const QRect &updateRect)
 {
     // Request update to flush the updated backing store content, unless we are currently
     // processing an update, in which case the new content will flushed as a part of that update.
     if (!m_inDeliverUpdateRequest)
-        requestUpdateWindow(static_cast<QWasmWindow *>(window->handle()));
+        requestUpdateWindow(static_cast<QWasmWindow *>(window->handle()), updateRect);
 }
 
 void QWasmCompositor::frame(const QList<QWasmWindow *> &windows)
@@ -140,3 +165,28 @@ QWasmScreen *QWasmCompositor::screen()
 {
     return static_cast<QWasmScreen *>(parent());
 }
+
+QWasmAnimationFrameHandler::QWasmAnimationFrameHandler(std::function<void(double)> handler)
+{
+    auto argCastWrapper = [handler](val arg){ handler(arg.as<double>()); };
+    m_handlerIndex = QWasmSuspendResumeControl::get()->registerEventHandler(argCastWrapper);
+}
+
+QWasmAnimationFrameHandler::~QWasmAnimationFrameHandler()
+{
+    QWasmSuspendResumeControl::get()->removeEventHandler(m_handlerIndex);
+}
+
+int64_t QWasmAnimationFrameHandler::requestAnimationFrame()
+{
+    using ReturnType = double; // FIXME emscripten::val::call() does not support int64_t
+    val handler = QWasmSuspendResumeControl::get()->jsEventHandlerAt(m_handlerIndex);
+    return int64_t(val::global("window").call<ReturnType>("requestAnimationFrame", handler));
+}
+
+void QWasmAnimationFrameHandler::cancelAnimationFrame(int64_t id)
+{
+    val::global("window").call<void>("cancelAnimationFrame", double(id));
+}
+
+

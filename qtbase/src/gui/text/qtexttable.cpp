@@ -72,10 +72,12 @@ using namespace Qt::StringLiterals;
     Sets the cell's character format to \a format. This can for example be used to change
     the background color of the entire cell:
 
+    \code
     QTextTableCell cell = table->cellAt(2, 3);
     QTextCharFormat format = cell.format();
     format.setBackground(Qt::blue);
     cell.setFormat(format);
+    \endcode
 
     Note that the cell's row or column span cannot be changed through this function. You have
     to use QTextTable::mergeCells and QTextTable::splitCell instead.
@@ -722,7 +724,7 @@ void QTextTable::insertColumns(int pos, int num)
         if (i == d->nRows - 1 && pos == d->nCols) {
             cell = d->fragment_end;
         } else {
-            int logicalGridIndexBeforePosition = pos > 0
+            int logicalGridIndexBeforePosition = pos > 0 || i > 0
                                                  ? d->findCellIndex(d->grid[i*d->nCols + pos - 1])
                                                  : -1;
 

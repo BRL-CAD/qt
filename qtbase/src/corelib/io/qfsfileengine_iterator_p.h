@@ -1,5 +1,6 @@
 // Copyright (C) 2016 The Qt Company Ltd.
 // SPDX-License-Identifier: LicenseRef-Qt-Commercial OR LGPL-3.0-only OR GPL-2.0-only OR GPL-3.0-only
+// Qt-Security score:significant reason:default
 
 #ifndef QFSFILEENGINE_ITERATOR_P_H
 #define QFSFILEENGINE_ITERATOR_P_H
@@ -19,31 +20,27 @@
 #include "qfilesystemiterator_p.h"
 #include "qdir.h"
 
+#include <memory>
+
 #ifndef QT_NO_FILESYSTEMITERATOR
 
 QT_BEGIN_NAMESPACE
 
-class QFSFileEngineIteratorPrivate;
-class QFSFileEngineIteratorPlatformSpecificData;
-
 class QFSFileEngineIterator : public QAbstractFileEngineIterator
 {
 public:
-    QFSFileEngineIterator(QDir::Filters filters, const QStringList &filterNames);
+    QFSFileEngineIterator(const QString &path, QDir::Filters filters, const QStringList &filterNames);
+    QFSFileEngineIterator(const QString &path, QDirListing::IteratorFlags filters,
+                          const QStringList &filterNames);
     ~QFSFileEngineIterator();
 
-    QString next() override;
-    bool hasNext() const override;
+    bool advance() override;
 
     QString currentFileName() const override;
     QFileInfo currentFileInfo() const override;
 
 private:
-    void advance() const;
-    mutable QScopedPointer<QFileSystemIterator> nativeIterator;
-    mutable QFileInfo currentInfo;
-    mutable QFileInfo nextInfo;
-    mutable bool done;
+    mutable std::unique_ptr<QFileSystemIterator> nativeIterator;
 };
 
 QT_END_NAMESPACE

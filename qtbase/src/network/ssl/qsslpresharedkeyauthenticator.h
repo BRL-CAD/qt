@@ -1,5 +1,6 @@
 // Copyright (C) 2014 Governikus GmbH & Co. KG.
 // SPDX-License-Identifier: LicenseRef-Qt-Commercial OR LGPL-3.0-only OR GPL-2.0-only OR GPL-3.0-only
+// Qt-Security score:significant reason:default
 
 #ifndef QSSLPRESHAREDKEYAUTHENTICATOR_H
 #define QSSLPRESHAREDKEYAUTHENTICATOR_H
@@ -16,6 +17,7 @@ QT_BEGIN_NAMESPACE
 class QSslPreSharedKeyAuthenticatorPrivate;
 class QSslPreSharedKeyAuthenticator
 {
+    Q_GADGET_EXPORT(Q_NETWORK_EXPORT)
 public:
     Q_NETWORK_EXPORT QSslPreSharedKeyAuthenticator();
     Q_NETWORK_EXPORT ~QSslPreSharedKeyAuthenticator();

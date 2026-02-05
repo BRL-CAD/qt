@@ -23,15 +23,13 @@ public:
 
     void setGeometry(const QRect &rect) override;
     EGLSurface eglSurface(EGLConfig config);
+    bool ensureEglSurfaceCreated(EGLConfig config);
     QSurfaceFormat format() const override;
-
-    bool checkNativeSurface(EGLConfig config);
 
     void applicationStateChanged(Qt::ApplicationState) override;
 
 protected:
-    void createEgl(EGLConfig config);
-    void clearEgl();
+    void clearSurface() override;
 
 private:
     EGLDisplay m_eglDisplay = EGL_NO_DISPLAY;
@@ -39,7 +37,6 @@ private:
     EGLNativeWindowType m_nativeWindow = nullptr;
 
     QSurfaceFormat m_format;
-    QRect m_oldGeometry;
 };
 
 QT_END_NAMESPACE

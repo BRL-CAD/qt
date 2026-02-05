@@ -1,5 +1,6 @@
 // Copyright (C) 2016 The Qt Company Ltd.
 // SPDX-License-Identifier: LicenseRef-Qt-Commercial OR LGPL-3.0-only OR GPL-2.0-only OR GPL-3.0-only
+// Qt-Security score:significant reason:default
 
 #include "qfilesystemwatcher.h"
 #include "qfilesystemwatcher_inotify_p.h"
@@ -217,7 +218,8 @@ QInotifyFileSystemWatcherEngine::QInotifyFileSystemWatcherEngine(int fd, QObject
       notifier(fd, QSocketNotifier::Read, this)
 {
     fcntl(inotifyFd, F_SETFD, FD_CLOEXEC);
-    connect(&notifier, SIGNAL(activated(QSocketDescriptor)), SLOT(readFromInotify()));
+    QObject::connect(&notifier, &QSocketNotifier::activated,
+                     this, &QInotifyFileSystemWatcherEngine::readFromInotify);
 }
 
 QInotifyFileSystemWatcherEngine::~QInotifyFileSystemWatcherEngine()

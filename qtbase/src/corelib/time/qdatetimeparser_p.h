@@ -24,6 +24,7 @@
 #include "QtCore/qlist.h"
 #include "QtCore/qlocale.h"
 #include "QtCore/qstringlist.h"
+#include "QtCore/qtimezone.h"
 #ifndef QT_BOOTSTRAPPED
 # include "QtCore/qvariant.h"
 #endif
@@ -46,22 +47,9 @@ public:
         FromString,
         DateTimeEdit
     };
-    QDateTimeParser(QMetaType::Type t, Context ctx, const QCalendar &cal = QCalendar())
-        : parserType(t), context(ctx), calendar(cal)
+    QDateTimeParser(QMetaType::Type t, Context ctx, QCalendar cal = QCalendar())
+        : defaultLocale(QLocale::system()), parserType(t), context(ctx), calendar(cal)
     {
-        defaultLocale = QLocale::system();
-        first.type = FirstSection;
-        first.pos = -1;
-        first.count = -1;
-        first.zeroesAdded = 0;
-        last.type = LastSection;
-        last.pos = -1;
-        last.count = -1;
-        last.zeroesAdded = 0;
-        none.type = NoSection;
-        none.pos = -1;
-        none.count = -1;
-        none.zeroesAdded = 0;
     }
     virtual ~QDateTimeParser();
 
@@ -93,15 +81,17 @@ public:
         FirstSection         = 0x20000 | Internal,
         LastSection          = 0x40000 | Internal,
         CalendarPopupSection = 0x80000 | Internal,
-
-        NoSectionIndex = -1,
-        FirstSectionIndex = -2,
-        LastSectionIndex = -3,
-        CalendarPopupIndex = -4
     }; // extending qdatetimeedit.h's equivalent
     Q_DECLARE_FLAGS(Sections, Section)
 
-    struct Q_CORE_EXPORT SectionNode {
+    static constexpr int NoSectionIndex = -1;
+    static constexpr int FirstSectionIndex = -2;
+    static constexpr int LastSectionIndex = -3;
+
+    struct Q_CORE_EXPORT SectionNode
+    {
+        constexpr SectionNode(Section tp, int ps, int ct, int zs = 0)
+            : type(tp), pos(ps), count(ct), zeroesAdded(zs) {}
         Section type;
         mutable int pos;
         int count; // (used as Case(count) indicator for AmPmSection)
@@ -153,7 +143,7 @@ public:
 
     void setDefaultLocale(const QLocale &loc) { defaultLocale = loc; }
     virtual QString displayText() const { return m_text; }
-    void setCalendar(const QCalendar &calendar);
+    void setCalendar(QCalendar calendar);
 
 private:
     int sectionMaxSize(Section s, int count) const;
@@ -170,9 +160,9 @@ private:
             {}
     };
     ParsedSection parseSection(const QDateTime &currentValue, int sectionIndex, int offset) const;
-    int findMonth(const QString &str1, int monthstart, int sectionIndex,
+    int findMonth(QStringView str, int monthstart, int sectionIndex,
                   int year, QString *monthName = nullptr, int *used = nullptr) const;
-    int findDay(const QString &str1, int intDaystart, int sectionIndex,
+    int findDay(QStringView str, int intDaystart, int sectionIndex,
                 QString *dayName = nullptr, int *used = nullptr) const;
     ParsedSection findUtcOffset(QStringView str, int mode) const;
     ParsedSection findTimeZoneName(QStringView str, const QDateTime &when) const;
@@ -212,7 +202,7 @@ protected: // for the benefit of QDateTimeEditPrivate
     int sectionSize(int index) const;
     int sectionMaxSize(int index) const;
     int sectionPos(int index) const;
-    int sectionPos(const SectionNode &sn) const;
+    int sectionPos(SectionNode sn) const;
 
     const SectionNode &sectionNode(int index) const;
     Section sectionType(int index) const;
@@ -230,8 +220,8 @@ protected: // for the benefit of QDateTimeEditPrivate
     }
     QString stateName(State s) const;
 
-    virtual QDateTime getMinimum() const;
-    virtual QDateTime getMaximum() const;
+    virtual QDateTime getMinimum(const QTimeZone &zone) const;
+    virtual QDateTime getMaximum(const QTimeZone &zone) const;
     virtual int cursorPosition() const { return -1; }
     virtual QLocale locale() const { return defaultLocale; }
 
@@ -254,7 +244,6 @@ protected: // for the benefit of QDateTimeEditPrivate
     mutable int cachedDay = -1;
     mutable QString m_text;
     QList<SectionNode> sectionNodes;
-    SectionNode first, last, none, popup;
     QStringList separators;
     QString displayFormat;
     QLocale defaultLocale;
@@ -265,7 +254,7 @@ protected: // for the benefit of QDateTimeEditPrivate
 };
 Q_DECLARE_TYPEINFO(QDateTimeParser::SectionNode, Q_PRIMITIVE_TYPE);
 
-Q_CORE_EXPORT bool operator==(const QDateTimeParser::SectionNode &s1, const QDateTimeParser::SectionNode &s2);
+Q_CORE_EXPORT bool operator==(QDateTimeParser::SectionNode s1, QDateTimeParser::SectionNode s2);
 
 Q_DECLARE_OPERATORS_FOR_FLAGS(QDateTimeParser::Sections)
 Q_DECLARE_OPERATORS_FOR_FLAGS(QDateTimeParser::FieldInfo)

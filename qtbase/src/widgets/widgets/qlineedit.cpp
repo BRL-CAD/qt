@@ -1,5 +1,6 @@
 // Copyright (C) 2016 The Qt Company Ltd.
 // SPDX-License-Identifier: LicenseRef-Qt-Commercial OR LGPL-3.0-only OR GPL-2.0-only OR GPL-3.0-only
+// Qt-Security score:significant reason:default
 
 #include "qlineedit.h"
 #include "qlineedit_p.h"
@@ -41,8 +42,9 @@
 #if QT_CONFIG(itemviews)
 #include "qabstractitemview.h"
 #endif
+#if QT_CONFIG(style_stylesheet)
 #include "private/qstylesheetstyle_p.h"
-
+#endif
 #if QT_CONFIG(shortcut)
 #include "private/qapplication_p.h"
 #include "private/qshortcutmap_p.h"
@@ -98,7 +100,7 @@ void QLineEdit::initStyleOption(QStyleOptionFrame *option) const
     \ingroup basicwidgets
     \inmodule QtWidgets
 
-    \image windows-lineedit.png
+    \image fusion-lineedit.png {Line edit showing a text greeting}
 
     A line edit allows users to enter and edit a single line of
     plain text with useful editing functions, including undo and redo, cut and
@@ -1503,8 +1505,10 @@ void QLineEdit::mousePressEvent(QMouseEvent* e)
 
     if (d->sendMouseEventToInputContext(e))
         return;
-    if (e->button() == Qt::RightButton)
+    if (e->button() == Qt::RightButton) {
+        e->ignore();
         return;
+    }
 #ifdef QT_KEYPAD_NAVIGATION
     if (QApplication::QApplicationPrivate() && !hasEditFocus()) {
         setEditFocus(true);
@@ -2068,7 +2072,7 @@ void QLineEdit::paintEvent(QPaintEvent *)
     QPoint topLeft = lineRect.topLeft() - QPoint(d->hscroll, d->control->ascent() - fm.ascent());
 
     // draw text, selections and cursors
-#ifndef QT_NO_STYLE_STYLESHEET
+#if QT_CONFIG(style_stylesheet)
     if (QStyleSheetStyle* cssStyle = qt_styleSheet(style())) {
         cssStyle->styleSheetPalette(this, &panel, &pal);
     }

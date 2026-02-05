@@ -14,6 +14,11 @@
 
 #ifdef Q_OS_DARWIN
 #  include <private/qcore_mac_p.h>
+
+// Apple's dyld *does* support RTLD_NODELETE and the library remains loaded in
+// memory after the dlclose() call, but their Objective C crashes when running
+// code from unloaded-but-still-loaded plugins.
+#  undef RTLD_NODELETE
 #endif
 
 #ifdef Q_OS_ANDROID
@@ -53,6 +58,12 @@ QStringList QLibraryPrivate::suffixes_sys(const QString &fullVersion)
     } else {
         suffixes << ".sl"_L1;
     }
+#elif defined(Q_OS_CYGWIN)
+    if (!fullVersion.isEmpty()) {
+        suffixes << "-%1.dll"_L1.arg(fullVersion);
+    } else {
+        suffixes << QStringLiteral(".dll");
+    }
 #elif defined(Q_OS_AIX)
     suffixes << ".a";
 
@@ -77,11 +88,6 @@ QStringList QLibraryPrivate::suffixes_sys(const QString &fullVersion)
     return suffixes;
 }
 
-QStringList QLibraryPrivate::prefixes_sys()
-{
-    return QStringList() << "lib"_L1;
-}
-
 bool QLibraryPrivate::load_sys()
 {
 #if defined(Q_OS_WASM) && defined(QT_STATIC)
@@ -103,7 +109,7 @@ bool QLibraryPrivate::load_sys()
     QStringList suffixes;
     QStringList prefixes;
     if (pluginState != IsAPlugin) {
-        prefixes = prefixes_sys();
+        prefixes << prefix_sys().toString();
         suffixes = suffixes_sys(fullVersion);
     }
     int dlFlags = 0;
@@ -174,8 +180,10 @@ bool QLibraryPrivate::load_sys()
             // add ".avx2" to each suffix in the list
             transform(suffixes, [](QString *s) { s->append(".avx2"_L1); });
         } else {
-            // prepend "haswell/" to each prefix in the list
-            transform(prefixes, [](QString *s) { s->prepend("haswell/"_L1); });
+#  ifdef __GLIBC__
+            // prepend "glibc-hwcaps/x86-64-v3/" to each prefix in the list
+            transform(prefixes, [](QString *s) { s->prepend("glibc-hwcaps/x86-64-v3/"_L1); });
+#  endif
         }
     }
 #endif
@@ -185,8 +193,6 @@ bool QLibraryPrivate::load_sys()
     Handle hnd = nullptr;
     for (int prefix = 0; retry && !hnd && prefix < prefixes.size(); prefix++) {
         for (int suffix = 0; retry && !hnd && suffix < suffixes.size(); suffix++) {
-            if (!prefixes.at(prefix).isEmpty() && name.startsWith(prefixes.at(prefix)))
-                continue;
             if (path.isEmpty() && prefixes.at(prefix).contains(u'/'))
                 continue;
             if (!suffixes.at(suffix).isEmpty() && name.endsWith(suffixes.at(suffix)))
@@ -236,8 +242,8 @@ bool QLibraryPrivate::load_sys()
 
     locker.relock();
     if (!hnd) {
-        errorString = QLibrary::tr("Cannot load library %1: %2").arg(fileName,
-                                                                     QLatin1StringView(dlerror()));
+        errorString = QLibrary::tr("Cannot load library %1: %2")
+                .arg(fileName, QString::fromLocal8Bit(dlerror()));
     }
     if (hnd) {
         qualifiedFileName = attempt;
@@ -262,27 +268,13 @@ bool QLibraryPrivate::unload_sys()
         if (!qstrcmp(error, "Shared objects still referenced")) // On QNX that's only "informative"
             return true;
 #endif
-        errorString = QLibrary::tr("Cannot unload library %1: %2").arg(fileName,
-                                                                       QLatin1StringView(error));
+        errorString = QLibrary::tr("Cannot unload library %1: %2")
+                .arg(fileName, QString::fromLocal8Bit(error));
         return false;
     }
     errorString.clear();
     return true;
 }
-
-#if defined(Q_OS_LINUX)
-Q_CORE_EXPORT QFunctionPointer qt_linux_find_symbol_sys(const char *symbol)
-{
-    return QFunctionPointer(dlsym(RTLD_DEFAULT, symbol));
-}
-#endif
-
-#ifdef Q_OS_DARWIN
-Q_CORE_EXPORT QFunctionPointer qt_mac_resolve_sys(void *handle, const char *symbol)
-{
-    return QFunctionPointer(dlsym(handle, symbol));
-}
-#endif
 
 QFunctionPointer QLibraryPrivate::resolve_sys(const char *symbol)
 {

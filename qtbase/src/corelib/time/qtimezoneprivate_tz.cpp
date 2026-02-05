@@ -2,6 +2,7 @@
 // Copyright (C) 2019 Crimson AS <info@crimson.no>
 // Copyright (C) 2013 John Layt <jlayt@kde.org>
 // SPDX-License-Identifier: LicenseRef-Qt-Commercial OR LGPL-3.0-only OR GPL-2.0-only OR GPL-3.0-only
+// Qt-Security score:critical reason:data-parser
 
 #include "qtimezone.h"
 #include "qtimezoneprivate_p.h"
@@ -10,7 +11,8 @@
 
 #include <QtCore/QDataStream>
 #include <QtCore/QDateTime>
-#include <QtCore/QDirIterator>
+#include <QtCore/QDirListing>
+#include <QtCore/QDir>
 #include <QtCore/QFile>
 #include <QtCore/QCache>
 #include <QtCore/QMap>
@@ -33,10 +35,6 @@ QT_BEGIN_NAMESPACE
 
 using namespace Qt::StringLiterals;
 
-#if QT_CONFIG(icu)
-Q_CONSTINIT static QBasicMutex s_icu_mutex;
-#endif
-
 /*
     Private
 
@@ -44,6 +42,7 @@ Q_CONSTINIT static QBasicMutex s_icu_mutex;
 */
 
 struct QTzTimeZone {
+    // TODO: for zone1970.tab we'll need a set of territories:
     QLocale::Territory territory = QLocale::AnyTerritory;
     QByteArray comment;
 };
@@ -54,7 +53,7 @@ typedef QHash<QByteArray, QTzTimeZone> QTzTimeZoneHash;
 static bool isTzFile(const QString &name);
 
 // Open a named file under the zone info directory:
-static bool openZoneInfo(QString name, QFile *file)
+static bool openZoneInfo(const QString &name, QFile *file)
 {
     // At least on Linux / glibc (see man 3 tzset), $TZDIR overrides the system
     // default location for zone info:
@@ -83,7 +82,7 @@ static bool openZoneInfo(QString name, QFile *file)
 
 // Parse zone.tab table for territory information, read directories to ensure we
 // find all installed zones (many are omitted from zone.tab; even more from
-// zone1970.tab).
+// zone1970.tab; see also QTBUG-64941).
 static QTzTimeZoneHash loadTzTimeZones()
 {
     QFile tzif;
@@ -91,12 +90,12 @@ static QTzTimeZoneHash loadTzTimeZones()
         return QTzTimeZoneHash();
 
     QTzTimeZoneHash zonesHash;
-    while (!tzif.atEnd()) {
-        const QByteArray line = tzif.readLine().trimmed();
-        if (line.isEmpty() || line.at(0) == '#') // Ignore empty or comment
+    QByteArray line;
+    while (tzif.readLineInto(&line)) {
+        QByteArrayView text = QByteArrayView(line).trimmed();
+        if (text.isEmpty() || text.at(0) == '#') // Ignore empty or comment
             continue;
         // Data rows are tab-separated columns Region, Coordinates, ID, Optional Comments
-        QByteArrayView text(line);
         int cut = text.indexOf('\t');
         if (Q_LIKELY(cut > 0)) {
             QTzTimeZone zone;
@@ -117,16 +116,16 @@ static QTzTimeZoneHash loadTzTimeZones()
         }
     }
 
-    const QString path = tzif.fileName();
+    QString path = tzif.fileName();
     const qsizetype cut = path.lastIndexOf(u'/');
     Q_ASSERT(cut > 0);
-    const QDir zoneDir = QDir(path.first(cut));
-    QDirIterator zoneFiles(zoneDir, QDirIterator::Subdirectories);
-    while (zoneFiles.hasNext()) {
-        const QFileInfo info = zoneFiles.nextFileInfo();
+    path.truncate(cut + 1);
+    const qsizetype prefixLen = path.size();
+    for (const auto &info : QDirListing(path, QDirListing::IteratorFlag::Recursive)) {
         if (!(info.isFile() || info.isSymLink()))
             continue;
-        const QString name = zoneDir.relativeFilePath(info.filePath());
+        const QString infoAbsolutePath = info.absoluteFilePath();
+        const QString name = infoAbsolutePath.sliced(prefixLen);
         // Two sub-directories containing (more or less) copies of the zoneinfo tree.
         if (info.isDir() ? name == "posix"_L1 || name == "right"_L1
             : name.startsWith("posix/"_L1) || name.startsWith("right/"_L1)) {
@@ -136,7 +135,7 @@ static QTzTimeZoneHash loadTzTimeZones()
         // isTzFile() check; in practice current (2023) zoneinfo/ contains only
         // actual zone files and matches to that filter.
         const QByteArray id = QFile::encodeName(name);
-        if (!zonesHash.contains(id) && isTzFile(zoneDir.absoluteFilePath(name)))
+        if (!zonesHash.contains(id) && isTzFile(infoAbsolutePath))
             zonesHash.insert(id, QTzTimeZone());
     }
     return zonesHash;
@@ -516,19 +515,27 @@ static inline bool asciiIsLetter(char ch)
 
 namespace {
 
-struct PosixZone
+struct PosixZone // TODO: QTBUG-112006 - make this cross-platform.
 {
     enum {
         InvalidOffset = INT_MIN,
     };
 
     QString name;
-    int offset;
-
-    static PosixZone invalid() { return {QString(), InvalidOffset}; }
-    static PosixZone parse(const char *&pos, const char *end);
-
+    int offset = InvalidOffset;
     bool hasValidOffset() const noexcept { return offset != InvalidOffset; }
+    QTimeZonePrivate::Data dataAt(qint64 when)
+    {
+        Q_ASSERT(hasValidOffset());
+        return QTimeZonePrivate::Data(name, when, offset, offset);
+    }
+    QTimeZonePrivate::Data dataAtOffset(qint64 when, int standard)
+    {
+        Q_ASSERT(hasValidOffset());
+        return QTimeZonePrivate::Data(name, when, offset, standard);
+    }
+
+    static PosixZone parse(const char *&pos, const char *end);
 };
 
 } // unnamed namespace
@@ -559,7 +566,7 @@ PosixZone PosixZone::parse(const char *&pos, const char *end)
         pos = nameEnd;
     }
     if (nameEnd - nameBegin < 3)
-        return invalid();  // name must be at least 3 characters long
+        return {};  // name must be at least 3 characters long
 
     // zone offset, form [+-]hh:mm:ss
     const char *zoneBegin = pos;
@@ -578,7 +585,7 @@ PosixZone PosixZone::parse(const char *&pos, const char *end)
     // UTC+hh:mm:ss or GMT+hh:mm:ss should be read as offsets from UTC, not as a
     // POSIX rule naming a zone as UTC or GMT and specifying a non-zero offset.
     if (offset != 0 && (name =="UTC"_L1 || name == "GMT"_L1))
-        return invalid();
+        return {};
     return {std::move(name), offset};
 }
 
@@ -594,7 +601,7 @@ static auto validatePosixRule(const QByteArray &posixRule, bool requireOffset = 
     // See also calculatePosixTransition()'s reference.
     const auto parts = posixRule.split(',');
     const struct { bool isValid, hasDst; } fail{false, false}, good{true, parts.size() > 1};
-    const QByteArray &zoneinfo = parts.at(0);
+    const QByteArray &zoneinfo = parts.at(0).trimmed();
     if (zoneinfo.isEmpty())
         return fail;
 
@@ -648,9 +655,9 @@ static QList<QTimeZonePrivate::Data> calculatePosixTransitions(const QByteArray 
     // and the link in validatePosixRule(), above.
     QList<QByteArray> parts = posixRule.split(',');
 
-    PosixZone stdZone, dstZone = PosixZone::invalid();
+    PosixZone stdZone, dstZone;
     {
-        const QByteArray &zoneinfo = parts.at(0);
+        const QByteArray &zoneinfo = parts.at(0).trimmed();
         const char *begin = zoneinfo.constBegin();
 
         stdZone = PosixZone::parse(begin, zoneinfo.constEnd());
@@ -667,13 +674,9 @@ static QList<QTimeZonePrivate::Data> calculatePosixTransitions(const QByteArray 
 
     // If only the name part, or no DST specified, then no transitions
     if (parts.size() == 1 || !dstZone.hasValidOffset()) {
-        QTimeZonePrivate::Data data;
-        data.atMSecsSinceEpoch = lastTranMSecs;
-        data.offsetFromUtc = stdZone.offset;
-        data.standardTimeOffset = stdZone.offset;
-        data.daylightTimeOffset = 0;
-        data.abbreviation = stdZone.name.isEmpty() ? QString::fromUtf8(parts.at(0)) : stdZone.name;
-        result << data;
+        result.emplaceBack(
+                stdZone.name.isEmpty() ? QString::fromUtf8(parts.at(0)) : stdZone.name,
+                lastTranMSecs, stdZone.offset, stdZone.offset);
         return result;
     }
     if (parts.size() < 3 || parts.at(1).isEmpty() || parts.at(2).isEmpty())
@@ -706,40 +709,33 @@ static QList<QTimeZonePrivate::Data> calculatePosixTransitions(const QByteArray 
         // moments; the atMSecsSinceEpoch values computed from them are
         // correctly offse to be UTC-based.
 
-        QTimeZonePrivate::Data dstData; // Transition to DST
+        // Transition to daylight-saving time:
         QDateTime dst(calculatePosixDate(dstDateRule, year)
                       .startOfDay(QTimeZone::UTC).addSecs(dstTime));
-        dstData.atMSecsSinceEpoch = dst.toMSecsSinceEpoch() - stdZone.offset * 1000;
-        dstData.offsetFromUtc = dstZone.offset;
-        dstData.standardTimeOffset = stdZone.offset;
-        dstData.daylightTimeOffset = dstZone.offset - stdZone.offset;
-        dstData.abbreviation = dstZone.name;
-        QTimeZonePrivate::Data stdData; // Transition to standard time
+        auto saving = dstZone.dataAtOffset(dst.toMSecsSinceEpoch() - stdZone.offset * 1000,
+                                           stdZone.offset);
+        // Transition to standard time:
         QDateTime std(calculatePosixDate(stdDateRule, year)
                       .startOfDay(QTimeZone::UTC).addSecs(stdTime));
-        stdData.atMSecsSinceEpoch = std.toMSecsSinceEpoch() - dstZone.offset * 1000;
-        stdData.offsetFromUtc = stdZone.offset;
-        stdData.standardTimeOffset = stdZone.offset;
-        stdData.daylightTimeOffset = 0;
-        stdData.abbreviation = stdZone.name;
+        auto standard = stdZone.dataAt(std.toMSecsSinceEpoch() - dstZone.offset * 1000);
 
         if (year == startYear) {
             // Handle the special case of fixed state, which may be represented
             // by fake transitions at start and end of each year:
-            if (dstData.atMSecsSinceEpoch < stdData.atMSecsSinceEpoch) {
+            if (saving.atMSecsSinceEpoch < standard.atMSecsSinceEpoch) {
                 if (dst <= QDate(year, 1, 1).startOfDay(QTimeZone::UTC)
                     && std >= QDate(year, 12, 31).endOfDay(QTimeZone::UTC)) {
                     // Permanent DST:
-                    dstData.atMSecsSinceEpoch = lastTranMSecs;
-                    result << dstData;
+                    saving.atMSecsSinceEpoch = lastTranMSecs;
+                    result.emplaceBack(std::move(saving));
                     return result;
                 }
             } else {
                 if (std <= QDate(year, 1, 1).startOfDay(QTimeZone::UTC)
                     && dst >= QDate(year, 12, 31).endOfDay(QTimeZone::UTC)) {
                     // Permanent Standard time, perversely described:
-                    stdData.atMSecsSinceEpoch = lastTranMSecs;
-                    result << stdData;
+                    standard.atMSecsSinceEpoch = lastTranMSecs;
+                    result.emplaceBack(std::move(standard));
                     return result;
                 }
             }
@@ -748,14 +744,17 @@ static QList<QTimeZonePrivate::Data> calculatePosixTransitions(const QByteArray 
         const bool useStd = std.isValid() && std.date().year() == year && !stdZone.name.isEmpty();
         const bool useDst = dst.isValid() && dst.date().year() == year && !dstZone.name.isEmpty();
         if (useStd && useDst) {
-            if (dst < std)
-                result << dstData << stdData;
-            else
-                result << stdData << dstData;
+            if (dst < std) {
+                result.emplaceBack(std::move(saving));
+                result.emplaceBack(std::move(standard));
+            } else {
+                result.emplaceBack(std::move(standard));
+                result.emplaceBack(std::move(saving));
+            }
         } else if (useStd) {
-            result << stdData;
+            result.emplaceBack(std::move(standard));
         } else if (useDst) {
-            result << dstData;
+            result.emplaceBack(std::move(saving));
         }
     }
     return result;
@@ -773,9 +772,6 @@ QTzTimeZonePrivate::~QTzTimeZonePrivate()
 
 QTzTimeZonePrivate *QTzTimeZonePrivate::clone() const
 {
-#if QT_CONFIG(icu)
-    const auto lock = qt_scoped_lock(s_icu_mutex);
-#endif
     return new QTzTimeZonePrivate(*this);
 }
 
@@ -886,8 +882,6 @@ QTzTimeZoneCacheEntry QTzTimeZoneCache::findEntry(const QByteArray &ianaId)
     // TODO: is typeList[0] always the "before zones" data ? It seems to be ...
     if (typeList.size())
         ret.m_preZoneRule = { typeList.at(0).tz_gmtoff, 0, typeList.at(0).tz_abbrind };
-    else
-        ret.m_preZoneRule = { 0, 0, 0 };
 
     // Offsets are stored as total offset, want to know separate UTC and DST offsets
     // so find the first non-dst transition to use as base UTC Offset
@@ -900,7 +894,7 @@ QTzTimeZoneCacheEntry QTzTimeZoneCache::findEntry(const QByteArray &ianaId)
     }
 
     // Now for each transition time calculate and store our rule:
-    const int tranCount = tranList.size();;
+    const int tranCount = tranList.size();
     ret.m_tranTimes.reserve(tranCount);
     // The DST offset when in effect: usually stable, usually an hour:
     int lastDstOff = 3600;
@@ -1011,15 +1005,7 @@ QTzTimeZonePrivate::QTzTimeZonePrivate(const QByteArray &ianaId)
     if (m_id.isEmpty()) {
         // This can only happen for the system zone, when we've read the
         // contents of /etc/localtime because it wasn't a symlink.
-#if QT_CONFIG(icu)
-        // Use ICU's system zone, if only to avoid using the abbreviation as ID
-        // (ICU might mis-recognize it) in displayName().
-        m_icu = new QIcuTimeZonePrivate();
-        // Use its ID, as an alternate source of data:
-        m_id = m_icu->id();
-        if (!m_id.isEmpty())
-            return;
-#endif
+        // TODO: use CLDR generic abbreviation for the zone.
         m_id = abbreviation(QDateTime::currentMSecsSinceEpoch()).toUtf8();
     }
 }
@@ -1038,70 +1024,19 @@ QString QTzTimeZonePrivate::displayName(QTimeZone::TimeType timeType,
                                         QTimeZone::NameType nameType,
                                         const QLocale &locale) const
 {
-    // TZ DB lacks localized names (it only has IANA IDs), so delegate to ICU
-    // for those, when available.
-#if QT_CONFIG(icu)
-    {
-        auto lock = qt_scoped_lock(s_icu_mutex);
-        // TODO Some valid TZ names are not valid ICU names, use translation table?
-        if (!m_icu)
-            m_icu = new QIcuTimeZonePrivate(m_id);
-        if (m_icu->isValid())
-            return m_icu->displayName(timeType, nameType, locale);
+    // TZ only provides C-locale abbreviations and offset:
+    if (nameType != QTimeZone::LongName && isDataLocale(locale)) {
+        Data tran = data(timeType);
+        if (tran.atMSecsSinceEpoch != invalidMSecs()) {
+            if (nameType == QTimeZone::ShortName)
+                return tran.abbreviation;
+            // Save base class repeating the data(timeType) query:
+            if (isAnglicLocale(locale))
+                return isoOffsetFormat(tran.offsetFromUtc);
+        }
     }
-#else
-    Q_UNUSED(timeType);
-    Q_UNUSED(nameType);
-    Q_UNUSED(locale);
-#endif
-    // If ICU is unavailable, fall back to abbreviations.
-    // Abbreviations don't have GenericTime
-    if (timeType == QTimeZone::GenericTime)
-        timeType = QTimeZone::StandardTime;
-
-    // Get current tran, if valid and is what we want, then use it
-    const qint64 currentMSecs = QDateTime::currentMSecsSinceEpoch();
-    QTimeZonePrivate::Data tran = data(currentMSecs);
-    if (tran.atMSecsSinceEpoch != invalidMSecs()
-        && ((timeType == QTimeZone::DaylightTime && tran.daylightTimeOffset != 0)
-        || (timeType == QTimeZone::StandardTime && tran.daylightTimeOffset == 0))) {
-        return tran.abbreviation;
-    }
-
-    // Otherwise get next tran and if valid and is what we want, then use it
-    tran = nextTransition(currentMSecs);
-    if (tran.atMSecsSinceEpoch != invalidMSecs()
-        && ((timeType == QTimeZone::DaylightTime && tran.daylightTimeOffset != 0)
-        || (timeType == QTimeZone::StandardTime && tran.daylightTimeOffset == 0))) {
-        return tran.abbreviation;
-    }
-
-    // Otherwise get prev tran and if valid and is what we want, then use it
-    tran = previousTransition(currentMSecs);
-    if (tran.atMSecsSinceEpoch != invalidMSecs())
-        tran = previousTransition(tran.atMSecsSinceEpoch);
-    if (tran.atMSecsSinceEpoch != invalidMSecs()
-        && ((timeType == QTimeZone::DaylightTime && tran.daylightTimeOffset != 0)
-        || (timeType == QTimeZone::StandardTime && tran.daylightTimeOffset == 0))) {
-        return tran.abbreviation;
-    }
-
-    // Otherwise is strange sequence, so work backwards through trans looking for first match, if any
-    auto it = std::partition_point(tranCache().cbegin(), tranCache().cend(),
-                                   [currentMSecs](const QTzTransitionTime &at) {
-                                       return at.atMSecsSinceEpoch <= currentMSecs;
-                                   });
-
-    while (it != tranCache().cbegin()) {
-        --it;
-        tran = dataForTzTransition(*it);
-        int offset = tran.daylightTimeOffset;
-        if ((timeType == QTimeZone::DaylightTime) != (offset == 0))
-            return tran.abbreviation;
-    }
-
-    // Otherwise if no match use current data
-    return data(currentMSecs).abbreviation;
+    // Otherwise, fall back to base class (and qtimezonelocale.cpp):
+    return QTimeZonePrivate::displayName(timeType, nameType, locale);
 }
 
 QString QTzTimeZonePrivate::abbreviation(qint64 atMSecsSinceEpoch) const
@@ -1111,7 +1046,7 @@ QString QTzTimeZonePrivate::abbreviation(qint64 atMSecsSinceEpoch) const
 
 int QTzTimeZonePrivate::offsetFromUtc(qint64 atMSecsSinceEpoch) const
 {
-    const QTimeZonePrivate::Data tran = data(atMSecsSinceEpoch);
+    const Data tran = data(atMSecsSinceEpoch);
     return tran.offsetFromUtc; // == tran.standardTimeOffset + tran.daylightTimeOffset
 }
 
@@ -1143,8 +1078,8 @@ QTimeZonePrivate::Data QTzTimeZonePrivate::dataForTzTransition(QTzTransitionTime
 QTimeZonePrivate::Data QTzTimeZonePrivate::dataFromRule(QTzTransitionRule rule,
                                                         qint64 msecsSinceEpoch) const
 {
-    return { QString::fromUtf8(cached_data.m_abbreviations.at(rule.abbreviationIndex)),
-             msecsSinceEpoch, rule.stdOffset + rule.dstOffset, rule.stdOffset, rule.dstOffset };
+    return Data(QString::fromUtf8(cached_data.m_abbreviations.at(rule.abbreviationIndex)),
+                msecsSinceEpoch, rule.stdOffset + rule.dstOffset, rule.stdOffset);
 }
 
 QList<QTimeZonePrivate::Data> QTzTimeZonePrivate::getPosixTransitions(qint64 msNear) const
@@ -1161,24 +1096,24 @@ QTimeZonePrivate::Data QTzTimeZonePrivate::data(qint64 forMSecsSinceEpoch) const
     // and we have a POSIX rule, then use it:
     if (!cached_data.m_posixRule.isEmpty()
         && (tranCache().isEmpty() || tranCache().last().atMSecsSinceEpoch < forMSecsSinceEpoch)) {
-        QList<QTimeZonePrivate::Data> posixTrans = getPosixTransitions(forMSecsSinceEpoch);
+        QList<Data> posixTrans = getPosixTransitions(forMSecsSinceEpoch);
         auto it = std::partition_point(posixTrans.cbegin(), posixTrans.cend(),
-                                       [forMSecsSinceEpoch] (const QTimeZonePrivate::Data &at) {
+                                       [forMSecsSinceEpoch] (const Data &at) {
                                            return at.atMSecsSinceEpoch <= forMSecsSinceEpoch;
                                        });
         // Use most recent, if any in the past; or the first if we have no other rules:
         if (it > posixTrans.cbegin() || (tranCache().isEmpty() && it < posixTrans.cend())) {
-            QTimeZonePrivate::Data data = *(it > posixTrans.cbegin() ? it - 1 : it);
+            Data data = *(it > posixTrans.cbegin() ? it - 1 : it);
             data.atMSecsSinceEpoch = forMSecsSinceEpoch;
             return data;
         }
     }
     if (tranCache().isEmpty()) // Only possible if !isValid()
-        return invalidData();
+        return {};
 
     // Otherwise, use the rule for the most recent or first transition:
     auto last = std::partition_point(tranCache().cbegin(), tranCache().cend(),
-                                     [forMSecsSinceEpoch] (const QTzTransitionTime &at) {
+                                     [forMSecsSinceEpoch] (QTzTransitionTime at) {
                                          return at.atMSecsSinceEpoch <= forMSecsSinceEpoch;
                                      });
     if (last == tranCache().cbegin())
@@ -1186,6 +1121,64 @@ QTimeZonePrivate::Data QTzTimeZonePrivate::data(qint64 forMSecsSinceEpoch) const
 
     --last;
     return dataFromRule(cached_data.m_tranRules.at(last->ruleIndex), forMSecsSinceEpoch);
+}
+
+// Overridden because the final iteration over transitions only needs to look
+// forward and backwards one transition within the POSIX rule (when there is
+// one, as is common) to settle the whole period it covers, so we can then skip
+// all other transitions of the POSIX rule and iterate tranCache() backwards
+// from its most recent transition.
+QTimeZonePrivate::Data QTzTimeZonePrivate::data(QTimeZone::TimeType timeType) const
+{
+    // True if tran is valid and has the DST-ness to match timeType:
+    const auto validMatch = [timeType](const Data &tran) {
+        return tran.atMSecsSinceEpoch != invalidMSecs()
+            && ((timeType == QTimeZone::DaylightTime) != (tran.daylightTimeOffset == 0));
+    };
+
+    // Get current tran, use if suitable:
+    const qint64 currentMSecs = QDateTime::currentMSecsSinceEpoch();
+    Data tran = data(currentMSecs);
+    if (validMatch(tran))
+        return tran;
+
+    // Otherwise, next tran probably flips DST-ness:
+    tran = nextTransition(currentMSecs);
+    if (validMatch(tran))
+        return tran;
+
+    // Failing that, prev (or present, if current MSecs is eactly a transition
+    // moment) tran defines what data() got us and the one before that probably
+    // flips DST-ness:
+    tran = previousTransition(currentMSecs + 1);
+    if (tran.atMSecsSinceEpoch != invalidMSecs())
+        tran = previousTransition(tran.atMSecsSinceEpoch);
+    if (validMatch(tran))
+        return tran;
+
+    // Otherwise, we can look backwards through transitions for a match; if we
+    // have a POSIX rule, it clearly doesn't do DST (or we'd have hit it by
+    // now), so we only need to look in the tranCache() up to now.
+    const auto untilNow = [currentMSecs](QTzTransitionTime at) {
+        return at.atMSecsSinceEpoch <= currentMSecs;
+    };
+    auto it = std::partition_point(tranCache().cbegin(), tranCache().cend(), untilNow);
+    // That's the end or first future transition; we don't want to look at it,
+    // but at all those before it.
+    while (it != tranCache().cbegin()) {
+        --it;
+        tran = dataForTzTransition(*it);
+        if ((timeType == QTimeZone::DaylightTime) != (tran.daylightTimeOffset == 0))
+            return tran;
+    }
+
+    return {};
+}
+
+bool QTzTimeZonePrivate::isDataLocale(const QLocale &locale) const
+{
+    // TZ data uses en-Latn-* / C locale names:
+    return isAnglicLocale(locale);
 }
 
 bool QTzTimeZonePrivate::hasTransitions() const
@@ -1199,21 +1192,21 @@ QTimeZonePrivate::Data QTzTimeZonePrivate::nextTransition(qint64 afterMSecsSince
     // and we have a POSIX rule, then use it:
     if (!cached_data.m_posixRule.isEmpty()
         && (tranCache().isEmpty() || tranCache().last().atMSecsSinceEpoch < afterMSecsSinceEpoch)) {
-        QList<QTimeZonePrivate::Data> posixTrans = getPosixTransitions(afterMSecsSinceEpoch);
+        QList<Data> posixTrans = getPosixTransitions(afterMSecsSinceEpoch);
         auto it = std::partition_point(posixTrans.cbegin(), posixTrans.cend(),
-                                       [afterMSecsSinceEpoch] (const QTimeZonePrivate::Data &at) {
+                                       [afterMSecsSinceEpoch] (const Data &at) {
                                            return at.atMSecsSinceEpoch <= afterMSecsSinceEpoch;
                                        });
 
-        return it == posixTrans.cend() ? invalidData() : *it;
+        return it == posixTrans.cend() ? Data{} : *it;
     }
 
     // Otherwise, if we can find a valid tran, use its rule:
     auto last = std::partition_point(tranCache().cbegin(), tranCache().cend(),
-                                     [afterMSecsSinceEpoch] (const QTzTransitionTime &at) {
+                                     [afterMSecsSinceEpoch] (QTzTransitionTime at) {
                                          return at.atMSecsSinceEpoch <= afterMSecsSinceEpoch;
                                      });
-    return last != tranCache().cend() ? dataForTzTransition(*last) : invalidData();
+    return last != tranCache().cend() ? dataForTzTransition(*last) : Data{};
 }
 
 QTimeZonePrivate::Data QTzTimeZonePrivate::previousTransition(qint64 beforeMSecsSinceEpoch) const
@@ -1222,23 +1215,23 @@ QTimeZonePrivate::Data QTzTimeZonePrivate::previousTransition(qint64 beforeMSecs
     // and we have a POSIX rule, then use it:
     if (!cached_data.m_posixRule.isEmpty()
         && (tranCache().isEmpty() || tranCache().last().atMSecsSinceEpoch < beforeMSecsSinceEpoch)) {
-        QList<QTimeZonePrivate::Data> posixTrans = getPosixTransitions(beforeMSecsSinceEpoch);
+        QList<Data> posixTrans = getPosixTransitions(beforeMSecsSinceEpoch);
         auto it = std::partition_point(posixTrans.cbegin(), posixTrans.cend(),
-                                       [beforeMSecsSinceEpoch] (const QTimeZonePrivate::Data &at) {
+                                       [beforeMSecsSinceEpoch] (const Data &at) {
                                            return at.atMSecsSinceEpoch < beforeMSecsSinceEpoch;
                                        });
         if (it > posixTrans.cbegin())
             return *--it;
         // It fell between the last transition (if any) and the first of the POSIX rule:
-        return tranCache().isEmpty() ? invalidData() : dataForTzTransition(tranCache().last());
+        return tranCache().isEmpty() ? Data{} : dataForTzTransition(tranCache().last());
     }
 
     // Otherwise if we can find a valid tran then use its rule
     auto last = std::partition_point(tranCache().cbegin(), tranCache().cend(),
-                                     [beforeMSecsSinceEpoch] (const QTzTransitionTime &at) {
+                                     [beforeMSecsSinceEpoch] (QTzTransitionTime at) {
                                          return at.atMSecsSinceEpoch < beforeMSecsSinceEpoch;
                                      });
-    return last > tranCache().cbegin() ? dataForTzTransition(*--last) : invalidData();
+    return last > tranCache().cbegin() ? dataForTzTransition(*--last) : Data{};
 }
 
 bool QTzTimeZonePrivate::isTimeZoneIdAvailable(const QByteArray &ianaId) const
@@ -1259,13 +1252,38 @@ QList<QByteArray> QTzTimeZonePrivate::availableTimeZoneIds() const
 
 QList<QByteArray> QTzTimeZonePrivate::availableTimeZoneIds(QLocale::Territory territory) const
 {
-    // TODO AnyTerritory
     QList<QByteArray> result;
     for (auto it = tzZones->cbegin(), end = tzZones->cend(); it != end; ++it) {
         if (it.value().territory == territory)
             result << it.key();
     }
     std::sort(result.begin(), result.end());
+
+    // Since zone.tab only knows about one territory per zone, and is somewhat
+    // incomplete, we may well miss some zones that CLDR associates with the
+    // territory. So merge with those from CLDR that we do support.
+    const auto unWantedZone = [territory](QByteArrayView id) {
+        // We only want to add zones if they are known and we don't already have them:
+        auto it = tzZones->constFind(id);
+        return it == tzZones->end() || it->territory == territory;
+    };
+    QList<QByteArrayView> cldrViews = matchingTimeZoneIds(territory);
+    std::sort(cldrViews.begin(), cldrViews.end());
+    const auto uniqueEnd = std::unique(cldrViews.begin(), cldrViews.end());
+    const auto prunedEnd = std::remove_if(cldrViews.begin(), uniqueEnd, unWantedZone);
+    const auto cldrSize = std::distance(cldrViews.begin(), prunedEnd);
+    if (cldrSize) {
+        QList<QByteArray> cldrList;
+        cldrList.reserve(cldrSize);
+        for (auto it = cldrViews.begin(); it != prunedEnd; ++it)
+            cldrList.emplace_back(it->toByteArray());
+        QList<QByteArray> joined;
+        joined.reserve(result.size() + cldrSize);
+        std::set_union(result.begin(), result.end(), cldrList.begin(), cldrList.end(),
+                       std::back_inserter(joined));
+        result = joined;
+    }
+
     return result;
 }
 
@@ -1328,8 +1346,8 @@ private:
         constexpr StatIdent() : m_dev(bad), m_ino(bad) {}
         StatIdent(const QT_STATBUF &data) : m_dev(data.st_dev), m_ino(data.st_ino) {}
         bool isValid() { return m_dev != bad || m_ino != bad; }
-        bool operator==(const StatIdent &other)
-        { return other.m_dev == m_dev && other.m_ino == m_ino; }
+        friend constexpr bool operator==(StatIdent lhs, StatIdent rhs)
+        { return lhs.m_dev == rhs.m_dev && lhs.m_ino == rhs.m_ino; }
     };
     StatIdent m_last;
 

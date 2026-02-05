@@ -8,10 +8,13 @@
 #include "qdatetime.h"
 #include "qdebug.h"
 #include <private/qnumeric_p.h>
+#include <private/wcharhelpers_win_p.h>
 
 #include <algorithm>
 
 #include <private/qwinregistry_p.h>
+
+QT_REQUIRE_CONFIG(timezone_locale);
 
 QT_BEGIN_NAMESPACE
 
@@ -488,13 +491,6 @@ QWinTimeZonePrivate::QWinTimeZonePrivate(const QByteArray &ianaId)
     init(ianaId);
 }
 
-QWinTimeZonePrivate::QWinTimeZonePrivate(const QWinTimeZonePrivate &other)
-                   : QTimeZonePrivate(other), m_windowsId(other.m_windowsId),
-                     m_displayName(other.m_displayName), m_standardName(other.m_standardName),
-                     m_daylightName(other.m_daylightName), m_tranRules(other.m_tranRules)
-{
-}
-
 QWinTimeZonePrivate::~QWinTimeZonePrivate()
 {
 }
@@ -538,14 +534,13 @@ void QWinTimeZonePrivate::init(const QByteArray &ianaId)
             QWinRegistryKey dynamicKey(HKEY_LOCAL_MACHINE, dynamicKeyPath);
             if (dynamicKey.isValid()) {
                 // Find out the start and end years stored, then iterate over them
-                const auto startYear = dynamicKey.dwordValue(L"FirstEntry");
-                const auto endYear = dynamicKey.dwordValue(L"LastEntry");
-                for (int year = int(startYear.first); year <= int(endYear.first); ++year) {
+                const int startYear = dynamicKey.value<int>(L"FirstEntry").value_or(0);
+                const int endYear = dynamicKey.value<int>(L"LastEntry").value_or(0);
+                for (int year = startYear; year <= endYear; ++year) {
                     bool ruleOk;
-                    QWinTransitionRule rule =
-                        readRegistryRule(dynamicKey,
-                                         reinterpret_cast<LPCWSTR>(QString::number(year).utf16()),
-                                         &ruleOk);
+                    QWinTransitionRule rule = readRegistryRule(dynamicKey,
+                                                               qt_castToWchar(QString::number(year)),
+                                                               &ruleOk);
                     if (ruleOk
                         // Don't repeat a recurrent rule:
                         && (m_tranRules.isEmpty()
@@ -596,27 +591,19 @@ QString QWinTimeZonePrivate::displayName(QTimeZone::TimeType timeType,
                                          QTimeZone::NameType nameType,
                                          const QLocale &locale) const
 {
-    // TODO Registry holds MUI keys, should be able to look up translations?
-    Q_UNUSED(locale);
-
-    if (nameType == QTimeZone::OffsetName) {
-        const QWinTransitionRule &rule =
-            m_tranRules.at(ruleIndexForYear(m_tranRules, QDate::currentDate().year()));
-        int offset = rule.standardTimeBias;
-        if (timeType == QTimeZone::DaylightTime)
-            offset += rule.daylightTimeBias;
-        return isoOffsetFormat(offset * -60);
+    // Registry gave us long names for the system locale:
+    if (nameType == QTimeZone::LongName && locale == QLocale::system()) {
+        switch (timeType) {
+        case  QTimeZone::DaylightTime :
+            return m_daylightName;
+        case  QTimeZone::GenericTime :
+            return m_displayName;
+        case  QTimeZone::StandardTime :
+            return m_standardName;
+        }
     }
-
-    switch (timeType) {
-    case  QTimeZone::DaylightTime :
-        return m_daylightName;
-    case  QTimeZone::GenericTime :
-        return m_displayName;
-    case  QTimeZone::StandardTime :
-        return m_standardName;
-    }
-    return m_standardName;
+    // Fall back to base class for everything else.
+    return QTimeZonePrivate::displayName(timeType, nameType, locale);;
 }
 
 QString QWinTimeZonePrivate::abbreviation(qint64 atMSecsSinceEpoch) const
@@ -692,7 +679,7 @@ QTimeZonePrivate::Data QWinTimeZonePrivate::data(qint64 forMSecsSinceEpoch) cons
         // Fell off start of rule, try previous rule.
     }
     // We don't have relevant data :-(
-    return invalidData();
+    return {};
 }
 
 bool QWinTimeZonePrivate::hasTransitions() const
@@ -774,13 +761,13 @@ QTimeZonePrivate::Data QWinTimeZonePrivate::nextTransition(qint64 afterMSecsSinc
         }
     }
     // Apparently no transition after the given time:
-    return invalidData();
+    return {};
 }
 
 QTimeZonePrivate::Data QWinTimeZonePrivate::previousTransition(qint64 beforeMSecsSinceEpoch) const
 {
     if (beforeMSecsSinceEpoch <= minMSecs())
-        return invalidData();
+        return {};
 
     int year = msecsToDate(beforeMSecsSinceEpoch).year();
     for (int ruleIndex = ruleIndexForYear(m_tranRules, year);
@@ -830,7 +817,7 @@ QTimeZonePrivate::Data QWinTimeZonePrivate::previousTransition(qint64 beforeMSec
         }
     }
     // Apparently no transition before the given time:
-    return invalidData();
+    return {};
 }
 
 QByteArray QWinTimeZonePrivate::systemTimeZoneId() const
@@ -866,23 +853,22 @@ QTimeZonePrivate::Data QWinTimeZonePrivate::ruleToData(const QWinTransitionRule 
                                                        QTimeZone::TimeType type,
                                                        bool fakeDst) const
 {
-    Data tran = invalidData();
+    Data tran;
     tran.atMSecsSinceEpoch = atMSecsSinceEpoch;
     tran.standardTimeOffset = rule.standardTimeBias * -60;
     if (fakeDst) {
         tran.daylightTimeOffset = 0;
-        tran.abbreviation = m_standardName;
         // Rule may claim we're in DST when it's actually a standard time change:
         if (type == QTimeZone::DaylightTime)
             tran.standardTimeOffset += rule.daylightTimeBias * -60;
     } else if (type == QTimeZone::DaylightTime) {
         tran.daylightTimeOffset = rule.daylightTimeBias * -60;
-        tran.abbreviation = m_daylightName;
     } else {
         tran.daylightTimeOffset = 0;
-        tran.abbreviation = m_standardName;
     }
     tran.offsetFromUtc = tran.standardTimeOffset + tran.daylightTimeOffset;
+    tran.abbreviation = localeName(atMSecsSinceEpoch, tran.offsetFromUtc,
+                                   type, QTimeZone::ShortName, QLocale::system());
     return tran;
 }
 

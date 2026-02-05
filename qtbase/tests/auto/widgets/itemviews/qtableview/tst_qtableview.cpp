@@ -383,6 +383,8 @@ private slots:
     void spansAfterColumnInsertion();
     void spansAfterRowRemoval();
     void spansAfterColumnRemoval();
+    void spanWithMovedSections_data();
+    void spanWithMovedSections();
     void editSpanFromDirections_data();
     void editSpanFromDirections();
 
@@ -610,7 +612,6 @@ void tst_QTableView::keyboardNavigation()
     view.setCurrentIndex(index);
 
     view.show();
-    QApplicationPrivate::setActiveWindow(&view);
     QVERIFY(QTest::qWaitForWindowActive(&view));
 
     int row = rowCount - 1;
@@ -703,7 +704,7 @@ void tst_QTableView::headerSections()
     QCOMPARE(view.columnWidth(column), columnWidth);
 }
 
-typedef QPair<int,int> IntPair;
+using IntPair = std::pair<int,int>;
 
 void tst_QTableView::moveCursor_data()
 {
@@ -3466,6 +3467,50 @@ void tst_QTableView::spansAfterColumnRemoval()
     VERIFY_SPANS_CONSISTENCY(&view);
 }
 
+void tst_QTableView::spanWithMovedSections_data()
+{
+    QTest::addColumn<int>("rowSectionFrom");
+    QTest::addColumn<int>("rowSectionTo");
+    QTest::addColumn<int>("columnSectionFrom");
+    QTest::addColumn<int>("columnSectionTo");
+
+    QTest::newRow("noSectionMove") << -1 << -1 << -1 << -1;
+    QTest::newRow("horizontalSectionMove") << 4 << 2 << -1 << -1;
+    QTest::newRow("verticalSectionMove") << -1 << -1 << 4 << 2;
+    QTest::newRow("horizontalAndVerticallSectionMove") << 4 << 2 << 4 << 2;
+}
+
+void tst_QTableView::spanWithMovedSections()
+{
+    QFETCH(int, rowSectionFrom);
+    QFETCH(int, rowSectionTo);
+    QFETCH(int, columnSectionFrom);
+    QFETCH(int, columnSectionTo);
+
+    QtTestTableModel model(10, 10);
+    QtTestTableView view;
+    view.setModel(&model);
+    view.setSpan(0, 0, 2, 2);
+
+    if (columnSectionFrom >= 0 && columnSectionTo >= 0)
+        view.horizontalHeader()->moveSection(columnSectionFrom, columnSectionTo);
+    if (rowSectionFrom >= 0 && rowSectionTo >= 0)
+        view.verticalHeader()->moveSection(rowSectionFrom, rowSectionTo);
+    view.show();
+    QVERIFY(QTest::qWaitForWindowExposed(&view));
+    auto sm = view.selectionModel();
+
+    const auto nonSelIdx = model.index(rowSectionFrom < 0 ? 0 : rowSectionFrom,
+                                       columnSectionFrom < 0 ? 0 : columnSectionFrom);
+    const auto selIdx = model.index(rowSectionTo < 0 ? 0 : rowSectionTo,
+                                    columnSectionTo < 0 ? 0 : columnSectionTo);
+    const auto selRect = view.visualRect(selIdx);
+    view.setSelection(selRect, QItemSelectionModel::ClearAndSelect);
+    QVERIFY(sm->isSelected(selIdx));
+    if (selIdx != nonSelIdx)
+        QVERIFY(!sm->isSelected(nonSelIdx));
+}
+
 void tst_QTableView::editSpanFromDirections_data()
 {
     QTest::addColumn<KeyList>("keyPresses");
@@ -3829,7 +3874,6 @@ void tst_QTableView::tabFocus()
     QLineEdit *edit = new QLineEdit(&window);
 
     window.show();
-    QApplicationPrivate::setActiveWindow(&window);
     window.setFocus();
     window.activateWindow();
     QVERIFY(QTest::qWaitForWindowActive(&window));
@@ -4947,12 +4991,14 @@ void tst_QTableView::resetDefaultSectionSize()
     // 0 as previously. QTBUG-116013
     QTableWidget view(10, 10);
     view.resize(300, 300);
+    // We need to move this into section items mode...
+    view.verticalHeader()->swapSections(0, 1);
+    view.verticalHeader()->swapSections(0, 1);
     view.verticalHeader()->setSectionResizeMode(QHeaderView::Fixed);
     view.verticalHeader()->setDefaultSectionSize(120);
     view.verticalHeader()->resetDefaultSectionSize();
     view.show();
     QVERIFY(QTest::qWaitForWindowExposed(&view));
-    QEXPECT_FAIL("", "Reverted fix for QTBUG-116013 due to QTBUG-122109", Continue);
     QCOMPARE(view.verticalHeader()->logicalIndexAt(9, 45), 1);
 }
 

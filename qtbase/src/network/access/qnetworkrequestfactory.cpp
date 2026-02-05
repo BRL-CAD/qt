@@ -1,5 +1,6 @@
 // Copyright (C) 2023 The Qt Company Ltd.
 // SPDX-License-Identifier: LicenseRef-Qt-Commercial OR LGPL-3.0-only OR GPL-2.0-only OR GPL-3.0-only
+// Qt-Security score:significant reason:default
 
 #include "qnetworkrequestfactory.h"
 #include "qnetworkrequestfactory_p.h"
@@ -17,7 +18,7 @@ QT_DEFINE_QESDP_SPECIALIZATION_DTOR(QNetworkRequestFactoryPrivate)
 
 using namespace Qt::StringLiterals;
 
-Q_LOGGING_CATEGORY(lcQrequestfactory, "qt.network.access.request.factory")
+Q_STATIC_LOGGING_CATEGORY(lcQrequestfactory, "qt.network.access.request.factory")
 
 /*!
     \class QNetworkRequestFactory
@@ -27,8 +28,6 @@ Q_LOGGING_CATEGORY(lcQrequestfactory, "qt.network.access.request.factory")
 
     \brief Convenience class for grouping remote server endpoints that share
     common network request properties.
-
-    \preliminary
 
     REST servers often have endpoints that require the same headers and other data.
     Grouping such endpoints with a QNetworkRequestFactory makes it more
@@ -117,9 +116,7 @@ QNetworkRequestFactory &QNetworkRequestFactory::operator=(const QNetworkRequestF
 
 /*!
     \fn void QNetworkRequestFactory::swap(QNetworkRequestFactory &other)
-
-    Swaps this factory with \a other. This operation is
-    very fast and never fails.
+    \memberswap{factory}
  */
 
 /*!
@@ -365,7 +362,7 @@ void QNetworkRequestFactory::clearUserName()
 /*!
     Returns the password set to this factory.
 
-    \sa password(), clearPassword(), userName()
+    \sa setPassword(), clearPassword(), userName()
 */
 QString QNetworkRequestFactory::password() const
 {
@@ -475,6 +472,127 @@ void QNetworkRequestFactory::clearQueryParameters()
     d->queryParameters.clear();
 }
 
+/*!
+    \since 6.8
+
+    Sets the priority for any future requests created by this factory to
+    \a priority.
+
+    The default priority is \l QNetworkRequest::NormalPriority.
+
+    \sa priority(), QNetworkRequest::setPriority()
+*/
+void QNetworkRequestFactory::setPriority(QNetworkRequest::Priority priority)
+{
+    if (d->priority == priority)
+        return;
+    d.detach();
+    d->priority = priority;
+}
+
+/*!
+    \since 6.8
+
+    Returns the priority assigned to any future requests created by this
+    factory.
+
+    \sa setPriority(), QNetworkRequest::priority()
+*/
+QNetworkRequest::Priority QNetworkRequestFactory::priority() const
+{
+    return d->priority;
+}
+
+/*!
+    \since 6.8
+
+    Sets the value associated with \a attribute to \a value.
+    If the attribute is already set, the previous value is
+    replaced. The attributes are set to any future requests
+    created by this factory.
+
+    \sa attribute(), clearAttribute(), clearAttributes(),
+        QNetworkRequest::Attribute
+*/
+void QNetworkRequestFactory::setAttribute(QNetworkRequest::Attribute attribute,
+                                          const QVariant &value)
+{
+    if (attribute == QNetworkRequest::HttpStatusCodeAttribute
+        || attribute == QNetworkRequest::HttpReasonPhraseAttribute
+        || attribute == QNetworkRequest::RedirectionTargetAttribute
+        || attribute == QNetworkRequest::ConnectionEncryptedAttribute
+        || attribute == QNetworkRequest::SourceIsFromCacheAttribute
+        || attribute == QNetworkRequest::HttpPipeliningWasUsedAttribute
+        || attribute == QNetworkRequest::Http2WasUsedAttribute
+        || attribute == QNetworkRequest::OriginalContentLengthAttribute)
+    {
+        qCWarning(lcQrequestfactory, "%i is a reply-only attribute, ignoring.", attribute);
+        return;
+    }
+    d.detach();
+    d->attributes.insert(attribute, value);
+}
+
+/*!
+    \since 6.8
+
+    Returns the value associated with \a attribute. If the
+    attribute has not been set, returns a default-constructed \l QVariant.
+
+    \sa attribute(QNetworkRequest::Attribute, const QVariant &),
+        setAttribute(), clearAttributes(), QNetworkRequest::Attribute
+
+*/
+QVariant QNetworkRequestFactory::attribute(QNetworkRequest::Attribute attribute) const
+{
+    return d->attributes.value(attribute);
+}
+
+/*!
+    \since 6.8
+
+    Returns the value associated with \a attribute. If the
+    attribute has not been set, returns \a defaultValue.
+
+     \sa attribute(), setAttribute(), clearAttributes(),
+         QNetworkRequest::Attribute
+*/
+QVariant QNetworkRequestFactory::attribute(QNetworkRequest::Attribute attribute,
+                                           const QVariant &defaultValue) const
+{
+    return d->attributes.value(attribute, defaultValue);
+}
+
+/*!
+    \since 6.8
+
+    Clears \a attribute set to this factory.
+
+    \sa attribute(), setAttribute()
+*/
+void QNetworkRequestFactory::clearAttribute(QNetworkRequest::Attribute attribute)
+{
+    if (!d->attributes.contains(attribute))
+        return;
+    d.detach();
+    d->attributes.remove(attribute);
+}
+
+/*!
+    \since 6.8
+
+    Clears any attributes set to this factory.
+
+    \sa attribute(), setAttribute()
+*/
+void QNetworkRequestFactory::clearAttributes()
+{
+    if (d->attributes.isEmpty())
+        return;
+    d.detach();
+    d->attributes.clear();
+}
+
 QNetworkRequestFactoryPrivate::QNetworkRequestFactoryPrivate()
     = default;
 
@@ -482,9 +600,6 @@ QNetworkRequestFactoryPrivate::QNetworkRequestFactoryPrivate(const QUrl &baseUrl
     : baseUrl(baseUrl)
 {
 }
-
-QNetworkRequestFactoryPrivate::~QNetworkRequestFactoryPrivate()
-    = default;
 
 QNetworkRequest QNetworkRequestFactoryPrivate::newRequest(const QUrl &url) const
 {
@@ -494,19 +609,18 @@ QNetworkRequest QNetworkRequestFactoryPrivate::newRequest(const QUrl &url) const
     if (!sslConfig.isNull())
         request.setSslConfiguration(sslConfig);
 #endif
-    // Set the header entries to the request. Combine values as there
-    // may be multiple values per name. Note: this would not necessarily
-    // produce right result for 'Set-Cookie' header if it has multiple values,
-    // but since it is a purely server-side (response) header, not relevant here.
-    const auto headerNames = headers.toMultiMap().uniqueKeys(); // ### fixme: port QNR to QHH
-    for (const auto &name : headerNames)
-        request.setRawHeader(name, headers.combinedValue(name));
-
+    auto h = headers;
     constexpr char Bearer[] = "Bearer ";
     if (!bearerToken.isEmpty())
-        request.setRawHeader("Authorization"_ba, Bearer + bearerToken);
+        h.replaceOrAppend(QHttpHeaders::WellKnownHeader::Authorization, Bearer + bearerToken);
+    request.setHeaders(std::move(h));
 
     request.setTransferTimeout(transferTimeout);
+    request.setPriority(priority);
+
+    for (const auto &[attribute, value] : attributes.asKeyValueRange())
+        request.setAttribute(attribute, value);
+
     return request;
 }
 
@@ -524,13 +638,13 @@ QUrl QNetworkRequestFactoryPrivate::requestUrl(const QString *path,
 
     QUrl resultUrl = baseUrl;
     QUrlQuery resultQuery(providedQuery);
-    QString basePath = baseUrl.path();
+    QString basePath = baseUrl.path(QUrl::ComponentFormattingOption::FullyEncoded);
 
     resultUrl.setUserName(userName);
     resultUrl.setPassword(password);
 
     // Separate the path and query parameters components on the application-provided path
-    const QString requestPath{providedPath.path()};
+    const QString requestPath{providedPath.path(QUrl::ComponentFormattingOption::FullyEncoded)};
     const QUrlQuery pathQueryItems{providedPath};
 
     if (!pathQueryItems.isEmpty()) {
@@ -562,7 +676,8 @@ QUrl QNetworkRequestFactoryPrivate::requestUrl(const QString *path,
     else if (!requestPath.startsWith(u'/') && !basePath.endsWith(u'/'))
         basePath.append(u'/');
 
-    resultUrl.setPath(basePath.append(requestPath));
+    resultUrl.setPath(basePath.append(requestPath), QUrl::StrictMode);
+
     return resultUrl;
 }
 

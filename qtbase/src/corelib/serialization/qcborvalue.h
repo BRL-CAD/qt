@@ -1,12 +1,14 @@
 // Copyright (C) 2022 Intel Corporation.
 // SPDX-License-Identifier: LicenseRef-Qt-Commercial OR LGPL-3.0-only OR GPL-2.0-only OR GPL-3.0-only
+// Qt-Security score:critical reason:data-parser
 
 #ifndef QCBORVALUE_H
 #define QCBORVALUE_H
 
 #include <QtCore/qbytearray.h>
-#include <QtCore/qdatetime.h>
 #include <QtCore/qcborcommon.h>
+#include <QtCore/qcompare.h>
+#include <QtCore/qdatetime.h>
 #if QT_CONFIG(regularexpression)
 #  include <QtCore/qregularexpression.h>
 #endif
@@ -20,10 +22,6 @@
 #if defined(False) && defined(True)
 #  undef True
 #  undef False
-#endif
-
-#if 0 && __has_include(<compare>)
-#  include <compare>
 #endif
 
 QT_BEGIN_NAMESPACE
@@ -125,7 +123,9 @@ public:
         : QCborValue(QCborTag(t_), tv)
     {}
 
+#if QT_CONFIG(datestring)
     explicit QCborValue(const QDateTime &dt);
+#endif
 #ifndef QT_BOOTSTRAPPED
     explicit QCborValue(const QUrl &url);
 #  if QT_CONFIG(regularexpression)
@@ -199,7 +199,10 @@ public:
 
     QByteArray toByteArray(const QByteArray &defaultValue = {}) const;
     QString toString(const QString &defaultValue = {}) const;
+    QAnyStringView toStringView(QAnyStringView defaultValue = {}) const;
+#if QT_CONFIG(datestring)
     QDateTime toDateTime(const QDateTime &defaultValue = {}) const;
+#endif
 #ifndef QT_BOOTSTRAPPED
     QUrl toUrl(const QUrl &defaultValue = {}) const;
 #  if QT_CONFIG(regularexpression)
@@ -222,19 +225,11 @@ public:
     QCborValueRef operator[](const QString & key);
 
     int compare(const QCborValue &other) const;
-#if 0 && __has_include(<compare>)
-    std::strong_ordering operator<=>(const QCborValue &other) const
-    {
-        int c = compare(other);
-        if (c > 0) return std::partial_ordering::greater;
-        if (c == 0) return std::partial_ordering::equivalent;
-        return std::partial_ordering::less;
-    }
-#else
+#if QT_CORE_REMOVED_SINCE(6, 8)
     bool operator==(const QCborValue &other) const noexcept
     { return compare(other) == 0; }
     bool operator!=(const QCborValue &other) const noexcept
-    { return !(*this == other); }
+    { return !operator==(other); }
     bool operator<(const QCborValue &other) const
     { return compare(other) < 0; }
 #endif
@@ -260,6 +255,19 @@ public:
     QString toDiagnosticNotation(DiagnosticNotationOptions opts = Compact) const;
 
 private:
+    friend Q_CORE_EXPORT Q_DECL_PURE_FUNCTION
+    bool comparesEqual(const QCborValue &lhs, const QCborValue &rhs) noexcept;
+    friend Qt::strong_ordering compareThreeWay(const QCborValue &lhs,
+                                               const QCborValue &rhs) noexcept
+    {
+        int c = lhs.compare(rhs);
+        return Qt::compareThreeWay(c, 0);
+    }
+
+    Q_DECLARE_STRONGLY_ORDERED(QCborValue)
+    friend class QCborArray;
+    friend class QCborMap;
+    friend class QCborValueConstRef;
     friend class QCborValueRef;
     friend class QCborContainerPrivate;
     friend class QJsonPrivate::Value;
@@ -344,8 +352,12 @@ public:
     { return concrete().toByteArray(defaultValue); }
     QString toString(const QString &defaultValue = {}) const
     { return concrete().toString(defaultValue); }
+    QAnyStringView toStringView(QAnyStringView defaultValue = {}) const
+    { return concreteStringView(*this, defaultValue); }
+#if QT_CONFIG(datestring)
     QDateTime toDateTime(const QDateTime &defaultValue = {}) const
     { return concrete().toDateTime(defaultValue); }
+#endif
 #ifndef QT_BOOTSTRAPPED
     QUrl toUrl(const QUrl &defaultValue = {}) const
     { return concrete().toUrl(defaultValue); }
@@ -369,22 +381,6 @@ public:
 
     int compare(const QCborValue &other) const
     { return concrete().compare(other); }
-#if 0 && __has_include(<compare>)
-    std::strong_ordering operator<=>(const QCborValue &other) const
-    {
-        int c = compare(other);
-        if (c > 0) return std::strong_ordering::greater;
-        if (c == 0) return std::strong_ordering::equivalent;
-        return std::strong_ordering::less;
-    }
-#else
-    bool operator==(const QCborValue &other) const
-    { return compare(other) == 0; }
-    bool operator!=(const QCborValue &other) const
-    { return !(*this == other); }
-    bool operator<(const QCborValue &other) const
-    { return compare(other) < 0; }
-#endif
 
     QVariant toVariant() const                  { return concrete().toVariant(); }
     inline QJsonValue toJsonValue() const;      // in qjsonvalue.h
@@ -406,6 +402,37 @@ protected:
     friend class QCborContainerPrivate;
 
     QCborValue concrete() const noexcept  { return concrete(*this); }
+    static Q_CORE_EXPORT Q_DECL_PURE_FUNCTION bool
+    comparesEqual_helper(QCborValueConstRef lhs, QCborValueConstRef rhs) noexcept;
+    static Q_CORE_EXPORT Q_DECL_PURE_FUNCTION Qt::strong_ordering
+    compareThreeWay_helper(QCborValueConstRef lhs, QCborValueConstRef rhs) noexcept;
+    friend bool comparesEqual(const QCborValueConstRef &lhs,
+                              const QCborValueConstRef &rhs) noexcept
+    {
+        return comparesEqual_helper(lhs, rhs);
+    }
+    friend Qt::strong_ordering compareThreeWay(const QCborValueConstRef &lhs,
+                                               const QCborValueConstRef &rhs) noexcept
+    {
+        return compareThreeWay_helper(lhs, rhs);
+    }
+    Q_DECLARE_STRONGLY_ORDERED(QCborValueConstRef)
+
+    static Q_CORE_EXPORT Q_DECL_PURE_FUNCTION bool
+    comparesEqual_helper(QCborValueConstRef lhs, const QCborValue &rhs) noexcept;
+    static Q_CORE_EXPORT Q_DECL_PURE_FUNCTION Qt::strong_ordering
+    compareThreeWay_helper(QCborValueConstRef lhs, const QCborValue &rhs) noexcept;
+    friend bool comparesEqual(const QCborValueConstRef &lhs,
+                              const QCborValue &rhs) noexcept
+    {
+        return comparesEqual_helper(lhs, rhs);
+    }
+    friend Qt::strong_ordering compareThreeWay(const QCborValueConstRef &lhs,
+                                               const QCborValue &rhs) noexcept
+    {
+        return compareThreeWay_helper(lhs, rhs);
+    }
+    Q_DECLARE_STRONGLY_ORDERED(QCborValueConstRef, QCborValue)
 
     static Q_CORE_EXPORT QCborValue concrete(QCborValueConstRef that) noexcept;
     static Q_CORE_EXPORT QCborValue::Type concreteType(QCborValueConstRef that) noexcept Q_DECL_PURE_FUNCTION;
@@ -419,6 +446,8 @@ protected:
     concreteByteArray(QCborValueConstRef that, const QByteArray &defaultValue);
     static Q_CORE_EXPORT QString
     concreteString(QCborValueConstRef that, const QString &defaultValue);
+    static Q_CORE_EXPORT QAnyStringView
+    concreteStringView(QCborValueConstRef that, QAnyStringView defaultValue);
 
     constexpr QCborValueConstRef() : d(nullptr), i(0) {} // this will actually be invalid
     constexpr QCborValueConstRef(QCborContainerPrivate *dd, qsizetype ii)
@@ -499,8 +528,10 @@ public:
     { return concreteByteArray(*this, defaultValue); }
     QString toString(const QString &defaultValue = {}) const
     { return concreteString(*this, defaultValue); }
+#if QT_CONFIG(datestring)
     QDateTime toDateTime(const QDateTime &defaultValue = {}) const
     { return concrete().toDateTime(defaultValue); }
+#endif
 #ifndef QT_BOOTSTRAPPED
     QUrl toUrl(const QUrl &defaultValue = {}) const
     { return concrete().toUrl(defaultValue); }
@@ -524,19 +555,11 @@ public:
 
     int compare(const QCborValue &other) const
     { return concrete().compare(other); }
-#if 0 && __has_include(<compare>)
-    std::strong_ordering operator<=>(const QCborValue &other) const
-    {
-        int c = compare(other);
-        if (c > 0) return std::strong_ordering::greater;
-        if (c == 0) return std::strong_ordering::equivalent;
-        return std::strong_ordering::less;
-    }
-#else
+#if QT_CORE_REMOVED_SINCE(6, 8)
     bool operator==(const QCborValue &other) const
     { return compare(other) == 0; }
     bool operator!=(const QCborValue &other) const
-    { return !(*this == other); }
+    { return !operator==(other); }
     bool operator<(const QCborValue &other) const
     { return compare(other) < 0; }
 #endif
@@ -602,10 +625,5 @@ Q_CORE_EXPORT QDataStream &operator>>(QDataStream &, QCborValue &);
 #endif
 
 QT_END_NAMESPACE
-
-#if defined(QT_X11_DEFINES_FOUND)
-#  define True  1
-#  define False 0
-#endif
 
 #endif // QCBORVALUE_H

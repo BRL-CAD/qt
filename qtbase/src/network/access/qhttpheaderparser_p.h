@@ -1,5 +1,6 @@
 // Copyright (C) 2022 The Qt Company Ltd.
 // SPDX-License-Identifier: LicenseRef-Qt-Commercial OR LGPL-3.0-only OR GPL-2.0-only OR GPL-3.0-only
+// Qt-Security score:significant reason:default
 
 #ifndef QHTTPHEADERPARSER_H
 #define QHTTPHEADERPARSER_H
@@ -16,10 +17,10 @@
 //
 
 #include <QtNetwork/private/qtnetworkglobal_p.h>
+#include <QtNetwork/qhttpheaders.h>
 
 #include <QByteArray>
 #include <QList>
-#include <QPair>
 #include <QString>
 
 QT_BEGIN_NAMESPACE
@@ -43,7 +44,7 @@ static constexpr int MAX_TOTAL_HEADER_SIZE = 256 * 1024;
 
 }
 
-class Q_NETWORK_PRIVATE_EXPORT QHttpHeaderParser
+class Q_NETWORK_EXPORT QHttpHeaderParser
 {
 public:
     QHttpHeaderParser();
@@ -52,7 +53,8 @@ public:
     bool parseHeaders(QByteArrayView headers);
     bool parseStatus(QByteArrayView status);
 
-    const QList<QPair<QByteArray, QByteArray> >& headers() const;
+    const QHttpHeaders& headers() const &;
+    QHttpHeaders headers() &&;
     void setStatusCode(int code);
     int getStatusCode() const;
     int getMajorVersion() const;
@@ -83,7 +85,7 @@ public:
     qsizetype maxHeaderFields() const { return maxFieldCount; }
 
 private:
-    QList<QPair<QByteArray, QByteArray> > fields;
+    QHttpHeaders fields;
     QString reasonPhrase;
     int statusCode;
     int majorVersion;

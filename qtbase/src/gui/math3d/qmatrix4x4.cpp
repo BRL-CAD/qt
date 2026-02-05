@@ -4,6 +4,8 @@
 #include "qmatrix4x4.h"
 #include <QtCore/qmath.h>
 #include <QtCore/qvariant.h>
+
+#include <QtGui/qquaternion.h>
 #include <QtGui/qtransform.h>
 
 #include <cmath>
@@ -239,7 +241,7 @@ QMatrix4x4::QMatrix4x4(const QTransform& transform)
 /*!
     \fn void QMatrix4x4::fill(float value)
 
-    Fills all elements of this matrx with \a value.
+    Fills all elements of this matrix with \a value.
 */
 
 static inline double matrixDet2(const double m[4][4], int col0, int col1, int row0, int row1)
@@ -729,30 +731,29 @@ QMatrix4x4 operator/(const QMatrix4x4& matrix, float divisor)
 }
 
 /*!
-    \fn bool qFuzzyCompare(const QMatrix4x4& m1, const QMatrix4x4& m2)
-    \relates QMatrix4x4
+    \fn bool QMatrix4x4::qFuzzyCompare(const QMatrix4x4& m1, const QMatrix4x4& m2)
 
     Returns \c true if \a m1 and \a m2 are equal, allowing for a small
     fuzziness factor for floating-point comparisons; false otherwise.
 */
-bool qFuzzyCompare(const QMatrix4x4& m1, const QMatrix4x4& m2)
+bool qFuzzyCompare(const QMatrix4x4& m1, const QMatrix4x4& m2) noexcept
 {
-    return qFuzzyCompare(m1.m[0][0], m2.m[0][0]) &&
-            qFuzzyCompare(m1.m[0][1], m2.m[0][1]) &&
-            qFuzzyCompare(m1.m[0][2], m2.m[0][2]) &&
-            qFuzzyCompare(m1.m[0][3], m2.m[0][3]) &&
-            qFuzzyCompare(m1.m[1][0], m2.m[1][0]) &&
-            qFuzzyCompare(m1.m[1][1], m2.m[1][1]) &&
-            qFuzzyCompare(m1.m[1][2], m2.m[1][2]) &&
-            qFuzzyCompare(m1.m[1][3], m2.m[1][3]) &&
-            qFuzzyCompare(m1.m[2][0], m2.m[2][0]) &&
-            qFuzzyCompare(m1.m[2][1], m2.m[2][1]) &&
-            qFuzzyCompare(m1.m[2][2], m2.m[2][2]) &&
-            qFuzzyCompare(m1.m[2][3], m2.m[2][3]) &&
-            qFuzzyCompare(m1.m[3][0], m2.m[3][0]) &&
-            qFuzzyCompare(m1.m[3][1], m2.m[3][1]) &&
-            qFuzzyCompare(m1.m[3][2], m2.m[3][2]) &&
-            qFuzzyCompare(m1.m[3][3], m2.m[3][3]);
+    return QtPrivate::fuzzyCompare(m1.m[0][0], m2.m[0][0])
+        && QtPrivate::fuzzyCompare(m1.m[0][1], m2.m[0][1])
+        && QtPrivate::fuzzyCompare(m1.m[0][2], m2.m[0][2])
+        && QtPrivate::fuzzyCompare(m1.m[0][3], m2.m[0][3])
+        && QtPrivate::fuzzyCompare(m1.m[1][0], m2.m[1][0])
+        && QtPrivate::fuzzyCompare(m1.m[1][1], m2.m[1][1])
+        && QtPrivate::fuzzyCompare(m1.m[1][2], m2.m[1][2])
+        && QtPrivate::fuzzyCompare(m1.m[1][3], m2.m[1][3])
+        && QtPrivate::fuzzyCompare(m1.m[2][0], m2.m[2][0])
+        && QtPrivate::fuzzyCompare(m1.m[2][1], m2.m[2][1])
+        && QtPrivate::fuzzyCompare(m1.m[2][2], m2.m[2][2])
+        && QtPrivate::fuzzyCompare(m1.m[2][3], m2.m[2][3])
+        && QtPrivate::fuzzyCompare(m1.m[3][0], m2.m[3][0])
+        && QtPrivate::fuzzyCompare(m1.m[3][1], m2.m[3][1])
+        && QtPrivate::fuzzyCompare(m1.m[3][2], m2.m[3][2])
+        && QtPrivate::fuzzyCompare(m1.m[3][3], m2.m[3][3]);
 }
 
 
@@ -1280,7 +1281,7 @@ void QMatrix4x4::projectedRotate(float angle, float x, float y, float z)
 */
 
 /*!
-    \enum QMatrix4x4::Flags
+    \enum QMatrix4x4::Flag
     \internal
     \omitvalue Identity
     \omitvalue Translation

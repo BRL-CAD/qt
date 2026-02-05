@@ -63,6 +63,9 @@ private slots:
 
 void tst_QOpenGLWidget::initTestCase()
 {
+#if !QT_CONFIG(run_opengl_tests)
+    QSKIP("Skip test as run-opengl-tests feature is off.");
+#endif
     // See QOpenGLWidget constructor
     if (!QGuiApplicationPrivate::platformIntegration()->hasCapability(QPlatformIntegration::RasterGLSurface))
         QSKIP("QOpenGLWidget is not supported on this platform.");
@@ -203,7 +206,7 @@ void tst_QOpenGLWidget::deviceLoss()
     w->resize(640, 480);
     w->show();
 
-    auto rhi = w->backingStore()->handle()->rhi();
+    auto rhi = w->backingStore()->handle()->rhi(w->windowHandle());
     QNativeInterface::QEGLContext *rhiContext = nullptr;
     if (rhi->backend() == QRhi::OpenGLES2) {
         auto rhiHandles = static_cast<const QRhiGles2NativeHandles *>(rhi->nativeHandles());

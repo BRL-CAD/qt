@@ -21,13 +21,15 @@
 #include <qpa/qplatformaccessibility.h>
 #include <QtCore/qhash.h>
 
+namespace QtGuiPrivate {
 class DeviceEventControllerAdaptor;
+} // namespace QtGuiPrivate
 
 QT_REQUIRE_CONFIG(accessibility);
 
 QT_BEGIN_NAMESPACE
 
-class DBusConnection;
+class QAtSpiDBusConnection;
 class QSpiDBusCache;
 class AtSpiAdaptor;
 struct RoleNames;
@@ -58,9 +60,9 @@ private:
     void updateStatus();
 
     QSpiDBusCache *cache;
-    DeviceEventControllerAdaptor *dec;
+    QtGuiPrivate::DeviceEventControllerAdaptor *dec;
     AtSpiAdaptor *dbusAdaptor;
-    DBusConnection* dbusConnection;
+    QAtSpiDBusConnection* dbusConnection;
     SpiRoleMapping m_spiRoleMapping;
 };
 

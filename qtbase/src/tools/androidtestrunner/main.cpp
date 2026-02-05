@@ -4,6 +4,7 @@
 
 #include <QtCore/QCoreApplication>
 #include <QtCore/QDeadlineTimer>
+#include <QtCore/qdebug.h>
 #include <QtCore/QDir>
 #include <QtCore/QHash>
 #include <QtCore/QProcess>
@@ -12,10 +13,13 @@
 #include <QtCore/QSystemSemaphore>
 #include <QtCore/QThread>
 #include <QtCore/QXmlStreamReader>
+#include <QtCore/QFileInfo>
+#include <QtCore/QSysInfo>
 
 #include <atomic>
 #include <csignal>
 #include <functional>
+#include <optional>
 #if defined(Q_OS_WIN32)
 #include <process.h>
 #else
@@ -24,89 +28,16 @@
 
 using namespace Qt::StringLiterals;
 
-static bool checkJunit(const QByteArray &data) {
-    QXmlStreamReader reader{data};
-    while (!reader.atEnd()) {
-        reader.readNext();
 
-        if (!reader.isStartElement())
-            continue;
+// QTest-based test processes may exit with up to 127 for normal test failures
+static constexpr int HIGHEST_QTEST_EXITCODE = 127;
+// Something went wrong in androidtestrunner, in general
+static constexpr int EXIT_ERROR = 254;
+// More specific exit codes for failures in androidtestrunner:
+static constexpr int EXIT_NOEXITCODE = 253; // Failed to transfer exit code from device
+static constexpr int EXIT_ANR        = 252; // Android ANR error (Application Not Responding)
+static constexpr int EXIT_NORESULTS  = 251; // Failed to transfer result files from device
 
-        if (reader.name() == "error"_L1)
-            return false;
-
-        const QString type = reader.attributes().value("type"_L1).toString();
-        if (reader.name() == "failure"_L1) {
-            if (type == "fail"_L1 || type == "xpass"_L1)
-                return false;
-        }
-    }
-
-    // Fail if there's an error after reading through all the xml output
-    return !reader.hasError();
-}
-
-static bool checkTxt(const QByteArray &data) {
-    if (data.indexOf("\nFAIL!  : "_L1) >= 0)
-        return false;
-    if (data.indexOf("\nXPASS  : "_L1) >= 0)
-        return false;
-    // Look for "********* Finished testing of tst_QTestName *********"
-    static const QRegularExpression testTail("\\*+ +Finished testing of .+ +\\*+"_L1);
-    return testTail.match(QLatin1StringView(data)).hasMatch();
-}
-
-static bool checkCsv(const QByteArray &data) {
-    // The csv format is only suitable for benchmarks,
-    // so this is not much useful to determine test failure/success.
-    // FIXME: warn the user early on about this.
-    Q_UNUSED(data);
-    return true;
-}
-
-static bool checkXml(const QByteArray &data) {
-    QXmlStreamReader reader{data};
-    while (!reader.atEnd()) {
-        reader.readNext();
-        const QString type = reader.attributes().value("type"_L1).toString();
-        const bool isIncident = (reader.name() == "Incident"_L1);
-        if (reader.isStartElement() && isIncident) {
-            if (type == "fail"_L1 || type == "xpass"_L1)
-                return false;
-        }
-    }
-
-    // Fail if there's an error after reading through all the xml output
-    return !reader.hasError();
-}
-
-static bool checkLightxml(const QByteArray &data) {
-    // lightxml intentionally skips the root element, which technically makes it
-    // not valid XML. We'll add that ourselves for the purpose of validation.
-    QByteArray newData = data;
-    newData.prepend("<root>");
-    newData.append("</root>");
-    return checkXml(newData);
-}
-
-static bool checkTeamcity(const QByteArray &data) {
-    if (data.indexOf("' message='Failure! |[Loc: ") >= 0)
-        return false;
-    const QList<QByteArray> lines = data.trimmed().split('\n');
-    if (lines.isEmpty())
-        return false;
-    return lines.last().startsWith("##teamcity[testSuiteFinished "_L1);
-}
-
-static bool checkTap(const QByteArray &data) {
-    // This will still report blacklisted fails because QTest with TAP
-    // is not putting any data about that.
-    if (data.indexOf("\nnot ok ") >= 0)
-        return false;
-
-    static const QRegularExpression testTail("ok [0-9]* - cleanupTestCase\\(\\)"_L1);
-    return testTail.match(QLatin1StringView(data)).hasMatch();
-}
 
 struct Options
 {
@@ -114,27 +45,23 @@ struct Options
     bool verbose = false;
     bool skipAddInstallRoot = false;
     int timeoutSecs = 600; // 10 minutes
+    int resultsPullRetries = 3;
     QString buildPath;
+    QString manifestPath;
     QString adbCommand{"adb"_L1};
+    QString serial;
     QString makeCommand;
     QString package;
     QString activity;
     QStringList testArgsList;
+    QString stdoutFileName;
     QHash<QString, QString> outFiles;
     QStringList amStarttestArgs;
     QString apkPath;
     QString ndkStackPath;
+    QList<QStringList> preTestRunAdbCommands;
     bool showLogcatOutput = false;
-    const QHash<QString, std::function<bool(const QByteArray &)>> checkFiles = {
-        {"txt"_L1, checkTxt},
-        {"csv"_L1, checkCsv},
-        {"xml"_L1, checkXml},
-        {"lightxml"_L1, checkLightxml},
-        {"xunitxml"_L1, checkJunit},
-        {"junitxml"_L1, checkJunit},
-        {"teamcity"_L1, checkTeamcity},
-        {"tap"_L1, checkTap},
-    };
+    std::optional<QProcess> stdoutLogger;
 };
 
 static Options g_options;
@@ -143,6 +70,7 @@ struct TestInfo
 {
     int sdkVersion = -1;
     int pid = -1;
+    QString userId;
 
     std::atomic<bool> isPackageInstalled { false };
     std::atomic<bool> isTestRunnerInterrupted { false };
@@ -150,13 +78,20 @@ struct TestInfo
 
 static TestInfo g_testInfo;
 
+// QTest-based processes return 0 if all tests PASSed, or the number of FAILs up to 127.
+// Other exitcodes signify abnormal termination and are system-dependent.
+static bool isTestExitCodeNormal(const int ec)
+{
+    return (ec >= 0  &&  ec <= HIGHEST_QTEST_EXITCODE);
+}
+
 static bool execCommand(const QString &program, const QStringList &args,
                         QByteArray *output = nullptr, bool verbose = false)
 {
     const auto command = program + " "_L1 + args.join(u' ');
 
     if (verbose && g_options.verbose)
-        qDebug("Execute %s.", command.toUtf8().constData());
+        fprintf(stdout,"Execute %s.\n", command.toUtf8().constData());
 
     QProcess process;
     process.start(program, args);
@@ -178,7 +113,7 @@ static bool execCommand(const QString &program, const QStringList &args,
         output->append(stdOut);
 
     if (verbose && g_options.verbose)
-        qDebug() << stdOut.constData();
+        fprintf(stdout, "%s\n", stdOut.constData());
 
     return process.exitCode() == 0;
 }
@@ -186,7 +121,13 @@ static bool execCommand(const QString &program, const QStringList &args,
 static bool execAdbCommand(const QStringList &args, QByteArray *output = nullptr,
                            bool verbose = true)
 {
-    return execCommand(g_options.adbCommand, args, output, verbose);
+    if (g_options.serial.isEmpty())
+        return execCommand(g_options.adbCommand, args, output, verbose);
+
+    QStringList argsWithSerial = {"-s"_L1, g_options.serial};
+    argsWithSerial.append(args);
+
+    return execCommand(g_options.adbCommand, argsWithSerial, output, verbose);
 }
 
 static bool execCommand(const QString &command, QByteArray *output = nullptr, bool verbose = true)
@@ -213,6 +154,11 @@ static bool parseOptions()
                 g_options.helpRequested = true;
             else
                 g_options.buildPath = arguments.at(++i);
+        } else if (argument.compare("--manifest"_L1, Qt::CaseInsensitive) == 0) {
+            if (i + 1 == arguments.size())
+                g_options.helpRequested = true;
+            else
+                g_options.manifestPath = arguments.at(++i);
         } else if (argument.compare("--make"_L1, Qt::CaseInsensitive) == 0) {
             if (i + 1 == arguments.size())
                 g_options.helpRequested = true;
@@ -246,6 +192,12 @@ static bool parseOptions()
             g_options.helpRequested = true;
         } else if (argument.compare("--verbose"_L1, Qt::CaseInsensitive) == 0) {
             g_options.verbose = true;
+        } else if (argument.compare("--pre-test-adb-command"_L1, Qt::CaseInsensitive) == 0) {
+            if (i + 1 == arguments.size())
+                g_options.helpRequested = true;
+            else {
+                g_options.preTestRunAdbCommands += QProcess::splitCommand(arguments.at(++i));
+            }
         } else if (argument.compare("--"_L1, Qt::CaseInsensitive) == 0) {
             ++i;
             break;
@@ -253,15 +205,23 @@ static bool parseOptions()
             g_options.testArgsList << arguments.at(i);
         }
     }
+
+    if (!g_options.skipAddInstallRoot) {
+        // we need to run make INSTALL_ROOT=path install to install the application file(s) first
+        g_options.makeCommand = "%1 INSTALL_ROOT=%2 install"_L1
+            .arg(g_options.makeCommand)
+            .arg(QDir::toNativeSeparators(g_options.buildPath));
+    }
+
     for (;i < arguments.size(); ++i)
         g_options.testArgsList << arguments.at(i);
 
     if (g_options.helpRequested || g_options.buildPath.isEmpty() || g_options.apkPath.isEmpty())
         return false;
 
-    QString serial = qEnvironmentVariable("ANDROID_DEVICE_SERIAL");
-    if (!serial.isEmpty())
-        g_options.adbCommand += " -s %1"_L1.arg(serial);
+    g_options.serial = qEnvironmentVariable("ANDROID_SERIAL");
+    if (g_options.serial.isEmpty())
+        g_options.serial = qEnvironmentVariable("ANDROID_DEVICE_SERIAL");
 
     if (g_options.ndkStackPath.isEmpty()) {
         const QString ndkPath = qEnvironmentVariable("ANDROID_NDK_ROOT");
@@ -270,6 +230,9 @@ static bool parseOptions()
             g_options.ndkStackPath = ndkStackPath;
     }
 
+    if (g_options.manifestPath.isEmpty())
+        g_options.manifestPath = g_options.buildPath + "/AndroidManifest.xml"_L1;
+
     return true;
 }
 
@@ -277,19 +240,21 @@ static void printHelp()
 {
     qWarning(       "Syntax: %s <options> -- [TESTARGS] \n"
                     "\n"
-                    "  Runs an Android test on the default emulator/device or on the one\n"
-                    "  specified by \"ANDROID_DEVICE_SERIAL\" environment variable.\n"
+                    "  Runs a Qt for Android test on an emulator or a device. Specify a device\n"
+                    "  using the environment variables ANDROID_SERIAL or ANDROID_DEVICE_SERIAL.\n"
+                    "  Returns the number of failed tests, -1 on test runner deployment related\n"
+                    "  failures or zero on success."
                     "\n"
                     "  Mandatory arguments:\n"
                     "    --path <path>: The path where androiddeployqt builds the android package.\n"
+                    "\n"
+                    "    --make <make cmd>: make command to create an APK, for example:\n"
+                    "       \"cmake --build <build-dir> --target <target>_make_apk\".\n"
                     "\n"
                     "    --apk <apk path>: The test apk path. The apk has to exist already, if it\n"
                     "       does not exist the make command must be provided for building the apk.\n"
                     "\n"
                     "  Optional arguments:\n"
-                    "    --make <make cmd>: make command, needed to install the qt library.\n"
-                    "       For Qt 6, this can be \"cmake --build . --target <target>_make_apk\".\n"
-                    "\n"
                     "    --adb <adb cmd>: The Android ADB command. If missing the one from\n"
                     "       $PATH will be used.\n"
                     "\n"
@@ -300,7 +265,8 @@ static void printHelp()
                     "\n"
                     "    --skip-install-root: Do not append INSTALL_ROOT=... to the make command.\n"
                     "\n"
-                    "    --show-logcat: Print Logcat output to stdout.\n"
+                    "    --show-logcat: Print Logcat output to stdout. If an ANR occurs during\n"
+                    "       the test run, logs from the system_server process are included.\n"
                     "\n"
                     "    --ndk-stack: Path to ndk-stack tool that symbolizes crash stacktraces.\n"
                     "       By default, ANDROID_NDK_ROOT env var is used to deduce the tool path.\n"
@@ -308,6 +274,11 @@ static void printHelp()
                     "    -- Arguments that will be passed to the test application.\n"
                     "\n"
                     "    --verbose: Prints out information during processing.\n"
+                    "\n"
+                    "    --pre-test-adb-command <command>: call the adb <command> after\n"
+                    "       installation and before the test run.\n"
+                    "\n"
+                    "    --manifest <path>: Custom path to the AndroidManifest.xml.\n"
                     "\n"
                     "    --help: Displays this information.\n",
                     qPrintable(QCoreApplication::arguments().at(0))
@@ -344,12 +315,20 @@ static QString activityFromAndroidManifest(const QString &androidManifestPath)
 
 static void setOutputFile(QString file, QString format)
 {
-    if (file.isEmpty())
-        file = "-"_L1;
     if (format.isEmpty())
         format = "txt"_L1;
 
-    g_options.outFiles[format] = file;
+    if ((file.isEmpty() || file == u'-')) {
+        if (g_options.outFiles.contains(format)) {
+            file = g_options.outFiles.value(format);
+        } else {
+            file = "stdout.%1"_L1.arg(format);
+            g_options.outFiles[format] = file;
+        }
+        g_options.stdoutFileName = QFileInfo(file).fileName();
+    } else {
+        g_options.outFiles[format] = file;
+    }
 }
 
 static bool parseTestArgs()
@@ -396,18 +375,18 @@ static bool parseTestArgs()
         setOutputFile(file, logType);
 
     QString testAppArgs;
-    for (const auto &format : g_options.outFiles.keys())
-        testAppArgs += "-o output.%1,%1 "_L1.arg(format);
+    for (auto it = g_options.outFiles.constBegin(); it != g_options.outFiles.constEnd(); ++it)
+        testAppArgs += "-o %1,%2 "_L1.arg(QFileInfo(it.value()).fileName(), it.key());
 
     testAppArgs += unhandledArgs.join(u' ').trimmed();
     testAppArgs = "\"%1\""_L1.arg(testAppArgs.trimmed());
     const QString activityName = "%1/%2"_L1.arg(g_options.package).arg(g_options.activity);
 
-    // Pass over any testlib env vars if set
+    // Pass over any qt or testlib env vars if set
     QString testEnvVars;
     const QStringList envVarsList = QProcessEnvironment::systemEnvironment().toStringList();
     for (const QString &var : envVarsList) {
-        if (var.startsWith("QTEST_"_L1))
+        if (var.startsWith("QTEST_"_L1) || var.startsWith("QT_"_L1))
             testEnvVars += "%1 "_L1.arg(var);
     }
 
@@ -425,9 +404,10 @@ static bool parseTestArgs()
     return true;
 }
 
-static bool obtainPid() {
+static int getPid(const QString &package)
+{
     QByteArray output;
-    const QStringList psArgs = { "shell"_L1, "ps | grep ' %1'"_L1.arg(g_options.package) };
+    const QStringList psArgs = { "shell"_L1, "ps | grep ' %1'"_L1.arg(package) };
     if (!execAdbCommand(psArgs, &output, false))
         return false;
 
@@ -439,35 +419,110 @@ static bool obtainPid() {
     if (columns.size() < 3)
         return false;
 
-    if (g_testInfo.pid == -1) {
-        bool ok = false;
-        int pid = columns.at(1).toInt(&ok);
-        if (ok)
-            g_testInfo.pid = pid;
+    bool ok = false;
+    int pid = columns.at(1).toInt(&ok);
+    if (ok)
+        return pid;
+
+    return -1;
+}
+
+static QString runCommandAsUserArgs(const QString &cmd)
+{
+    return "run-as %1 --user %2 %3"_L1.arg(g_options.package, g_testInfo.userId, cmd);
+}
+
+static bool isRunning() {
+    if (g_testInfo.pid < 1)
+        return false;
+
+    QByteArray output;
+    const QStringList psArgs = { "shell"_L1, "ps"_L1, "-p"_L1, QString::number(g_testInfo.pid),
+                                 "|"_L1, "grep"_L1, "-o"_L1, " %1$"_L1.arg(g_options.package) };
+    bool psSuccess = false;
+    for (int i = 1; i <= 3; ++i) {
+        psSuccess = execAdbCommand(psArgs, &output, false);
+        if (psSuccess)
+            break;
+        QThread::msleep(250);
+    }
+
+    return psSuccess && output.trimmed() == g_options.package.toUtf8();
+}
+
+static void waitForStarted()
+{
+    // wait to start and set PID
+    QDeadlineTimer startDeadline(10000);
+    do {
+        g_testInfo.pid = getPid(g_options.package);
+        if (g_testInfo.pid > 0)
+            break;
+        QThread::msleep(100);
+    } while (!startDeadline.hasExpired() && !g_testInfo.isTestRunnerInterrupted.load());
+}
+
+static void waitForLoggingStarted()
+{
+    const QString lsCmd = "ls files/%1"_L1.arg(g_options.stdoutFileName);
+    const QStringList adbLsCmd = { "shell"_L1, runCommandAsUserArgs(lsCmd) };
+
+    QDeadlineTimer deadline(5000);
+    do {
+        if (execAdbCommand(adbLsCmd, nullptr, false))
+            break;
+        QThread::msleep(100);
+    } while (!deadline.hasExpired() && !g_testInfo.isTestRunnerInterrupted.load());
+}
+
+static bool setupStdoutLogger()
+{
+    // Start tail to get results to stdout as soon as they're available
+    const QString tailPipeCmd = "tail -n +1 -f files/%1"_L1.arg(g_options.stdoutFileName);
+    const QStringList adbTailCmd = { "shell"_L1, runCommandAsUserArgs(tailPipeCmd) };
+
+    g_options.stdoutLogger.emplace();
+    g_options.stdoutLogger->setProcessChannelMode(QProcess::ForwardedOutputChannel);
+    g_options.stdoutLogger->start(g_options.adbCommand, adbTailCmd);
+
+    if (!g_options.stdoutLogger->waitForStarted()) {
+        qCritical() << "Error: failed to run adb command to fetch stdout test results.";
+        g_options.stdoutLogger = std::nullopt;
+        return false;
     }
 
     return true;
 }
 
-static bool isRunning() {
-    QByteArray output;
-    const QStringList psArgs = { "shell"_L1, "ps | grep ' %1'"_L1.arg(g_options.package) };
-    if (!execAdbCommand(psArgs, &output, false))
-        return false;
+static bool stopStdoutLogger()
+{
+    if (!g_options.stdoutLogger.has_value()) {
+        // In case this ever happens, it setupStdoutLogger() wasn't called, whether
+        // that's on purpose or not, return true since what it does is achieved.
+        qCritical() << "Trying to stop the stdout logger process while it's been uninitialised";
+        return true;
+    }
 
-    return output.indexOf(QLatin1StringView(" " + g_options.package.toUtf8())) > -1;
+    if (g_options.stdoutLogger->state() == QProcess::NotRunning) {
+        // We expect the tail command to be running until we stop it, so if it's
+        // not running it might have been terminated outside of the test runner.
+        qCritical() << "The stdout logger process was terminated unexpectedly, "
+                       "It might have been terminated by an external process";
+        return false;
+    }
+
+    g_options.stdoutLogger->terminate();
+
+    if (!g_options.stdoutLogger->waitForFinished()) {
+        qCritical() << "Error: adb test results tail command timed out.";
+        return false;
+    }
+
+    return true;
 }
 
-static void waitForStartedAndFinished()
+static void waitForFinished()
 {
-    // wait to start and set PID
-    QDeadlineTimer startDeadline(10000);
-    do {
-        if (obtainPid())
-            break;
-        QThread::msleep(100);
-    } while (!startDeadline.hasExpired() && !g_testInfo.isTestRunnerInterrupted.load());
-
     // Wait to finish
     QDeadlineTimer finishedDeadline(g_options.timeoutSecs * 1000);
     do {
@@ -495,60 +550,151 @@ static void obtainSdkVersion()
         qCritical() << "Unable to obtain the SDK version of the target.";
 }
 
-static bool pullFiles()
+static QString userId()
 {
-    bool ret = true;
-    QByteArray userId;
     // adb get-current-user command is available starting from API level 26.
+    QByteArray userId;
     if (g_testInfo.sdkVersion >= 26) {
         const QStringList userIdArgs = {"shell"_L1, "cmd"_L1, "activity"_L1, "get-current-user"_L1};
         if (!execAdbCommand(userIdArgs, &userId, false)) {
             qCritical() << "Error: failed to retrieve the user ID";
-            return false;
+            userId.clear();
         }
-    } else {
-        userId = "0";
     }
 
-    for (auto it = g_options.outFiles.constBegin(); it != g_options.outFiles.end(); ++it) {
-        // Get only stdout from cat and get rid of stderr and fail later if the output is empty
-        const QString outSuffix = it.key();
-        const QString catCmd = "cat files/output.%1 2> /dev/null"_L1.arg(outSuffix);
-        const QStringList fullCatArgs = { "shell"_L1, "run-as %1 --user %2 %3"_L1.arg(
-                g_options.package, QString::fromUtf8(userId.simplified()), catCmd) };
+    if (userId.isEmpty())
+        userId = "0";
 
+    return QString::fromUtf8(userId.simplified());
+}
+
+static QStringList runningDevices()
+{
+    QByteArray output;
+    execAdbCommand({ "devices"_L1 }, &output, false);
+
+    QStringList devices;
+    for (const QByteArray &line : output.split(u'\n')) {
+        if (line.contains("\tdevice"_L1))
+            devices.append(QString::fromUtf8(line.split(u'\t').first()));
+    }
+
+    return devices;
+}
+
+static bool pullResults()
+{
+    for (auto it = g_options.outFiles.constBegin(); it != g_options.outFiles.constEnd(); ++it) {
+        const QString filePath = it.value();
+        const QString fileName = QFileInfo(filePath).fileName();
+        // Get only stdout from cat and get rid of stderr and fail later if the output is empty
+        const QString catCmd = "cat files/%1 2> /dev/null"_L1.arg(fileName);
+        const QStringList fullCatArgs = { "shell"_L1, runCommandAsUserArgs(catCmd) };
+
+        bool catSuccess = false;
         QByteArray output;
-        if (!execAdbCommand(fullCatArgs, &output, false)) {
-            qCritical() << "Error: failed to retrieve the test's output.%1 file."_L1.arg(outSuffix);
+
+        for (int i = 1; i <= g_options.resultsPullRetries; ++i) {
+            catSuccess = execAdbCommand(fullCatArgs, &output, false);
+            if (!catSuccess)
+                continue;
+            else if (!output.isEmpty())
+                break;
+        }
+
+        if (!catSuccess) {
+            qCritical() << "Error: failed to retrieve the test result file %1."_L1.arg(fileName);
             return false;
         }
 
         if (output.isEmpty()) {
-            qCritical() << "Error: the test's output.%1 is empty."_L1.arg(outSuffix);
+            qCritical() << "Error: the test result file %1 is empty."_L1.arg(fileName);
             return false;
         }
 
-        auto checkerIt = g_options.checkFiles.find(outSuffix);
-        ret &= (checkerIt != g_options.checkFiles.end() && checkerIt.value()(output));
-        if (it.value() == "-"_L1) {
-            qDebug() << output.constData();
-        } else {
-            QFile out{it.value()};
-            if (!out.open(QIODevice::WriteOnly))
-                return false;
-            out.write(output);
+        QFile out{filePath};
+        if (!out.open(QIODevice::WriteOnly)) {
+            qCritical() << "Error: failed to open %1 to write results to host."_L1.arg(filePath);
+            return false;
         }
+        out.write(output);
     }
-    return ret;
+
+    return true;
 }
 
-void printLogcat(const QString &formattedTime)
+static QString getAbiLibsPath()
 {
-    QStringList logcatArgs = { "logcat"_L1 };
-    if (g_testInfo.sdkVersion <= 23 || g_testInfo.pid == -1)
-        logcatArgs << "-t"_L1 << formattedTime;
+    QString libsPath = "%1/libs/"_L1.arg(g_options.buildPath);
+    const QStringList abiArgs = { "shell"_L1, "getprop"_L1, "ro.product.cpu.abi"_L1 };
+    QByteArray abi;
+    if (!execAdbCommand(abiArgs, &abi, false)) {
+        QStringList subDirs = QDir(libsPath).entryList(QDir::Dirs | QDir::NoDotAndDotDot);
+        if (!subDirs.isEmpty())
+            abi = subDirs.first().toUtf8();
+    }
+
+    abi = abi.trimmed();
+    if (abi.isEmpty())
+        qWarning() << "Failed to get the libs abi, falling to host architecture";
+
+    QString hostArch = QSysInfo::currentCpuArchitecture();
+    if (hostArch == "x86_64"_L1)
+        abi = "arm64-x86_64";
+    else if (hostArch == "arm64"_L1)
+        abi = "arm64-v8a";
+    else if (hostArch == "i386"_L1)
+        abi = "x86";
     else
-        logcatArgs << "-d"_L1 << "--pid=%1"_L1.arg(QString::number(g_testInfo.pid));
+        abi = "armeabi-v7a";
+
+    return libsPath + QString::fromUtf8(abi);
+}
+
+void printLogcatCrash(const QByteArray &logcat)
+{
+    // No crash report, do nothing
+    if (logcat.isEmpty())
+        return;
+
+    QByteArray crashLogcat(logcat);
+    if (!g_options.ndkStackPath.isEmpty()) {
+        QProcess ndkStackProc;
+        ndkStackProc.start(g_options.ndkStackPath, { "-sym"_L1, getAbiLibsPath() });
+
+        if (ndkStackProc.waitForStarted()) {
+            ndkStackProc.write(crashLogcat);
+            ndkStackProc.closeWriteChannel();
+
+            if (ndkStackProc.waitForReadyRead())
+                crashLogcat = ndkStackProc.readAllStandardOutput();
+
+            ndkStackProc.terminate();
+            if (!ndkStackProc.waitForFinished())
+                qCritical() << "Error: ndk-stack command timed out.";
+        } else {
+            qCritical() << "Error: failed to run ndk-stack command.";
+            return;
+        }
+    } else {
+        qWarning() << "Warning: ndk-stack path not provided and couldn't be deduced "
+                      "using the ANDROID_NDK_ROOT environment variable.";
+    }
+
+    if (!crashLogcat.startsWith("********** Crash dump"))
+        qDebug() << "[androidtestrunner] ********** BEGIN crash dump **********";
+    qDebug().noquote() << crashLogcat.trimmed();
+    qDebug() << "[androidtestrunner] ********** END crash dump **********";
+}
+
+void analyseLogcat(const QString &timeStamp, int *exitCode)
+{
+    QStringList logcatArgs = { "shell"_L1, "logcat"_L1, "-t"_L1, "'%1'"_L1.arg(timeStamp),
+                               "-v"_L1, "brief"_L1 };
+
+    const bool useColor = qEnvironmentVariable("QTEST_ENVIRONMENT") != "ci"_L1;
+    if (useColor)
+        logcatArgs << "-v"_L1 << "color"_L1;
 
     QByteArray logcat;
     if (!execAdbCommand(logcatArgs, &logcat, false)) {
@@ -561,88 +707,70 @@ void printLogcat(const QString &formattedTime)
         return;
     }
 
-    qDebug() << "****** Begin logcat output ******";
-    qDebug().noquote() << logcat;
-    qDebug() << "****** End logcat output ******";
-}
+    const QByteArray crashMarker("*** *** *** *** *** *** *** *** *** *** *** *** *** *** *** ***");
+    int crashMarkerIndex = logcat.indexOf(crashMarker);
+    QByteArray crashLogcat;
 
-static QString getDeviceABI()
-{
-    const QStringList abiArgs = { "shell"_L1, "getprop"_L1, "ro.product.cpu.abi"_L1 };
-    QByteArray abi;
-    if (!execAdbCommand(abiArgs, &abi, false)) {
-        qWarning() << "Warning: failed to get the device abi, fallback to first libs dir";
-        return {};
+    if (crashMarkerIndex != -1) {
+        crashLogcat = logcat.mid(crashMarkerIndex);
+        logcat = logcat.left(crashMarkerIndex);
     }
 
-    return QString::fromUtf8(abi.simplified());
-}
+    // Check for ANRs
+    const bool anrOccurred = logcat.contains("ANR in %1"_L1.arg(g_options.package).toUtf8());
+    if (anrOccurred) {
+        // Rather improbable, but if the test managed to return a non-crash exitcode then overwrite
+        // it to signify that something blew up. Same if we didn't manage to collect an exit code.
+        // Preserve all other exitcodes, they might be useful crash information from the device.
+        if (isTestExitCodeNormal(*exitCode) || *exitCode == EXIT_NOEXITCODE)
+            *exitCode = EXIT_ANR;
+        qCritical("[androidtestrunner] An ANR has occurred while running the test '%s';"
+                  " consult logcat for additional logs from the system_server process",
+                  qPrintable(g_options.package));
+    }
 
-void printLogcatCrashBuffer(const QString &formattedTime)
-{
-    bool useNdkStack = false;
-    auto libsPath = "%1/libs/"_L1.arg(g_options.buildPath);
+    int systemServerPid = getPid("system_server"_L1);
 
-    if (!g_options.ndkStackPath.isEmpty()) {
-        QString abi = getDeviceABI();
-        if (abi.isEmpty()) {
-            QStringList subDirs = QDir(libsPath).entryList(QDir::Dirs | QDir::NoDotAndDotDot);
-            if (!subDirs.isEmpty())
-                abi = subDirs.first();
-        }
+    static const QRegularExpression logcatRegEx{
+        "(?:^\\x1B\\[[0-9]+m)?" // color
+        "(\\w)/"                // message type  1. capture
+        ".*"                    // source
+        "(\\(\\s*\\d*\\)):"     // pid           2. capture
+        "\\s*"
+        ".*"                    // message
+        "(?:\\x1B\\[[0-9]+m)?"  // color
+        "[\\n\\r]*$"_L1
+    };
 
-        if (!abi.isEmpty()) {
-            libsPath += abi;
-            useNdkStack = true;
+    QByteArrayList testLogcat;
+    for (const QByteArray &line : logcat.split(u'\n')) {
+        QRegularExpressionMatch match = logcatRegEx.match(QString::fromUtf8(line));
+        if (match.hasMatch()) {
+            const QString msgType = match.captured(1);
+            const QString pidStr = match.captured(2);
+            const int capturedPid = pidStr.mid(1, pidStr.size() - 2).trimmed().toInt();
+            if (capturedPid == g_testInfo.pid || msgType == u'F')
+                testLogcat.append(line);
+            else if (anrOccurred && capturedPid == systemServerPid)
+                testLogcat.append(line);
         } else {
-            qWarning() << "Warning: failed to get the libs abi, ndk-stack cannot be used.";
+            // If we can't match then just print everything
+            testLogcat.append(line);
         }
-    } else {
-        qWarning() << "Warning: ndk-stack path not provided and couldn't be deduced "
-                      "using the ANDROID_NDK_ROOT environment variable.";
     }
 
-    QProcess adbCrashProcess;
-    QProcess ndkStackProcess;
+    // If we have an unpredictable exitcode, possibly a crash, attempt to print both logcat and the
+    // crash buffer which includes the crash stacktrace that is not included in the default logcat.
+    const bool testCrashed = (   !isTestExitCodeNormal(*exitCode)
+                              && !g_testInfo.isTestRunnerInterrupted.load());
+    if (testCrashed) {
+        qDebug() << "[androidtestrunner] ********** BEGIN logcat dump **********";
+        qDebug().noquote() << testLogcat.join(u'\n').trimmed();
+        qDebug() << "[androidtestrunner] ********** END logcat dump **********";
 
-    if (useNdkStack) {
-        adbCrashProcess.setStandardOutputProcess(&ndkStackProcess);
-        ndkStackProcess.start(g_options.ndkStackPath, { "-sym"_L1, libsPath });
+        if (!crashLogcat.isEmpty())
+            printLogcatCrash(crashLogcat);
     }
-
-    const QStringList adbCrashArgs = { "logcat"_L1, "-b"_L1, "crash"_L1, "-t"_L1, formattedTime };
-    adbCrashProcess.start(g_options.adbCommand, adbCrashArgs);
-
-    if (!adbCrashProcess.waitForStarted()) {
-        qCritical() << "Error: failed to run adb logcat crash command.";
-        return;
-    }
-
-    if (useNdkStack && !ndkStackProcess.waitForStarted()) {
-        qCritical() << "Error: failed to run ndk-stack command.";
-        return;
-    }
-
-    if (!adbCrashProcess.waitForFinished()) {
-        qCritical() << "Error: adb command timed out.";
-        return;
-    }
-
-    if (useNdkStack && !ndkStackProcess.waitForFinished()) {
-        qCritical() << "Error: ndk-stack command timed out.";
-        return;
-    }
-
-    const QByteArray crash = useNdkStack ? ndkStackProcess.readAllStandardOutput()
-                                         : adbCrashProcess.readAllStandardOutput();
-    if (crash.isEmpty()) {
-        qWarning() << "The retrieved crash logcat is empty";
-        return;
-    }
-
-    qDebug() << "****** Begin logcat crash buffer output ******";
-    qDebug().noquote() << crash;
-    qDebug() << "****** End logcat crash buffer output ******";
 }
 
 static QString getCurrentTimeString()
@@ -653,11 +781,27 @@ static QString getCurrentTimeString()
     QStringList dateArgs = { "shell"_L1, "date"_L1, "+'%1'"_L1.arg(timeFormat) };
     QByteArray output;
     if (!execAdbCommand(dateArgs, &output, false)) {
-        qWarning() << "Date/time adb command failed";
+        qWarning() << "[androidtestrunner] ERROR in command: adb shell date";
         return {};
     }
 
     return QString::fromUtf8(output.simplified());
+}
+
+static int testExitCode()
+{
+    QByteArray exitCodeOutput;
+    const QString exitCodeCmd = "cat files/qtest_last_exit_code 2> /dev/null"_L1;
+    if (!execAdbCommand({ "shell"_L1, runCommandAsUserArgs(exitCodeCmd) }, &exitCodeOutput, false)) {
+        qCritical() << "[androidtestrunner] ERROR in command: adb shell cat files/qtest_last_exit_code";
+        return EXIT_NOEXITCODE;
+    }
+    qDebug() << "[androidtestrunner] Test exitcode: " << exitCodeOutput;
+
+    bool ok;
+    int exitCode = exitCodeOutput.toInt(&ok);
+
+    return ok ? exitCode : EXIT_NOEXITCODE;
 }
 
 static bool uninstallTestPackage()
@@ -698,7 +842,7 @@ void sigHandler(int signal)
     // a main event loop. Since, there's no other alternative to do this,
     // let's do the cleanup anyway.
     if (!g_testInfo.isPackageInstalled.load())
-        _exit(-1);
+        _exit(EXIT_ERROR);
     g_testInfo.isTestRunnerInterrupted.store(true);
 }
 
@@ -710,44 +854,54 @@ int main(int argc, char *argv[])
     QCoreApplication a(argc, argv);
     if (!parseOptions()) {
         printHelp();
-        return 1;
+        return EXIT_ERROR;
     }
 
     if (g_options.makeCommand.isEmpty()) {
         qCritical() << "It is required to provide a make command with the \"--make\" parameter "
                        "to generate the apk.";
-        return 1;
+        return EXIT_ERROR;
     }
-    if (!execCommand(g_options.makeCommand, nullptr, true)) {
-        if (!g_options.skipAddInstallRoot) {
-            // we need to run make INSTALL_ROOT=path install to install the application file(s) first
-            if (!execCommand("%1 INSTALL_ROOT=%2 install"_L1.arg(g_options.makeCommand,
-                                        QDir::toNativeSeparators(g_options.buildPath)), nullptr)) {
-                return 1;
-            }
-        } else {
-            if (!execCommand(g_options.makeCommand, nullptr))
-                return 1;
-        }
+
+    QByteArray buildOutput;
+    if (!execCommand(g_options.makeCommand, &buildOutput, true)) {
+        qCritical("The APK build command \"%s\" failed\n\n%s",
+            qPrintable(g_options.makeCommand), buildOutput.constData());
+        return EXIT_ERROR;
     }
 
     if (!QFile::exists(g_options.apkPath)) {
         qCritical("No apk \"%s\" found after running the make command. "
                   "Check the provided path and the make command.",
                   qPrintable(g_options.apkPath));
-        return 1;
+        return EXIT_ERROR;
+    }
+
+    const QStringList devices = runningDevices();
+    if (devices.isEmpty()) {
+        qCritical("No connected devices or running emulators can be found.");
+        return EXIT_ERROR;
+    } else if (!g_options.serial.isEmpty() && !devices.contains(g_options.serial)) {
+        qCritical("No connected device or running emulator with serial '%s' can be found.",
+                  qPrintable(g_options.serial));
+        return EXIT_ERROR;
     }
 
     obtainSdkVersion();
 
-    QString manifest = g_options.buildPath + "/AndroidManifest.xml"_L1;
-    g_options.package = packageNameFromAndroidManifest(manifest);
+    g_testInfo.userId = userId();
+
+    if (!QFile::exists(g_options.manifestPath)) {
+        qCritical("Unable to find '%s'.", qPrintable(g_options.manifestPath));
+        return EXIT_ERROR;
+    }
+    g_options.package = packageNameFromAndroidManifest(g_options.manifestPath);
     if (g_options.activity.isEmpty())
-        g_options.activity = activityFromAndroidManifest(manifest);
+        g_options.activity = activityFromAndroidManifest(g_options.manifestPath);
 
     // parseTestArgs depends on g_options.package
     if (!parseTestArgs())
-        return 1;
+        return EXIT_ERROR;
 
     // do not install or run packages while another test is running
     testRunnerLock.acquire();
@@ -755,36 +909,55 @@ int main(int argc, char *argv[])
     const QStringList installArgs = { "install"_L1, "-r"_L1, "-g"_L1, g_options.apkPath };
     g_testInfo.isPackageInstalled.store(execAdbCommand(installArgs, nullptr));
     if (!g_testInfo.isPackageInstalled)
-        return 1;
+        return EXIT_ERROR;
 
-    const QString formattedTime = getCurrentTimeString();
-
-    // start the tests
-    bool success = execAdbCommand(g_options.amStarttestArgs, nullptr);
-
-    waitForStartedAndFinished();
-
-    if (success) {
-        success &= pullFiles();
-        if (g_options.showLogcatOutput)
-            printLogcat(formattedTime);
+    // Call additional adb command if set after installation and before starting the test
+    for (const auto &command : g_options.preTestRunAdbCommands) {
+        QByteArray output;
+        if (!execAdbCommand(command, &output)) {
+            qCritical("The pre test ADB command \"%s\" failed with output:\n%s",
+                  qUtf8Printable(command.join(u' ')), output.constData());
+            return EXIT_ERROR;
+        }
     }
 
-    // If we have a failure, attempt to print both logcat and the crash buffer which
-    // includes the crash stacktrace that is not included in the default logcat.
-    if (!success) {
-        printLogcat(formattedTime);
-        printLogcatCrashBuffer(formattedTime);
-    }
+    // Pre test start
+    const QString formattedStartTime = getCurrentTimeString();
 
-    success &= uninstallTestPackage();
+    // Start the test
+    if (!execAdbCommand(g_options.amStarttestArgs, nullptr))
+        return EXIT_ERROR;
+
+    waitForStarted();
+    waitForLoggingStarted();
+
+    if (!setupStdoutLogger())
+        return EXIT_ERROR;
+
+    waitForFinished();
+
+    // Post test run
+    if (!stopStdoutLogger())
+        return EXIT_ERROR;
+
+    int exitCode = testExitCode();
+
+    if (g_options.showLogcatOutput)
+        analyseLogcat(formattedStartTime, &exitCode);
+
+    const bool pullRes = pullResults();
+    if (!pullRes && isTestExitCodeNormal(exitCode))
+        exitCode = EXIT_NORESULTS;
+
+    if (!uninstallTestPackage())
+        return EXIT_ERROR;
 
     testRunnerLock.release();
 
     if (g_testInfo.isTestRunnerInterrupted.load()) {
         qCritical() << "The androidtestrunner was interrupted and the was test cleaned up.";
-        return 1;
+        return EXIT_ERROR;
     }
 
-    return success ? 0 : 1;
+    return exitCode;
 }

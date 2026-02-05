@@ -1,5 +1,6 @@
 // Copyright (C) 2016 The Qt Company Ltd.
 // SPDX-License-Identifier: LicenseRef-Qt-Commercial OR LGPL-3.0-only OR GPL-2.0-only OR GPL-3.0-only
+// Qt-Security score:significant reason:default
 
 #include "qprintengine_pdf_p.h"
 
@@ -104,7 +105,14 @@ void QPdfPrintEngine::setProperty(PrintEnginePropertyKey key, const QVariant &va
         d->collate = value.toBool();
         break;
     case PPK_ColorMode:
-        d->grayscale = (QPrinter::ColorMode(value.toInt()) == QPrinter::GrayScale);
+        switch (QPrinter::ColorMode(value.toInt())) {
+        case QPrinter::GrayScale:
+            d->colorModel = QPdfEngine::ColorModel::Grayscale;
+            break;
+        case QPrinter::Color:
+            d->colorModel = QPdfEngine::ColorModel::Auto;
+            break;
+        }
         break;
     case PPK_Creator:
         d->creator = value.toString();
@@ -177,7 +185,8 @@ void QPdfPrintEngine::setProperty(PrintEnginePropertyKey key, const QVariant &va
         Q_ASSERT(margins.size() == 4);
         d->m_pageLayout.setUnits(QPageLayout::Point);
         d->m_pageLayout.setMargins(QMarginsF(margins.at(0).toReal(), margins.at(1).toReal(),
-                                             margins.at(2).toReal(), margins.at(3).toReal()));
+                                             margins.at(2).toReal(), margins.at(3).toReal()),
+                                   QPageLayout::OutOfBoundsPolicy::Clamp);
         break;
     }
     case PPK_QPageSize: {
@@ -187,9 +196,9 @@ void QPdfPrintEngine::setProperty(PrintEnginePropertyKey key, const QVariant &va
         break;
     }
     case PPK_QPageMargins: {
-        QPair<QMarginsF, QPageLayout::Unit> pair = qvariant_cast<QPair<QMarginsF, QPageLayout::Unit> >(value);
+        auto pair = qvariant_cast<std::pair<QMarginsF, QPageLayout::Unit>>(value);
         d->m_pageLayout.setUnits(pair.second);
-        d->m_pageLayout.setMargins(pair.first);
+        d->m_pageLayout.setMargins(pair.first, QPageLayout::OutOfBoundsPolicy::Clamp);
         break;
     }
     case PPK_QPageLayout: {
@@ -221,7 +230,7 @@ QVariant QPdfPrintEngine::property(PrintEnginePropertyKey key) const
         ret = d->collate;
         break;
     case PPK_ColorMode:
-        ret = d->grayscale ? QPrinter::GrayScale : QPrinter::Color;
+        ret = d->printerColorMode();
         break;
     case PPK_Creator:
         ret = d->creator;
@@ -300,7 +309,7 @@ QVariant QPdfPrintEngine::property(PrintEnginePropertyKey key) const
         ret.setValue(d->m_pageLayout.pageSize());
         break;
     case PPK_QPageMargins: {
-        QPair<QMarginsF, QPageLayout::Unit> pair = qMakePair(d->m_pageLayout.margins(), d->m_pageLayout.units());
+        std::pair<QMarginsF, QPageLayout::Unit> pair(d->m_pageLayout.margins(), d->m_pageLayout.units());
         ret.setValue(pair);
         break;
     }
@@ -366,6 +375,22 @@ QPdfPrintEnginePrivate::QPdfPrintEnginePrivate(QPrinter::PrinterMode m)
 QPdfPrintEnginePrivate::~QPdfPrintEnginePrivate()
 {
 }
+
+QPrinter::ColorMode QPdfPrintEnginePrivate::printerColorMode() const
+{
+    switch (colorModel) {
+    case QPdfEngine::ColorModel::RGB:
+    case QPdfEngine::ColorModel::CMYK:
+    case QPdfEngine::ColorModel::Auto:
+        return QPrinter::Color;
+    case QPdfEngine::ColorModel::Grayscale:
+        return QPrinter::GrayScale;
+    }
+
+    Q_UNREACHABLE();
+    return QPrinter::Color;
+}
+
 
 QT_END_NAMESPACE
 

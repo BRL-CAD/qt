@@ -1,4 +1,4 @@
-// Copyright (C) 2019 The Qt Company Ltd.
+// Copyright (C) 2024 The Qt Company Ltd.
 // SPDX-License-Identifier: LicenseRef-Qt-Commercial OR LGPL-3.0-only OR GPL-2.0-only OR GPL-3.0-only
 
 #include "qfont.h"
@@ -31,6 +31,7 @@
 #include <QtCore/QMutexLocker>
 #include <QtCore/QMutex>
 
+#include <algorithm>
 #include <array>
 
 // #define QFONTCACHE_DEBUG
@@ -80,6 +81,9 @@ bool QFontDef::exactMatch(const QFontDef &other) const
         return false;
 
     if (stretch != 0 && other.stretch != 0 && stretch != other.stretch)
+        return false;
+
+    if (families.size() != other.families.size())
         return false;
 
     QString this_family, this_foundry, other_family, other_foundry;
@@ -254,6 +258,19 @@ QFontEngine *QFontPrivate::engineForScript(int script) const
     return QT_FONT_ENGINE_FROM_DATA(engineData, script);
 }
 
+QFontEngine *QFontPrivate::engineForCharacter(char32_t c, EngineQueryOptions opt) const
+{
+    const bool smallCaps = !(opt & EngineQueryOption::IgnoreSmallCapsEngine);
+    const auto script = QChar::script(c);
+    QFontEngine *engine;
+    if (smallCaps && capital == QFont::SmallCaps && QChar::isLower(c))
+        engine = smallCapsFontPrivate()->engineForScript(script);
+    else
+        engine = engineForScript(script);
+    Q_ASSERT(engine != nullptr);
+    return engine;
+}
+
 void QFontPrivate::alterCharForCapitalization(QChar &c) const {
     switch (capital) {
     case QFont::AllUppercase:
@@ -383,13 +400,13 @@ void QFontPrivate::unsetFeature(QFont::Tag tag)
 QFontEngineData::QFontEngineData()
     : ref(0), fontCacheId(QFontCache::instance()->id())
 {
-    memset(engines, 0, QChar::ScriptCount * sizeof(QFontEngine *));
+    memset(engines, 0, QFontDatabasePrivate::ScriptCount * sizeof(QFontEngine *));
 }
 
 QFontEngineData::~QFontEngineData()
 {
     Q_ASSERT(ref.loadRelaxed() == 0);
-    for (int i = 0; i < QChar::ScriptCount; ++i) {
+    for (int i = 0; i < QFontDatabasePrivate::ScriptCount; ++i) {
         if (engines[i]) {
             if (!engines[i]->ref.deref())
                 delete engines[i];
@@ -422,7 +439,7 @@ QFontEngineData::~QFontEngineData()
     actually used are retrievable from a QFontInfo object. If the
     window system provides an exact match exactMatch() returns \c true.
     Use QFontMetricsF to get measurements, e.g. the pixel length of a
-    string using QFontMetrics::width().
+    string using QFontMetrics::horizontalAdvance().
 
     Attributes which are not specifically set will not affect the font
     selection algorithm, and default values will be preferred instead.
@@ -803,9 +820,7 @@ QFont &QFont::operator=(const QFont &font)
 /*!
     \fn void QFont::swap(QFont &other)
     \since 5.0
-
-    Swaps this font instance with \a other. This function is very fast
-    and never fails.
+    \memberswap{font instance}
 */
 
 /*!
@@ -1462,6 +1477,31 @@ QFont::StyleHint QFont::styleHint() const
     \value NoAntialias don't antialias the fonts.
     \value NoSubpixelAntialias avoid subpixel antialiasing on the fonts if possible.
     \value PreferAntialias antialias if possible.
+    \value [since 6.8] ContextFontMerging If the selected font does not contain a certain character,
+           then Qt automatically chooses a similar-looking fallback font that contains the
+           character. By default this is done on a character-by-character basis. This means that in
+           certain uncommon cases, multiple fonts may be used to represent one string of text even
+           if it's in the same script. Setting \c ContextFontMerging will try finding the fallback
+           font that matches the largest subset of the input string instead. This will be more
+           expensive for strings where missing glyphs occur, but may give more consistent results.
+           If \c NoFontMerging is set, then \c ContextFontMerging will have no effect.
+    \value [since 6.8] PreferTypoLineMetrics For compatibility reasons, OpenType fonts contain
+           two competing sets of the vertical line metrics that provide the
+           \l{QFontMetricsF::ascent()}{ascent}, \l{QFontMetricsF::descent()}{descent} and
+           \l{QFontMetricsF::leading()}{leading} of the font. These are often referred to as the
+           \l{https://learn.microsoft.com/en-us/typography/opentype/spec/os2#uswinascent}{win}
+           (Windows) metrics and the
+           \l{https://learn.microsoft.com/en-us/typography/opentype/spec/os2#sta}{typo}
+           (typographical) metrics. While the specification recommends using the \c typo metrics for
+           line spacing, many applications prefer the \c win metrics unless the \c{USE_TYPO_METRICS}
+           flag is set in the
+           \l{https://learn.microsoft.com/en-us/typography/opentype/spec/os2#fsselection}{fsSelection}
+           field of the font. For backwards-compatibility reasons, this is also the case for Qt
+           applications. This is not an issue for fonts that set the \c{USE_TYPO_METRICS} flag to
+           indicate that the \c{typo} metrics are valid, nor for fonts where the \c{win} metrics
+           and \c{typo} metrics match up. However, for certain fonts the \c{win} metrics may be
+           larger than the preferable line spacing and the \c{USE_TYPO_METRICS} flag may be unset
+           by mistake. For such fonts, setting \c{PreferTypoLineMetrics} may give superior results.
     \value NoFontMerging If the font selected for a certain writing system
            does not contain a character requested to draw, then Qt automatically chooses a similar
            looking font that contains the character. The NoFontMerging flag disables this feature.
@@ -1790,6 +1830,8 @@ bool QFont::operator==(const QFont &f) const
 */
 bool QFont::operator<(const QFont &f) const
 {
+    // NB: This operator actually implements greater-than, because it consistently
+    //     swaps LHS (should be *this, but is `f`) and RHS (should be `f`, but is *this)
     if (f.d == d) return false;
     // the < operator for fontdefs ignores point sizes.
     const QFontDef &r1 = f.d->request;
@@ -1812,35 +1854,13 @@ bool QFont::operator<(const QFont &f) const
     int f2attrs = (d->underline << 3) + (d->overline << 2) + (d->strikeOut<<1) + d->kerning;
     if (f1attrs != f2attrs) return f1attrs < f2attrs;
 
-    if (d->features.size() != f.d->features.size())
-        return f.d->features.size() < d->features.size();
-
-    {
-        auto it = d->features.constBegin();
-        auto jt = f.d->features.constBegin();
-        for (; it != d->features.constEnd(); ++it, ++jt) {
-            if (it.key() != jt.key())
-                return jt.key() < it.key();
-            if (it.value() != jt.value())
-                return jt.value() < it.value();
-        }
+    if (d->features != f.d->features) {
+        return std::lexicographical_compare(f.d->features.keyValueBegin(), f.d->features.keyValueEnd(),
+                                            d->features.keyValueBegin(), d->features.keyValueEnd());
     }
 
-    if (r1.variableAxisValues.size() != r2.variableAxisValues.size())
-        return r1.variableAxisValues.size() < r2.variableAxisValues.size();
-
-    {
-        auto it = r1.variableAxisValues.constBegin();
-        auto jt = r2.variableAxisValues.constBegin();
-        for (; it != r1.variableAxisValues.constEnd(); ++it, ++jt) {
-            if (it.key() != jt.key())
-                return jt.key() < it.key();
-            if (it.value() != jt.value())
-                return jt.value() < it.value();
-        }
-    }
-
-    return false;
+    return std::lexicographical_compare(r1.variableAxisValues.keyValueBegin(), r1.variableAxisValues.keyValueEnd(),
+                                        r2.variableAxisValues.keyValueBegin(), r2.variableAxisValues.keyValueEnd());
 }
 
 
@@ -2160,10 +2180,8 @@ QString QFont::toString() const
 }
 
 /*!
-    Returns the hash value for \a font. If specified, \a seed is used
-    to initialize the hash.
-
-    \relates QFont
+    \fn size_t qHash(const QFont &key, size_t seed)
+    \qhashold{QFont}
     \since 5.3
 */
 size_t qHash(const QFont &font, size_t seed) noexcept
@@ -2319,8 +2337,7 @@ void QFont::cacheStatistics()
 
 /*!
     \fn size_t QFont::Tag::qHash(QFont::Tag key, size_t seed) noexcept
-
-    Returns the hash value for \a key, using \a seed to seed the calculation.
+    \qhash{QFont::Tag}
 */
 
 /*!
@@ -2386,9 +2403,8 @@ std::optional<QFont::Tag> QFont::Tag::fromString(QAnyStringView view) noexcept
 }
 
 /*!
-    \fn QDataStream &operator<<(QDataStream &, QFont::Tag)
-    \fn QDataStream &operator>>(QDataStream &, QFont::Tag &)
-    \relates QFont::Tag
+    \fn QDataStream &QFont::Tag::operator<<(QDataStream &, QFont::Tag)
+    \fn QDataStream &QFont::Tag::operator>>(QDataStream &, QFont::Tag &)
 
     Data stream operators for QFont::Tag.
 */
@@ -2427,9 +2443,7 @@ std::optional<QFont::Tag> QFont::Tag::fromString(QAnyStringView view) noexcept
 
     By default, no variable axes are set.
 
-    \note In order to use variable axes on Windows, the application has to run with either the
-    FreeType or DirectWrite font databases. See the documentation for
-    QGuiApplication::QGuiApplication() for more information on how to select these technologies.
+    \note On Windows, variable axes are not supported if the optional GDI font backend is in use.
 
     \sa unsetVariableAxis
  */
@@ -2563,7 +2577,7 @@ void QFont::clearVariableAxes()
     kerning property is set to false. Similarly, if it is set to 0, then it will always be disabled.
     To reset a font feature to its default behavior, you can unset it using unsetFeature().
 
-    \sa QFont::Tag, clearFeatures(), setFeature(), unsetFeature(), featureTags()
+    \sa QFont::Tag, clearFeatures(), unsetFeature(), featureTags()
 */
 void QFont::setFeature(Tag tag, quint32 value)
 {
@@ -2660,8 +2674,10 @@ void QFont::clearFeatures()
     d->features.clear();
 }
 
-extern QStringList qt_fallbacksForFamily(const QString &family, QFont::Style style,
-                                         QFont::StyleHint styleHint, QChar::Script script);
+extern QStringList qt_fallbacksForFamily(const QString &family,
+                                         QFont::Style style,
+                                         QFont::StyleHint styleHint,
+                                         QFontDatabasePrivate::ExtendedScript script);
 
 /*!
     \fn QString QFont::defaultFamily() const
@@ -2673,8 +2689,10 @@ extern QStringList qt_fallbacksForFamily(const QString &family, QFont::Style sty
 */
 QString QFont::defaultFamily() const
 {
-    const QStringList fallbacks = qt_fallbacksForFamily(QString(), QFont::StyleNormal
-                                      , QFont::StyleHint(d->request.styleHint), QChar::Script_Common);
+    const QStringList fallbacks = qt_fallbacksForFamily(QString(),
+                                                        QFont::StyleNormal,
+                                                        QFont::StyleHint(d->request.styleHint),
+                                                        QFontDatabasePrivate::Script_Common);
     if (!fallbacks.isEmpty())
         return fallbacks.first();
     return QString();
@@ -3073,9 +3091,7 @@ QFontInfo &QFontInfo::operator=(const QFontInfo &fi)
 /*!
     \fn void QFontInfo::swap(QFontInfo &other)
     \since 5.0
-
-    Swaps this font info instance with \a other. This function is very
-    fast and never fails.
+    \memberswap{font info instance}
 */
 
 /*!
@@ -3266,7 +3282,7 @@ bool QFontInfo::fixedPitch() const
         QChar ch[2] = { u'i', u'm' };
         QGlyphLayoutArray<2> g;
         int l = 2;
-        if (!engine->stringToCMap(ch, 2, &g, &l, {}))
+        if (engine->stringToCMap(ch, 2, &g, &l, {}) < 0)
             Q_UNREACHABLE();
         Q_ASSERT(l == 2);
         engine->fontDef.fixedPitch = g.advances[0] == g.advances[1];
@@ -3303,7 +3319,20 @@ bool QFontInfo::exactMatch() const
     return d->request.exactMatch(engine->fontDef);
 }
 
+/*!
+    \since 6.9
 
+    If the font is a variable font, this function will return the
+    list of axes the font supports.
+
+    See \l{QFont::}{setVariableAxis()} for more details on variable axes.
+*/
+QList<QFontVariableAxis> QFontInfo::variableAxes() const
+{
+    QFontEngine *engine = d->engineForScript(QChar::Script_Common);
+    Q_ASSERT(engine != nullptr);
+    return engine->variableAxes();
+}
 
 
 // **********************************************************************
@@ -3354,7 +3383,6 @@ QFontCache::QFontCache()
       current_timestamp(0), fast(false),
       autoClean(QGuiApplication::instance()
                 && (QGuiApplication::instance()->thread() == QThread::currentThread())),
-      timer_id(-1),
       m_id(font_cache_id.fetchAndAddRelaxed(1) + 1)
 {
 }
@@ -3371,7 +3399,7 @@ void QFontCache::clear()
                                  end = engineDataCache.end();
         while (it != end) {
             QFontEngineData *data = it.value();
-            for (int i = 0; i < QChar::ScriptCount; ++i) {
+            for (int i = 0; i < QFontDatabasePrivate::ScriptCount; ++i) {
                 if (data->engines[i]) {
                     if (!data->engines[i]->ref.deref()) {
                         Q_ASSERT(engineCacheCount.value(data->engines[i]) == 0);
@@ -3527,12 +3555,10 @@ void QFontCache::increaseCost(uint cost)
         if (!autoClean)
             return;
 
-        if (timer_id == -1 || ! fast) {
+        if (!timer.isActive() || ! fast) {
             FC_DEBUG("  TIMER: starting fast timer (%d s)", static_cast<int>(fast_timeout.count()));
 
-            if (timer_id != -1)
-                killTimer(timer_id);
-            timer_id = startTimer(fast_timeout);
+            timer.start(fast_timeout, this);
             fast = true;
         }
     }
@@ -3557,8 +3583,7 @@ void QFontCache::timerEvent(QTimerEvent *)
     if (total_cost <= max_cost && max_cost <= min_cost) {
         FC_DEBUG("  cache redused sufficiently, stopping timer");
 
-        killTimer(timer_id);
-        timer_id = -1;
+        timer.stop();
         fast = false;
 
         return;
@@ -3627,9 +3652,8 @@ void QFontCache::decreaseCache()
             if (fast) {
                 FC_DEBUG("  cannot shrink cache, slowing timer");
 
-                if (timer_id != -1) {
-                    killTimer(timer_id);
-                timer_id = startTimer(slow_timeout);
+                if (timer.isActive()) {
+                    timer.start(slow_timeout, this);
                 fast = false;
             }
 
@@ -3637,9 +3661,7 @@ void QFontCache::decreaseCache()
         } else if (! fast) {
             FC_DEBUG("  dropping into passing gear");
 
-            if (timer_id != -1)
-                killTimer(timer_id);
-            timer_id = startTimer(fast_timeout);
+            timer.start(fast_timeout, this);
             fast = true;        }
         }
     }

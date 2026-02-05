@@ -1,5 +1,6 @@
 // Copyright (C) 2020 The Qt Company Ltd.
 // SPDX-License-Identifier: LicenseRef-Qt-Commercial OR LGPL-3.0-only OR GPL-2.0-only OR GPL-3.0-only
+// Qt-Security score:significant reason:default
 
 #include "qplatformdefs.h"
 #include "qfileinfo.h"
@@ -197,6 +198,8 @@ QDateTime &QFileInfoPrivate::getFileTime(QFile::FileTime request) const
 
     \ingroup io
     \ingroup shared
+
+    \compares equality
 
     QFileInfo provides information about a file system entry, such as its
     name, path, access rights and whether it is a regular file, directory or
@@ -419,16 +422,18 @@ QFileInfo::~QFileInfo()
 }
 
 /*!
-    \fn bool QFileInfo::operator!=(const QFileInfo &fileinfo) const
+    \fn bool QFileInfo::operator!=(const QFileInfo &lhs, const QFileInfo &rhs)
 
-    Returns \c true if this QFileInfo refers to a different file system
-    entry than the one referred to by \a fileinfo; otherwise returns \c false.
+    Returns \c true if QFileInfo \a lhs refers to a different file system
+    entry than the one referred to by \a rhs; otherwise returns \c false.
 
     \sa operator==()
 */
 
 /*!
-    Returns \c true if this QFileInfo and \a fileinfo refer to the same
+    \fn bool QFileInfo::operator==(const QFileInfo &lhs, const QFileInfo &rhs)
+
+    Returns \c true if QFileInfo \a lhs and QFileInfo \a rhs refer to the same
     entry on the file system; otherwise returns \c false.
 
     Note that the result of comparing two empty QFileInfo objects, containing
@@ -443,34 +448,35 @@ QFileInfo::~QFileInfo()
 
     \sa operator!=()
 */
-bool QFileInfo::operator==(const QFileInfo &fileinfo) const
+bool comparesEqual(const QFileInfo &lhs, const QFileInfo &rhs)
 {
-    Q_D(const QFileInfo);
-    // ### Qt 5: understand long and short file names on Windows
-    // ### (GetFullPathName()).
-    if (fileinfo.d_ptr == d_ptr)
+    if (rhs.d_ptr == lhs.d_ptr)
         return true;
-    if (d->isDefaultConstructed || fileinfo.d_ptr->isDefaultConstructed)
+    if (lhs.d_ptr->isDefaultConstructed || rhs.d_ptr->isDefaultConstructed)
         return false;
 
     // Assume files are the same if path is the same
-    if (d->fileEntry.filePath() == fileinfo.d_ptr->fileEntry.filePath())
+    if (lhs.d_ptr->fileEntry.filePath() == rhs.d_ptr->fileEntry.filePath())
         return true;
 
     Qt::CaseSensitivity sensitive;
-    if (d->fileEngine == nullptr || fileinfo.d_ptr->fileEngine == nullptr) {
-        if (d->fileEngine != fileinfo.d_ptr->fileEngine) // one is native, the other is a custom file-engine
+    if (lhs.d_ptr->fileEngine == nullptr || rhs.d_ptr->fileEngine == nullptr) {
+        if (lhs.d_ptr->fileEngine != rhs.d_ptr->fileEngine) // one is native, the other is a custom file-engine
             return false;
 
-        sensitive = QFileSystemEngine::isCaseSensitive() ? Qt::CaseSensitive : Qt::CaseInsensitive;
-    } else {
-        if (d->fileEngine->caseSensitive() != fileinfo.d_ptr->fileEngine->caseSensitive())
+        const bool lhsCaseSensitive = QFileSystemEngine::isCaseSensitive(lhs.d_ptr->fileEntry, lhs.d_ptr->metaData);
+        if (lhsCaseSensitive != QFileSystemEngine::isCaseSensitive(rhs.d_ptr->fileEntry, rhs.d_ptr->metaData))
             return false;
-        sensitive = d->fileEngine->caseSensitive() ? Qt::CaseSensitive : Qt::CaseInsensitive;
+
+        sensitive = lhsCaseSensitive ? Qt::CaseSensitive : Qt::CaseInsensitive;
+    } else {
+        if (lhs.d_ptr->fileEngine->caseSensitive() != rhs.d_ptr->fileEngine->caseSensitive())
+            return false;
+        sensitive = lhs.d_ptr->fileEngine->caseSensitive() ? Qt::CaseSensitive : Qt::CaseInsensitive;
     }
 
    // Fallback to expensive canonical path computation
-   return canonicalFilePath().compare(fileinfo.canonicalFilePath(), sensitive) == 0;
+   return lhs.canonicalFilePath().compare(rhs.canonicalFilePath(), sensitive) == 0;
 }
 
 /*!
@@ -485,9 +491,7 @@ QFileInfo &QFileInfo::operator=(const QFileInfo &fileinfo)
 /*!
     \fn void QFileInfo::swap(QFileInfo &other)
     \since 5.0
-
-    Swaps this file info with \a other. This function is very fast and
-    never fails.
+    \memberswap{file info}
 */
 
 /*!
@@ -745,10 +749,8 @@ bool QFileInfo::exists(const QString &path)
         return false;
     QFileSystemEntry entry(path);
     QFileSystemMetaData data;
-    std::unique_ptr<QAbstractFileEngine> engine
-        {QFileSystemEngine::resolveEntryAndCreateLegacyEngine(entry, data)};
     // Expensive fallback to non-QFileSystemEngine implementation
-    if (engine)
+    if (auto engine = QFileSystemEngine::createLegacyEngine(entry, data))
         return QFileInfo(new QFileInfoPrivate(entry, data, std::move(engine))).exists();
 
     QFileSystemEngine::fillMetaData(entry, data, QFileSystemMetaData::ExistsAttribute);
@@ -969,7 +971,7 @@ bool QFileInfo::isReadable() const
     Q_D(const QFileInfo);
     return d->checkAttribute<bool>(
                 QFileSystemMetaData::UserReadPermission,
-                [d]() { return (d->metaData.permissions() & QFile::ReadUser) != 0; },
+                [d]() { return d->metaData.isReadable(); },
                 [d]() { return d->getFileFlags(QAbstractFileEngine::ReadUserPerm); });
 }
 
@@ -989,7 +991,7 @@ bool QFileInfo::isWritable() const
     Q_D(const QFileInfo);
     return d->checkAttribute<bool>(
                 QFileSystemMetaData::UserWritePermission,
-                [d]() { return (d->metaData.permissions() & QFile::WriteUser) != 0; },
+                [d]() { return d->metaData.isWritable(); },
                 [d]() { return d->getFileFlags(QAbstractFileEngine::WriteUserPerm); });
 }
 
@@ -1009,7 +1011,7 @@ bool QFileInfo::isExecutable() const
     Q_D(const QFileInfo);
     return d->checkAttribute<bool>(
                 QFileSystemMetaData::UserExecutePermission,
-                [d]() { return (d->metaData.permissions() & QFile::ExeUser) != 0; },
+                [d]() { return d->metaData.isExecutable(); },
                 [d]() { return d->getFileFlags(QAbstractFileEngine::ExeUserPerm); });
 }
 
@@ -1175,6 +1177,57 @@ bool QFileInfo::isSymbolicLink() const
                 QFileSystemMetaData::LegacyLinkType,
                 [d]() { return d->metaData.isLink(); },
                 [d]() { return d->getFileFlags(QAbstractFileEngine::LinkType); });
+}
+
+/*!
+    \since 6.10
+
+    Returns \c true if this QFileInfo refers to a file system entry that is
+    \e not a directory, regular file or symbolic link. Otherwise returns
+    \c false.
+
+    If this QFileInfo refers to a nonexistent entry, this method returns
+    \c false.
+
+    If the entry is a dangling symbolic link (the target doesn't exist), this
+    method returns \c false. For a non-dangling symbolic link, this function
+    returns information about the target, not the symbolic link.
+
+    On Unix a special (other) file system entry is a FIFO, socket, character
+    device, or block device. For more details, see the
+    \l{https://pubs.opengroup.org/onlinepubs/9699919799/functions/mknod.html}{\c mknod}
+    manual page.
+
+    On Windows (for historical reasons, see \l{Symbolic Links and Shortcuts})
+    this method returns \c true for \c .lnk files.
+
+    \sa isDir(), isFile(), isSymLink(), QDirListing::IteratorFlag::ExcludeOther
+*/
+bool QFileInfo::isOther() const
+{
+    Q_D(const QFileInfo);
+    using M = QFileSystemMetaData::MetaDataFlag;
+    // No M::LinkType to make QFileSystemEngine always call stat().
+    // M::WinLnkType is only relevant on Windows for '.lnk' files
+    constexpr auto mdFlags = M::ExistsAttribute | M::DirectoryType | M::FileType | M::WinLnkType;
+
+    auto fsLambda = [d]() {
+        // Check isLnkFile() first because currently exists() returns false for
+        // a broken '.lnk' where the target doesn't exist.
+        if (d->metaData.isLnkFile()) // Always false on non-Windows OSes
+            return true;
+        return d->metaData.exists() && !d->metaData.isDirectory() && !d->metaData.isFile();
+    };
+
+    auto engineLambda = [d]() {
+        using F = QAbstractFileEngine::FileFlag;
+        return d->getFileFlags(F::ExistsFlag)
+            && !d->getFileFlags(F::LinkType) // QAFE doesn't have a separate type for ".lnk" file
+            && !d->getFileFlags(F::DirectoryType)
+            && !d->getFileFlags(F::FileType);
+    };
+
+    return d->checkAttribute<bool>(mdFlags, std::move(fsLambda), std::move(engineLambda));
 }
 
 /*!

@@ -16,6 +16,7 @@ Q_DECLARE_JNI_CLASS(Locale, "java/util/Locale")
 Q_DECLARE_JNI_CLASS(Resources, "android/content/res/Resources")
 Q_DECLARE_JNI_CLASS(Configuration, "android/content/res/Configuration")
 Q_DECLARE_JNI_CLASS(LocaleList, "android/os/LocaleList")
+Q_DECLARE_JNI_CLASS(DateFormat, "android/text/format/DateFormat")
 
 using namespace QtJniTypes;
 
@@ -37,10 +38,64 @@ void QAndroidSystemLocale::getLocaleFromJava() const
     }();
 
     const QString languageCode = javaLocaleObject.callMethod<QString>("getLanguage");
-    const QString countryCode = javaLocaleObject.callMethod<QString>("getCountry");
+    const QString extraCodes[3] = {
+        javaLocaleObject.callMethod<QString>("getScript"),
+        javaLocaleObject.callMethod<QString>("getCountry"),
+        javaLocaleObject.callMethod<QString>("getVariant"),
+    };
+    QString fullName = languageCode;
+    for (const QString &code : extraCodes) {
+        if (code.isEmpty())
+            continue;
+        if (!fullName.isEmpty())
+            fullName += u'_';
+        fullName += code;
+    }
+
+    const bool is24HourFormat = DateFormat::callStaticMethod<bool>("is24HourFormat",
+                                    QNativeInterface::QAndroidApplication::context());
 
     QWriteLocker locker(&m_lock);
-    m_locale = QLocale(languageCode + u'_' + countryCode);
+    m_locale = QLocale(fullName);
+    m_24hFormat = is24HourFormat;
+}
+
+QString QAndroidSystemLocale::convertTo24hFormat(const QString &format) const
+{
+    if (!m_24hFormat)
+        return format;
+
+    QString format24(format);
+    bool inQuoted = false;
+    for (qsizetype i = 0; i < format24.size(); ++i) {
+        if (format24[i] == QLatin1Char('\'')) {
+            inQuoted = !inQuoted;
+            continue;
+        }
+        if (inQuoted)
+            continue;
+
+        // remove AM/PM markerg from format string
+        const auto c = format24[i].toUpper();
+        if (c == QLatin1Char('A') || c == QLatin1Char('P'))
+            format24.remove(i--, 1);
+    }
+
+    return format24.trimmed();
+}
+
+QString QAndroidSystemLocale::timeToString(const QTime &time, QLocale::FormatType type) const
+{
+    if (m_24hFormat)
+        return m_locale.toString(time, convertTo24hFormat(m_locale.timeFormat(type)));
+    return m_locale.toString(time, type);
+}
+
+QString QAndroidSystemLocale::dateTimeToString(const QDateTime &dt, QLocale::FormatType type) const
+{
+    if (m_24hFormat)
+        return m_locale.toString(dt, convertTo24hFormat(m_locale.dateTimeFormat(type)));
+    return m_locale.toString(dt, type);
 }
 
 QVariant QAndroidSystemLocale::query(QueryType type, QVariant &&in) const
@@ -55,6 +110,8 @@ QVariant QAndroidSystemLocale::query(QueryType type, QVariant &&in) const
     switch (type) {
     case DecimalPoint:
         return m_locale.decimalPoint();
+    case Grouping:
+        return QVariant::fromValue(localeData(m_locale)->m_data->groupSizes());
     case GroupSeparator:
         return m_locale.groupSeparator();
     case ZeroDigit:
@@ -66,9 +123,9 @@ QVariant QAndroidSystemLocale::query(QueryType type, QVariant &&in) const
     case DateFormatShort:
         return m_locale.dateFormat(QLocale::ShortFormat);
     case TimeFormatLong:
-        return m_locale.timeFormat(QLocale::LongFormat);
+        return convertTo24hFormat(m_locale.timeFormat(QLocale::LongFormat));
     case TimeFormatShort:
-        return m_locale.timeFormat(QLocale::ShortFormat);
+        return convertTo24hFormat(m_locale.timeFormat(QLocale::ShortFormat));
     case DayNameLong:
         return m_locale.dayName(in.toInt(), QLocale::LongFormat);
     case DayNameShort:
@@ -98,17 +155,17 @@ QVariant QAndroidSystemLocale::query(QueryType type, QVariant &&in) const
     case DateToStringShort:
         return m_locale.toString(in.toDate(), QLocale::ShortFormat);
     case TimeToStringLong:
-        return m_locale.toString(in.toTime(), QLocale::LongFormat);
+        return timeToString(in.toTime(), QLocale::LongFormat);
     case TimeToStringShort:
-        return m_locale.toString(in.toTime(), QLocale::ShortFormat);
+        return timeToString(in.toTime(), QLocale::ShortFormat);
     case DateTimeFormatLong:
-        return m_locale.dateTimeFormat(QLocale::LongFormat);
+        return convertTo24hFormat(m_locale.dateTimeFormat(QLocale::LongFormat));
     case DateTimeFormatShort:
-        return m_locale.dateTimeFormat(QLocale::ShortFormat);
+        return convertTo24hFormat(m_locale.dateTimeFormat(QLocale::ShortFormat));
     case DateTimeToStringLong:
-        return m_locale.toString(in.toDateTime(), QLocale::LongFormat);
+        return dateTimeToString(in.toDateTime(), QLocale::LongFormat);
     case DateTimeToStringShort:
-        return m_locale.toString(in.toDateTime(), QLocale::ShortFormat);
+        return dateTimeToString(in.toDateTime(), QLocale::ShortFormat);
     case PositiveSign:
         return m_locale.positiveSign();
     case AMText:

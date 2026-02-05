@@ -1,5 +1,6 @@
 // Copyright (C) 2016 The Qt Company Ltd.
 // SPDX-License-Identifier: LicenseRef-Qt-Commercial OR LGPL-3.0-only OR GPL-2.0-only OR GPL-3.0-only
+// Qt-Security score:critical reason:network-protocol
 
 #include "qsocks5socketengine_p.h"
 
@@ -21,6 +22,7 @@
 #include <qendian.h>
 #include <qnetworkinterface.h>
 
+#include <QtCore/qbasictimer.h>
 #include <QtCore/qpointer.h>
 
 #include <memory>
@@ -257,9 +259,9 @@ struct QSocks5ConnectData : public QSocks5Data
 struct QSocks5BindData : public QSocks5Data
 {
     QHostAddress localAddress;
-    quint16 localPort;
+    quint16 localPort = 0;
     QHostAddress peerAddress;
-    quint16 peerPort;
+    quint16 peerPort = 0;
     QElapsedTimer timeStamp;
 };
 
@@ -267,15 +269,15 @@ struct QSocks5RevivedDatagram
 {
     QByteArray data;
     QHostAddress address;
-    quint16 port;
+    quint16 port = 0;
 };
 
 #ifndef QT_NO_UDPSOCKET
 struct QSocks5UdpAssociateData : public QSocks5Data
 {
-    QUdpSocket *udpSocket;
+    QUdpSocket *udpSocket = nullptr;
     QHostAddress associateAddress;
-    quint16 associatePort;
+    quint16 associatePort = 0;
     QQueue<QSocks5RevivedDatagram> pendingDatagrams;
 };
 #endif
@@ -295,7 +297,7 @@ protected:
     void timerEvent(QTimerEvent * event) override;
 
     QRecursiveMutex mutex;
-    int sweepTimerId = -1;
+    QBasicTimer sweepTimer;
     //socket descriptor, data, timestamp
     QHash<qintptr, QSocks5BindData *> store;
 };
@@ -323,8 +325,8 @@ void QSocks5BindStore::add(qintptr socketDescriptor, QSocks5BindData *bindData)
     store.insert(socketDescriptor, bindData);
 
     // start sweep timer if not started
-    if (sweepTimerId == -1)
-        sweepTimerId = startTimer(1min);
+    if (!sweepTimer.isActive())
+        sweepTimer.start(1min, this);
 }
 
 bool QSocks5BindStore::contains(qintptr socketDescriptor)
@@ -350,17 +352,15 @@ QSocks5BindData *QSocks5BindStore::retrieve(qintptr socketDescriptor)
         QSOCKS5_DEBUG << "__ERROR__ binddata == 0";
     }
     // stop the sweep timer if not needed
-    if (store.isEmpty()) {
-        killTimer(sweepTimerId);
-        sweepTimerId = -1;
-    }
+    if (store.isEmpty())
+        sweepTimer.stop();
     return bindData;
 }
 
 void QSocks5BindStore::timerEvent(QTimerEvent * event)
 {
     QMutexLocker lock(&mutex);
-    if (event->timerId() == sweepTimerId) {
+    if (event->id() == sweepTimer.id()) {
         QSOCKS5_DEBUG << "QSocks5BindStore performing sweep";
         for (auto it = store.begin(), end = store.end(); it != end;) {
             if (it.value()->timeStamp.hasExpired(350000)) {
@@ -967,7 +967,7 @@ QSocks5SocketEngine::~QSocks5SocketEngine()
 
 static int nextDescriptor()
 {
-    static QBasicAtomicInt counter;
+    Q_CONSTINIT static QBasicAtomicInt counter = Q_BASIC_ATOMIC_INITIALIZER(0);
     return 1 + counter.fetchAndAddRelaxed(1);
 }
 

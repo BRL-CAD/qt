@@ -5,6 +5,8 @@
 #define QTDEPRECATIONMARKERS_H
 
 #include <QtCore/qtconfigmacros.h>
+#include <QtCore/qtclasshelpermacros.h>
+#include <QtCore/qtdeprecationdefinitions.h>
 #include <QtCore/qtversionchecks.h>
 #include <QtCore/qcompilerdetection.h> // for Q_DECL_DEPRECATED
 
@@ -16,6 +18,7 @@
 QT_BEGIN_NAMESPACE
 
 #if defined(QT_NO_DEPRECATED)
+/* undef, so as to cause compile-errors when they're used outside #if QT_DEPRECATED_SINCE blocks */
 #  undef QT_DEPRECATED
 #  undef QT_DEPRECATED_X
 #  undef QT_DEPRECATED_VARIABLE
@@ -44,28 +47,6 @@ QT_BEGIN_NAMESPACE
 #  define Q_DECL_ENUMERATOR_DEPRECATED_X(ignored)
 #endif
 
-// If the deprecated macro is defined, use its value
-#if !defined(QT_DISABLE_DEPRECATED_UP_TO) && defined(QT_DISABLE_DEPRECATED_BEFORE)
-#  define QT_DISABLE_DEPRECATED_UP_TO QT_DISABLE_DEPRECATED_BEFORE
-#endif
-
-// If the deprecated macro is defined, use its value
-#if !defined(QT_WARN_DEPRECATED_UP_TO) && defined(QT_DEPRECATED_WARNINGS_SINCE)
-#  define QT_WARN_DEPRECATED_UP_TO QT_DEPRECATED_WARNINGS_SINCE
-#endif
-
-#ifndef QT_WARN_DEPRECATED_UP_TO
-# ifdef QT_DISABLE_DEPRECATED_UP_TO
-#  define QT_WARN_DEPRECATED_UP_TO QT_DISABLE_DEPRECATED_UP_TO
-# else
-#  define QT_WARN_DEPRECATED_UP_TO QT_VERSION
-# endif
-#endif
-
-#ifndef QT_DISABLE_DEPRECATED_UP_TO
-#define QT_DISABLE_DEPRECATED_UP_TO QT_VERSION_CHECK(5, 0, 0)
-#endif
-
 /*
     QT_DEPRECATED_SINCE(major, minor) evaluates as true if the Qt version is greater than
     the deprecation point specified.
@@ -83,6 +64,40 @@ QT_BEGIN_NAMESPACE
 #else
 #define QT_DEPRECATED_SINCE(major, minor) 0
 #endif
+
+/*
+    QT_REMOVAL_QT{VER}_DEPRECATED_SINCE(major, minor)
+
+    The macro should be used if the API is deprecated and should be removed
+    in the {VER} major release.
+
+    The \a major and \a minor parameters specify the deprecation version.
+
+    For now, we provide the macros to remove the deprecated APIs in Qt 7
+    and in Qt 8.
+
+    Example:
+
+    \code
+    #if QT_REMOVAL_QT7_DEPRECATED_SINCE(6, 9)
+        QT_DEPRECATED_VERSION_X_6_9("The reason for the deprecation")
+        void deprecatedFunc();
+    #endif
+    \endcode
+
+    The \c {deprecatedFunc()} function is deprecated since Qt 6.9, and will be
+    completely removed in Qt 7.0.
+*/
+#define QT_DEPRECATED_TO_BE_REMOVED_HELPER(dep_major, dep_minor, rem_major) \
+    (QT_DEPRECATED_SINCE(dep_major, dep_minor) && (QT_VERSION < QT_VERSION_CHECK(rem_major, 0, 0)))
+
+// For APIs that should be removed in Qt 7
+#define QT_REMOVAL_QT7_DEPRECATED_SINCE(major, minor) \
+    QT_DEPRECATED_TO_BE_REMOVED_HELPER(major, minor, 7)
+
+// For APIs that should be removed in Qt 8
+#define QT_REMOVAL_QT8_DEPRECATED_SINCE(major, minor) \
+    QT_DEPRECATED_TO_BE_REMOVED_HELPER(major, minor, 8)
 
 /*
   QT_DEPRECATED_VERSION(major, minor) and QT_DEPRECATED_VERSION_X(major, minor, text)
@@ -219,6 +234,30 @@ QT_BEGIN_NAMESPACE
 # define QT_DEPRECATED_VERSION_6_11
 #endif
 
+#if QT_WARN_DEPRECATED_UP_TO >= QT_VERSION_CHECK(6, 12, 0)
+# define QT_DEPRECATED_VERSION_X_6_12(text) QT_DEPRECATED_X(text)
+# define QT_DEPRECATED_VERSION_6_12         QT_DEPRECATED
+#else
+# define QT_DEPRECATED_VERSION_X_6_12(text)
+# define QT_DEPRECATED_VERSION_6_12
+#endif
+
+#if QT_WARN_DEPRECATED_UP_TO >= QT_VERSION_CHECK(6, 13, 0)
+# define QT_DEPRECATED_VERSION_X_6_13(text) QT_DEPRECATED_X(text)
+# define QT_DEPRECATED_VERSION_6_13         QT_DEPRECATED
+#else
+# define QT_DEPRECATED_VERSION_X_6_13(text)
+# define QT_DEPRECATED_VERSION_6_13
+#endif
+
+#if QT_WARN_DEPRECATED_UP_TO >= QT_VERSION_CHECK(6, 14, 0)
+# define QT_DEPRECATED_VERSION_X_6_14(text) QT_DEPRECATED_X(text)
+# define QT_DEPRECATED_VERSION_6_14         QT_DEPRECATED
+#else
+# define QT_DEPRECATED_VERSION_X_6_14(text)
+# define QT_DEPRECATED_VERSION_6_14
+#endif
+
 #define QT_DEPRECATED_VERSION_X_5(minor, text)      QT_DEPRECATED_VERSION_X_5_##minor(text)
 #define QT_DEPRECATED_VERSION_X(major, minor, text) QT_DEPRECATED_VERSION_X_##major##_##minor(text)
 
@@ -327,11 +366,22 @@ QT_BEGIN_NAMESPACE
 # define QT_IF_DEPRECATED_SINCE_6_11(whenTrue, whenFalse) whenTrue
 #endif
 
+#if QT_DEPRECATED_SINCE(6, 12)
+# define QT_IF_DEPRECATED_SINCE_6_12(whenTrue, whenFalse) whenFalse
+#else
+# define QT_IF_DEPRECATED_SINCE_6_12(whenTrue, whenFalse) whenTrue
+#endif
+
+#if QT_DEPRECATED_SINCE(6, 13)
+# define QT_IF_DEPRECATED_SINCE_6_13(whenTrue, whenFalse) whenFalse
+#else
+# define QT_IF_DEPRECATED_SINCE_6_13(whenTrue, whenFalse) whenTrue
+#endif
+
 #ifdef __cplusplus
 // A tag to help mark stuff deprecated (cf. QStringViewLiteral)
 namespace QtPrivate {
-enum class Deprecated_t {};
-constexpr inline Deprecated_t Deprecated = {};
+inline QT_DEFINE_TAG(Deprecated);
 }
 #endif
 

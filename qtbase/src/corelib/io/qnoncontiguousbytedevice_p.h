@@ -1,5 +1,6 @@
 // Copyright (C) 2016 The Qt Company Ltd.
 // SPDX-License-Identifier: LicenseRef-Qt-Commercial OR LGPL-3.0-only OR GPL-2.0-only OR GPL-3.0-only
+// Qt-Security score:significant reason:default
 
 #ifndef QNONCONTIGUOUSBYTEDEVICE_P_H
 #define QNONCONTIGUOUSBYTEDEVICE_P_H
@@ -52,8 +53,8 @@ public:
     static QNonContiguousByteDevice *create(QIODevice *device);
     static std::shared_ptr<QNonContiguousByteDevice> createShared(QIODevice *device);
 
-    static QNonContiguousByteDevice *create(QByteArray *byteArray);
-    static std::shared_ptr<QNonContiguousByteDevice> createShared(QByteArray *byteArray);
+    static QNonContiguousByteDevice *create(const QByteArray &byteArray);
+    static std::shared_ptr<QNonContiguousByteDevice> createShared(const QByteArray &byteArray);
 
     static QNonContiguousByteDevice *create(std::shared_ptr<QRingBuffer> ringBuffer);
     static std::shared_ptr<QNonContiguousByteDevice> createShared(std::shared_ptr<QRingBuffer> ringBuffer);
@@ -66,8 +67,10 @@ public:
 
 class QNonContiguousByteDeviceByteArrayImpl : public QNonContiguousByteDevice
 {
+    Q_OBJECT
 public:
-    explicit QNonContiguousByteDeviceByteArrayImpl(QByteArray *ba);
+    explicit QNonContiguousByteDeviceByteArrayImpl(QByteArray ba);
+    explicit QNonContiguousByteDeviceByteArrayImpl(QBuffer *buffer);
     ~QNonContiguousByteDeviceByteArrayImpl();
     const char *readPointer(qint64 maximumLength, qint64 &len) override;
     bool advanceReadPointer(qint64 amount) override;
@@ -77,12 +80,14 @@ public:
     qint64 pos() const override;
 
 protected:
-    QByteArray *byteArray;
-    qint64 currentPosition;
+    QByteArray byteArray;
+    QByteArrayView view;
+    qint64 currentPosition = 0;
 };
 
 class QNonContiguousByteDeviceRingBufferImpl : public QNonContiguousByteDevice
 {
+    Q_OBJECT
 public:
     explicit QNonContiguousByteDeviceRingBufferImpl(std::shared_ptr<QRingBuffer> rb);
     ~QNonContiguousByteDeviceRingBufferImpl();
@@ -122,27 +127,10 @@ protected:
     qint64 initialPosition;
 };
 
-class QNonContiguousByteDeviceBufferImpl : public QNonContiguousByteDevice
-{
-    Q_OBJECT
-public:
-    explicit QNonContiguousByteDeviceBufferImpl(QBuffer *b);
-    ~QNonContiguousByteDeviceBufferImpl();
-    const char *readPointer(qint64 maximumLength, qint64 &len) override;
-    bool advanceReadPointer(qint64 amount) override;
-    bool atEnd() const override;
-    bool reset() override;
-    qint64 size() const override;
-
-protected:
-    QBuffer *buffer;
-    QByteArray byteArray;
-    QNonContiguousByteDeviceByteArrayImpl *arrayImpl;
-};
-
 // ... and the reverse thing
 class QByteDeviceWrappingIoDevice : public QIODevice
 {
+    Q_OBJECT
 public:
     explicit QByteDeviceWrappingIoDevice(QNonContiguousByteDevice *bd);
     ~QByteDeviceWrappingIoDevice();

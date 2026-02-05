@@ -1,8 +1,8 @@
 // Copyright (C) 2016 The Qt Company Ltd.
 // SPDX-License-Identifier: LicenseRef-Qt-Commercial OR LGPL-3.0-only OR GPL-2.0-only OR GPL-3.0-only
+// Qt-Security score:critical reason:data-parser
 
 #include "qdatastream.h"
-#include "qdatastream_p.h"
 
 #if !defined(QT_NO_DATASTREAM) || defined(QT_BOOTSTRAPPED)
 #include "qbuffer.h"
@@ -12,6 +12,8 @@
 #include <ctype.h>
 #include <stdlib.h>
 #include "qendian.h"
+
+#include <QtCore/q20memory.h>
 
 QT_BEGIN_NAMESPACE
 
@@ -271,7 +273,7 @@ constexpr quint32 QDataStream::ExtendedSize;
         return retVal;
 
 #define CHECK_STREAM_TRANSACTION_PRECOND(retVal) \
-    if (!d || d->transactionDepth == 0) { \
+    if (transactionDepth == 0) { \
         qWarning("QDataStream: No transaction in progress"); \
         return retVal; \
     }
@@ -284,12 +286,6 @@ constexpr quint32 QDataStream::ExtendedSize;
 
 QDataStream::QDataStream()
 {
-    dev = nullptr;
-    owndev = false;
-    byteorder = BigEndian;
-    ver = Qt_DefaultCompiledVersion;
-    noswap = QSysInfo::ByteOrder == QSysInfo::BigEndian;
-    q_status = Ok;
 }
 
 /*!
@@ -301,11 +297,6 @@ QDataStream::QDataStream()
 QDataStream::QDataStream(QIODevice *d)
 {
     dev = d;                                // set device
-    owndev = false;
-    byteorder = BigEndian;                        // default byte order
-    ver = Qt_DefaultCompiledVersion;
-    noswap = QSysInfo::ByteOrder == QSysInfo::BigEndian;
-    q_status = Ok;
 }
 
 /*!
@@ -330,10 +321,6 @@ QDataStream::QDataStream(QByteArray *a, OpenMode flags)
     buf->open(flags);
     dev = buf;
     owndev = true;
-    byteorder = BigEndian;
-    ver = Qt_DefaultCompiledVersion;
-    noswap = QSysInfo::ByteOrder == QSysInfo::BigEndian;
-    q_status = Ok;
 }
 
 /*!
@@ -354,10 +341,6 @@ QDataStream::QDataStream(const QByteArray &a)
     buf->open(QIODevice::ReadOnly);
     dev = buf;
     owndev = true;
-    byteorder = BigEndian;
-    ver = Qt_DefaultCompiledVersion;
-    noswap = QSysInfo::ByteOrder == QSysInfo::BigEndian;
-    q_status = Ok;
 }
 
 /*!
@@ -419,16 +402,14 @@ bool QDataStream::atEnd() const
 }
 
 /*!
+    \fn QDataStream::FloatingPointPrecision QDataStream::floatingPointPrecision() const
+
     Returns the floating point precision of the data stream.
 
     \since 4.6
 
     \sa FloatingPointPrecision, setFloatingPointPrecision()
 */
-QDataStream::FloatingPointPrecision QDataStream::floatingPointPrecision() const
-{
-    return d ? d->floatingPointPrecision : QDataStream::DoublePrecision;
-}
 
 /*!
     Sets the floating point precision of the data stream to \a precision. If the floating point precision is
@@ -452,21 +433,16 @@ QDataStream::FloatingPointPrecision QDataStream::floatingPointPrecision() const
 */
 void QDataStream::setFloatingPointPrecision(QDataStream::FloatingPointPrecision precision)
 {
-    if (!d)
-        d.reset(new QDataStreamPrivate());
-    d->floatingPointPrecision = precision;
+    fpPrecision = precision;
 }
 
 /*!
+    \fn QDataStream::status() const
+
     Returns the status of the data stream.
 
     \sa Status, setStatus(), resetStatus()
 */
-
-QDataStream::Status QDataStream::status() const
-{
-    return q_status;
-}
 
 /*!
     Resets the status of the data stream.
@@ -515,11 +491,14 @@ void QDataStream::setStatus(Status status)
 
 void QDataStream::setByteOrder(ByteOrder bo)
 {
+#if QT_VERSION < QT_VERSION_CHECK(7, 0, 0) && !defined(QT_BOOTSTRAPPED)
+    // accessed by inline byteOrder() prior to Qt 6.8
     byteorder = bo;
+#endif
     if (QSysInfo::ByteOrder == QSysInfo::BigEndian)
-        noswap = (byteorder == BigEndian);
+        noswap = (bo == BigEndian);
     else
-        noswap = (byteorder == LittleEndian);
+        noswap = (bo == LittleEndian);
 }
 
 
@@ -529,46 +508,49 @@ void QDataStream::setByteOrder(ByteOrder bo)
     This enum provides symbolic synonyms for the data serialization
     format version numbers.
 
-    \value Qt_1_0 Version 1 (Qt 1.x)
-    \value Qt_2_0 Version 2 (Qt 2.0)
-    \value Qt_2_1 Version 3 (Qt 2.1, 2.2, 2.3)
-    \value Qt_3_0 Version 4 (Qt 3.0)
-    \value Qt_3_1 Version 5 (Qt 3.1, 3.2)
-    \value Qt_3_3 Version 6 (Qt 3.3)
-    \value Qt_4_0 Version 7 (Qt 4.0, Qt 4.1)
-    \value Qt_4_1 Version 7 (Qt 4.0, Qt 4.1)
-    \value Qt_4_2 Version 8 (Qt 4.2)
-    \value Qt_4_3 Version 9 (Qt 4.3)
-    \value Qt_4_4 Version 10 (Qt 4.4)
-    \value Qt_4_5 Version 11 (Qt 4.5)
-    \value Qt_4_6 Version 12 (Qt 4.6, Qt 4.7, Qt 4.8)
-    \value Qt_4_7 Same as Qt_4_6.
-    \value Qt_4_8 Same as Qt_4_6.
-    \value Qt_4_9 Same as Qt_4_6.
-    \value Qt_5_0 Version 13 (Qt 5.0)
-    \value Qt_5_1 Version 14 (Qt 5.1)
-    \value Qt_5_2 Version 15 (Qt 5.2)
-    \value Qt_5_3 Same as Qt_5_2
-    \value Qt_5_4 Version 16 (Qt 5.4)
-    \value Qt_5_5 Same as Qt_5_4
-    \value Qt_5_6 Version 17 (Qt 5.6)
-    \value Qt_5_7 Same as Qt_5_6
-    \value Qt_5_8 Same as Qt_5_6
-    \value Qt_5_9 Same as Qt_5_6
-    \value Qt_5_10 Same as Qt_5_6
-    \value Qt_5_11 Same as Qt_5_6
-    \value Qt_5_12 Version 18 (Qt 5.12)
-    \value Qt_5_13 Version 19 (Qt 5.13)
-    \value Qt_5_14 Same as Qt_5_13
-    \value Qt_5_15 Same as Qt_5_13
-    \value Qt_6_0 Version 20 (Qt 6.0)
-    \value Qt_6_1 Same as Qt_6_0
-    \value Qt_6_2 Same as Qt_6_0
-    \value Qt_6_3 Same as Qt_6_0
-    \value Qt_6_4 Same as Qt_6_0
-    \value Qt_6_5 Same as Qt_6_0
-    \value Qt_6_6 Version 21 (Qt 6.6)
-    \value Qt_6_7 Version 22 (Qt 6.7)
+    \value Qt_1_0
+    \value Qt_2_0
+    \value Qt_2_1
+    \value Qt_3_0
+    \value Qt_3_1
+    \value Qt_3_3
+    \value Qt_4_0
+    \value Qt_4_1
+    \value Qt_4_2
+    \value Qt_4_3
+    \value Qt_4_4
+    \value Qt_4_5
+    \value Qt_4_6
+    \value Qt_4_7
+    \value Qt_4_8
+    \value Qt_4_9
+    \value Qt_5_0
+    \value Qt_5_1
+    \value Qt_5_2
+    \value Qt_5_3
+    \value Qt_5_4
+    \value Qt_5_5
+    \value Qt_5_6
+    \value Qt_5_7
+    \value Qt_5_8
+    \value Qt_5_9
+    \value Qt_5_10
+    \value Qt_5_11
+    \value Qt_5_12
+    \value Qt_5_13
+    \value Qt_5_14
+    \value Qt_5_15
+    \value Qt_6_0
+    \value Qt_6_1
+    \value Qt_6_2
+    \value Qt_6_3
+    \value Qt_6_4
+    \value Qt_6_5
+    \value Qt_6_6
+    \value Qt_6_7
+    \value Qt_6_8
+    \value Qt_6_9
+    \value Qt_6_10
     \omitvalue Qt_DefaultCompiledVersion
 
     \sa setVersion(), version()
@@ -642,10 +624,7 @@ void QDataStream::startTransaction()
 {
     CHECK_STREAM_PRECOND(Q_VOID)
 
-    if (!d)
-        d.reset(new QDataStreamPrivate());
-
-    if (++d->transactionDepth == 1) {
+    if (++transactionDepth == 1) {
         dev->startTransaction();
         resetStatus();
     }
@@ -674,7 +653,7 @@ void QDataStream::startTransaction()
 bool QDataStream::commitTransaction()
 {
     CHECK_STREAM_TRANSACTION_PRECOND(false)
-    if (--d->transactionDepth == 0) {
+    if (--transactionDepth == 0) {
         CHECK_STREAM_PRECOND(false)
 
         if (q_status == ReadPastEnd) {
@@ -714,7 +693,7 @@ void QDataStream::rollbackTransaction()
     setStatus(ReadPastEnd);
 
     CHECK_STREAM_TRANSACTION_PRECOND(Q_VOID)
-    if (--d->transactionDepth != 0)
+    if (--transactionDepth != 0)
         return;
 
     CHECK_STREAM_PRECOND(Q_VOID)
@@ -750,7 +729,7 @@ void QDataStream::abortTransaction()
     q_status = ReadCorruptData;
 
     CHECK_STREAM_TRANSACTION_PRECOND(Q_VOID)
-    if (--d->transactionDepth != 0)
+    if (--transactionDepth != 0)
         return;
 
     CHECK_STREAM_PRECOND(Q_VOID)
@@ -1052,9 +1031,24 @@ QDataStream &QDataStream::operator>>(char32_t &c)
     return *this;
 }
 
+/*!
+    \relates QChar
+
+    Reads a char from the stream \a in into char \a chr.
+
+    \sa {Serializing Qt Data Types}
+*/
+QDataStream &operator>>(QDataStream &in, QChar &chr)
+{
+    quint16 u;
+    in >> u;
+    chr.unicode() = char16_t(u);
+    return in;
+}
+
 #if QT_DEPRECATED_SINCE(6, 11)
 
-/*
+/*!
     \deprecated [6.11] Use an overload that takes qint64 length instead.
 */
 QDataStream &QDataStream::readBytes(char *&s, uint &l)
@@ -1111,7 +1105,7 @@ QDataStream &QDataStream::readBytes(char *&s, qint64 &l)
         return *this;
     }
 
-    qsizetype step = 1024 * 1024;
+    qsizetype step = (dev->bytesAvailable() >= len) ? len : 1024 * 1024;
     qsizetype allocated = 0;
     std::unique_ptr<char[]> curBuf = nullptr;
 
@@ -1119,7 +1113,7 @@ QDataStream &QDataStream::readBytes(char *&s, qint64 &l)
     do {
         qsizetype blockSize = qMin(step, len - allocated);
         const qsizetype n = allocated + blockSize + 1;
-        if (const auto prevBuf = std::exchange(curBuf, std::make_unique<char[]>(n)))
+        if (const auto prevBuf = std::exchange(curBuf, q20::make_unique_for_overwrite<char[]>(n)))
             memcpy(curBuf.get(), prevBuf.get(), allocated);
         if (readBlock(curBuf.get() + allocated, blockSize) != blockSize)
             return *this;
@@ -1281,17 +1275,12 @@ QDataStream &QDataStream::operator<<(qint64 i)
 */
 
 /*!
+    \fn QDataStream &QDataStream::operator<<(bool i)
+    \overload
+
     Writes a boolean value, \a i, to the stream. Returns a reference
     to the stream.
 */
-
-QDataStream &QDataStream::operator<<(bool i)
-{
-    CHECK_STREAM_WRITE_PRECOND(*this)
-    if (!dev->putChar(qint8(i)))
-        q_status = WriteFailed;
-    return *this;
-}
 
 /*!
     \overload
@@ -1408,6 +1397,26 @@ QDataStream &QDataStream::operator<<(char32_t c)
 {
     return *this << qint32(c);
 }
+
+/*!
+    \relates QChar
+
+    Writes the char \a chr to the stream \a out.
+
+    \sa {Serializing Qt Data Types}
+*/
+QDataStream &operator<<(QDataStream &out, QChar chr)
+{
+    out << quint16(chr.unicode());
+    return out;
+}
+
+/*!
+    \fn QDataStream::operator bool() const
+    \since 6.10
+
+    Returns whether this stream has no errors (\l status() returns \l{Ok}).
+*/
 
 /*!
     Writes the length specifier \a len and the buffer \a s to the

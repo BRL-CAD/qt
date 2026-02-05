@@ -1,10 +1,11 @@
 // Copyright (C) 2023 The Qt Company Ltd.
 // SPDX-License-Identifier: LicenseRef-Qt-Commercial OR LGPL-3.0-only OR GPL-2.0-only OR GPL-3.0-only
+// Qt-Security score:significant reason:default
 
 #include "qgraphicsframecapture_p.h"
 #if (defined (Q_OS_WIN) || defined(Q_OS_LINUX)) && QT_CONFIG(library)
 #include "qgraphicsframecapturerenderdoc_p_p.h"
-#elif defined(Q_OS_MACOS) || defined(Q_OS_IOS)
+#elif QT_CONFIG(metal)
 #include "qgraphicsframecapturemetal_p_p.h"
 #else
 #include "qgraphicsframecapture_p_p.h"
@@ -28,7 +29,7 @@ QGraphicsFrameCapture::QGraphicsFrameCapture()
 {
 #if (defined (Q_OS_WIN) || defined(Q_OS_LINUX)) && QT_CONFIG(library)
     d.reset(new QGraphicsFrameCaptureRenderDoc);
-#elif defined(Q_OS_MACOS) || defined(Q_OS_IOS)
+#elif QT_CONFIG(metal)
     d.reset(new QGraphicsFrameCaptureMetal);
 #endif
 }

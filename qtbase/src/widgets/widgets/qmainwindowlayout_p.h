@@ -1,5 +1,6 @@
 // Copyright (C) 2016 The Qt Company Ltd.
 // SPDX-License-Identifier: LicenseRef-Qt-Commercial OR LGPL-3.0-only OR GPL-2.0-only OR GPL-3.0-only
+// Qt-Security score:significant reason:default
 
 #ifndef QMAINWINDOWLAYOUT_P_H
 #define QMAINWINDOWLAYOUT_P_H
@@ -43,6 +44,7 @@ struct QDockWidgetPrivate {
 #endif
 #if QT_CONFIG(toolbar)
 #include "qtoolbararealayout_p.h"
+#include "qtoolbar.h"
 #endif
 
 #include <QtCore/qloggingcategory.h>
@@ -91,6 +93,9 @@ public:
     bool separatorMove(const QPoint &pos);
     bool endSeparatorMove(const QPoint &pos);
     bool windowEvent(QEvent *e);
+
+private:
+    QList<int> findSeparator(const QPoint &pos) const;
 
 #endif // QT_CONFIG(dockwidget)
 
@@ -142,7 +147,7 @@ void QMainWindowLayoutSeparatorHelper<Layout>::adjustCursor(const QPoint &pos)
                 w->unsetCursor();
         }
     } else if (movingSeparator.isEmpty()) { // Don't change cursor when moving separator
-        QList<int> pathToSeparator = layout()->dockAreaLayoutInfo()->findSeparator(pos);
+        QList<int> pathToSeparator = findSeparator(pos);
 
         if (pathToSeparator != hoverSeparator) {
             if (!hoverSeparator.isEmpty())
@@ -280,9 +285,34 @@ bool QMainWindowLayoutSeparatorHelper<Layout>::windowEvent(QEvent *event)
 }
 
 template <typename Layout>
+QList<int> QMainWindowLayoutSeparatorHelper<Layout>::findSeparator(const QPoint &pos) const
+{
+    Layout *layout = const_cast<Layout*>(this->layout());
+#if QT_CONFIG(toolbar)
+    QToolBarAreaLayout *toolBarAreaLayout = layout->toolBarAreaLayout();
+    if (toolBarAreaLayout && !toolBarAreaLayout->isEmpty()) {
+        // We might have a toolbar that is currently expanded, covering
+        // parts of the dock area, in which case we don't want the dock
+        // area layout to treat mouse events for the expanded toolbar as
+        // hitting a separator.
+        const QWidget *widget = layout->window();
+        QWidget *childWidget = widget->childAt(pos);
+        while (childWidget && childWidget != widget) {
+            if (auto *toolBar = qobject_cast<QToolBar*>(childWidget)) {
+                if (!toolBarAreaLayout->indexOf(toolBar).isEmpty())
+                    return {};
+            }
+            childWidget = childWidget->parentWidget();
+        }
+    }
+#endif
+    return layout->dockAreaLayoutInfo()->findSeparator(pos);
+}
+
+template <typename Layout>
 bool QMainWindowLayoutSeparatorHelper<Layout>::startSeparatorMove(const QPoint &pos)
 {
-    movingSeparator = layout()->dockAreaLayoutInfo()->findSeparator(pos);
+    movingSeparator = findSeparator(pos);
 
     if (movingSeparator.isEmpty())
         return false;
@@ -334,7 +364,7 @@ public:
     void restore();
     void apply();
     void childEvent(QChildEvent *event) override;
-    void reparent(QDockWidget *dockWidget);
+    void reparentToMainWindow(QDockWidget *dockWidget);
     void destroyIfSingleItemLeft();
     QList<QDockWidget *> dockWidgets() const { return findChildren<QDockWidget *>(); }
 
@@ -493,6 +523,7 @@ public:
     void removeToolBar(QToolBar *toolbar);
     void toggleToolBarsVisible();
     void moveToolBar(QToolBar *toolbar, int pos);
+    QToolBarAreaLayout *toolBarAreaLayout() { return &layoutState.toolBarAreaLayout; }
 #endif
 
     // dock widgets
@@ -507,7 +538,7 @@ public:
     void splitDockWidget(QDockWidget *after,
                          QDockWidget *dockwidget,
                          Qt::Orientation orientation);
-    Qt::DockWidgetArea dockWidgetArea(QWidget* widget) const;
+    Qt::DockWidgetArea dockWidgetArea(const QWidget* widget) const;
     bool restoreDockWidget(QDockWidget *dockwidget);
 #if QT_CONFIG(tabbar)
     void tabifyDockWidget(QDockWidget *first, QDockWidget *second);
@@ -520,13 +551,12 @@ public:
     void setDocumentMode(bool enabled);
 
     QTabBar *getTabBar();
+    void unuseTabBar(QTabBar *bar);
     QSet<QTabBar*> usedTabBars;
-    QList<QTabBar*> unusedTabBars;
     bool verticalTabsEnabled;
 
     QWidget *getSeparatorWidget();
     QSet<QWidget*> usedSeparatorWidgets;
-    QList<QWidget*> unusedSeparatorWidgets;
     int sep; // separator extent
 
 #if QT_CONFIG(tabwidget)
@@ -614,6 +644,7 @@ private Q_SLOTS:
 #endif
 private:
 #if QT_CONFIG(tabbar)
+    void showTabBars();
     void updateTabBarShapes();
 #endif
     bool isInRestoreState = false;

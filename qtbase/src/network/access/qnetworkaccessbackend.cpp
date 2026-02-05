@@ -1,5 +1,6 @@
 // Copyright (C) 2020 The Qt Company Ltd.
 // SPDX-License-Identifier: LicenseRef-Qt-Commercial OR LGPL-3.0-only OR GPL-2.0-only OR GPL-3.0-only
+// Qt-Security score:significant reason:default
 
 #include "qnetworkaccessbackend_p.h"
 #include "qnetworkreplyimpl_p.h"
@@ -45,7 +46,7 @@ public:
     QNetworkAccessBackend::SecurityFeatures m_securityFeatures;
     QNetworkAccessBackend::IOFeatures m_ioFeatures;
     std::shared_ptr<QNonContiguousByteDevice> uploadByteDevice;
-    QIODevice *wrappedUploadByteDevice;
+    QIODevice *wrappedUploadByteDevice = nullptr;
     QNetworkReplyImplPrivate *m_reply = nullptr;
     QNetworkAccessManagerPrivate *m_manager = nullptr;
 
@@ -258,7 +259,10 @@ QNetworkAccessBackend::QNetworkAccessBackend(TargetTypes targetTypes, IOFeatures
 /*!
     Destructs the QNetworkAccessBackend base class.
 */
-QNetworkAccessBackend::~QNetworkAccessBackend() { }
+QNetworkAccessBackend::~QNetworkAccessBackend()
+{
+    delete d_func()->wrappedUploadByteDevice;
+}
 
 /*!
     Returns the security related features that the backend claims to
@@ -565,6 +569,43 @@ QByteArray QNetworkAccessBackend::rawHeader(const QByteArray &header) const
 void QNetworkAccessBackend::setRawHeader(const QByteArray &header, const QByteArray &value)
 {
     d_func()->m_reply->setRawHeader(header, value);
+}
+
+/*!
+    \since 6.8
+
+    Returns headers that are set in this QNetworkAccessBackend instance.
+
+    \sa setHeaders()
+*/
+QHttpHeaders QNetworkAccessBackend::headers() const
+{
+    return d_func()->m_reply->headers();
+}
+
+/*!
+    \since 6.8
+
+    Sets \a newHeaders as headers, overriding any previously set headers.
+
+    These headers are accessible on the QNetworkReply instance which was
+    returned when calling one of the appropriate functions on
+    QNetworkAccessManager.
+
+    \sa headers()
+*/
+void QNetworkAccessBackend::setHeaders(QHttpHeaders &&newHeaders)
+{
+    d_func()->m_reply->setHeaders(std::move(newHeaders));
+}
+
+/*!
+    \overload
+    \since 6.8
+*/
+void QNetworkAccessBackend::setHeaders(const QHttpHeaders &newHeaders)
+{
+    d_func()->m_reply->setHeaders(newHeaders);
 }
 
 /*!

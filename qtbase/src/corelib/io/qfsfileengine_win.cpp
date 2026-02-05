@@ -1,5 +1,6 @@
 // Copyright (C) 2016 The Qt Company Ltd.
 // SPDX-License-Identifier: LicenseRef-Qt-Commercial OR LGPL-3.0-only OR GPL-2.0-only OR GPL-3.0-only
+// Qt-Security score:critical reason:data-parser
 
 #include "qplatformdefs.h"
 #include "private/qabstractfileengine_p.h"
@@ -396,11 +397,10 @@ bool QFSFileEnginePrivate::nativeIsSequential() const
             || (fileType == FILE_TYPE_PIPE);
 }
 
-bool QFSFileEnginePrivate::nativeRenameOverwrite(const QString &newName)
+bool QFSFileEnginePrivate::nativeRenameOverwrite(const QFileSystemEntry &newEntry)
 {
     if (fileHandle == INVALID_HANDLE_VALUE)
         return false;
-    QFileSystemEntry newEntry(newName, QFileSystemEntry::FromInternalPath());
     const QString newFilePath = newEntry.nativeFilePath();
     const size_t nameByteLength = newFilePath.length() * sizeof(wchar_t);
     if (nameByteLength + sizeof(wchar_t) > std::numeric_limits<DWORD>::max())
@@ -419,16 +419,11 @@ bool QFSFileEnginePrivate::nativeRenameOverwrite(const QString &newName)
 
     bool res = SetFileInformationByHandle(fileHandle, FileRenameInfo, renameInfo,
                                           DWORD(renameDataSize));
-#if 0
-    if (!res)
-        qErrnoWarning("QFSFileEnginePrivate::nativeRenameOverwrite failed");
-#endif
+    if (!res) {
+        DWORD error = GetLastError();
+        q_func()->setError(QFile::RenameError, qt_error_string(int(error)));
+    }
     return res;
-}
-
-bool QFSFileEngine::caseSensitive() const
-{
-    return false;
 }
 
 QString QFSFileEngine::currentPath(const QString &fileName)
@@ -903,12 +898,12 @@ bool QFSFileEnginePrivate::unmap(uchar *ptr)
 /*!
     \reimp
 */
-bool QFSFileEngine::cloneTo(QAbstractFileEngine *target)
+QAbstractFileEngine::TriStateResult QFSFileEngine::cloneTo(QAbstractFileEngine *target)
 {
     // There's some Windows Server 2016 API, but we won't
     // bother with it.
     Q_UNUSED(target);
-    return false;
+    return TriStateResult::NotSupported;
 }
 
 QT_END_NAMESPACE

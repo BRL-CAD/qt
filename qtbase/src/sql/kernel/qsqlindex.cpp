@@ -1,5 +1,6 @@
 // Copyright (C) 2016 The Qt Company Ltd.
 // SPDX-License-Identifier: LicenseRef-Qt-Commercial OR LGPL-3.0-only OR GPL-2.0-only OR GPL-3.0-only
+// Qt-Security score:significant reason:default
 
 #include "qsqlindex.h"
 
@@ -84,19 +85,21 @@ QSqlIndex::~QSqlIndex()
 }
 
 /*!
-    Sets the name of the index to \a name.
+    \property QSqlIndex::name
+    \since 6.8
+    This property holds the name of the index.
 */
-
+/*!
+    \fn QString QSqlIndex::name() const
+    Returns the \l name.
+*/
+/*!
+    Sets \l name to \a name.
+*/
 void QSqlIndex::setName(const QString& name)
 {
     nm = name;
 }
-
-/*!
-    \fn QString QSqlIndex::name() const
-
-    Returns the name of the index.
-*/
 
 /*!
     Appends the field \a field to the list of indexed fields. The
@@ -148,15 +151,17 @@ void QSqlIndex::setDescending(int i, bool desc)
 }
 
 /*!
-    \fn QString QSqlIndex::cursorName() const
-
-    Returns the name of the cursor which the index is associated with.
+    \property QSqlIndex::cursorName
+    \since 6.8
+    This property holds the name of the cursor which the index
+    is associated with.
 */
-
-
 /*!
-    Sets the name of the cursor that the index is associated with to
-    \a cursorName.
+    \fn QString QSqlIndex::cursorName() const
+    Returns the \l cursorName.
+*/
+/*!
+    Sets \l cursorName to \a cursorName.
 */
 void QSqlIndex::setCursorName(const QString& cursorName)
 {

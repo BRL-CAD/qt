@@ -1,5 +1,6 @@
 // Copyright (C) 2020 Intel Corporation.
 // SPDX-License-Identifier: LicenseRef-Qt-Commercial OR LGPL-3.0-only OR GPL-2.0-only OR GPL-3.0-only
+// Qt-Security score:critical reason:cryptography
 
 #ifndef QRANDOM_H
 #define QRANDOM_H
@@ -38,6 +39,8 @@ public:
     // copy constructor & assignment operator (move unnecessary)
     Q_CORE_EXPORT QRandomGenerator(const QRandomGenerator &other);
     Q_CORE_EXPORT QRandomGenerator &operator=(const QRandomGenerator &other);
+
+    ~QRandomGenerator() = default;
 
     friend Q_CORE_EXPORT bool operator==(const QRandomGenerator &rng1, const QRandomGenerator &rng2);
     friend bool operator!=(const QRandomGenerator &rng1, const QRandomGenerator &rng2)

@@ -1,5 +1,6 @@
 // Copyright (C) 2016 The Qt Company Ltd.
 // SPDX-License-Identifier: LicenseRef-Qt-Commercial OR LGPL-3.0-only OR GPL-2.0-only OR GPL-3.0-only
+// Qt-Security score:significant reason:default
 
 #include "qdbustrayicon_p.h"
 
@@ -191,14 +192,18 @@ QTemporaryFile *QDBusTrayIcon::tempIcon(const QIcon &icon)
             // Accessing to process name might be not allowed if the application
             // is confined, thus we can just rely on the current desktop in use
             const QPlatformServices *services = QGuiApplicationPrivate::platformIntegration()->services();
-            necessary = services->desktopEnvironment().split(':').contains("UNITY");
+            if (services)
+                necessary = services->desktopEnvironment().split(':').contains("UNITY");
         }
         necessity_checked = true;
     }
     if (!necessary)
         return nullptr;
     QTemporaryFile *ret = new QTemporaryFile(tempFileTemplate(), this);
-    ret->open();
+    if (!ret->open()) {
+        delete ret;
+        return nullptr;
+    }
     icon.pixmap(QSize(22, 22)).save(ret);
     ret->close();
     return ret;

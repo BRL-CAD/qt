@@ -28,6 +28,8 @@ macro(qt_examples_build_begin)
         qt_internal_find_standalone_parts_config_files()
     endif()
 
+    string(TOLOWER ${PROJECT_NAME} project_name_lower)
+
     if(arg_EXTERNAL_BUILD AND QT_BUILD_EXAMPLES_AS_EXTERNAL)
         # Examples will be built using ExternalProject.
         # We depend on all plugins built as part of the current repo as well as current repo's
@@ -50,7 +52,6 @@ macro(qt_examples_build_begin)
 
         set(QT_IS_EXTERNAL_EXAMPLES_BUILD TRUE)
 
-        string(TOLOWER ${PROJECT_NAME} project_name_lower)
         if(NOT TARGET examples)
             if(QT_BUILD_EXAMPLES_BY_DEFAULT)
                 add_custom_target(examples ALL)
@@ -82,6 +83,15 @@ macro(qt_examples_build_begin)
         if(NOT QT_BUILD_EXAMPLES_BY_DEFAULT)
             set_directory_properties(PROPERTIES EXCLUDE_FROM_ALL TRUE)
         endif()
+
+        # Add active linker flags to all targets created below this subdirectory.
+        qt_internal_get_active_linker_flags(active_linker_flags)
+        if(active_linker_flags)
+            add_link_options(${active_linker_flags})
+        endif()
+
+        # Marker for warnings_as_errors.
+        set(QT_INTERNAL_IS_EXAMPLE_IN_TREE_BUILD ON)
     endif()
 
     # TODO: Change this to TRUE when all examples in all repos are ported to use
@@ -120,6 +130,28 @@ macro(qt_examples_build_begin)
 # files are installed into the original install prefix.
 set(_qt_internal_examples_cmake_install_prefix_backup \"\${CMAKE_INSTALL_PREFIX}\")
 ")
+
+    # Backup the DESTDIR and unset it, so that example installation is not affected by DESTDIR.
+    # This is activated by our CI when QT_INTERNAL_EXAMPLES_INSTALL_PREFIX is set.
+    if(QT_INTERNAL_EXAMPLES_INSTALL_PREFIX)
+        set(_qt_examples_should_unset_destdir TRUE)
+    else()
+        set(_qt_examples_should_unset_destdir FALSE)
+    endif()
+
+    set_property(GLOBAL PROPERTY
+        _qt_examples_should_unset_destdir_${project_name_lower}
+        "${_qt_examples_should_unset_destdir}")
+    if(_qt_examples_should_unset_destdir)
+        install(CODE "
+    # Temporarily unset DESTDIR while examples are being installed.
+    set(_qt_internal_examples_destdir_backup \"\$ENV{DESTDIR}\")
+    unset(ENV{DESTDIR})
+")
+    endif()
+
+    unset(_qt_examples_should_unset_destdir)
+    unset(project_name_lower)
 endmacro()
 
 macro(qt_examples_build_end)
@@ -132,6 +164,13 @@ macro(qt_examples_build_end)
             "${CMAKE_CURRENT_SOURCE_DIR}" EXCLUDE UTILITY ALIAS)
 
     foreach(target ${targets})
+        # Skip re-enabling AUTMOC for object libraries created by _qt_internal_add_rcc_pass2,
+        # to avoid build errors.
+        get_target_property(is_rcc_pass2_obj_lib "${target}" _qt_internal_is_rcc_pass2_obj_lib)
+        if(is_rcc_pass2_obj_lib)
+            continue()
+        endif()
+
         qt_autogen_tools(${target} ENABLE_AUTOGEN_TOOLS "moc" "rcc")
         if(TARGET Qt::Widgets)
             qt_autogen_tools(${target} ENABLE_AUTOGEN_TOOLS "uic")
@@ -145,11 +184,33 @@ set(CMAKE_INSTALL_PREFIX \"\${_qt_internal_examples_cmake_install_prefix_backup}
 ")
 
     set(CMAKE_UNITY_BUILD ${QT_UNITY_BUILD})
+
+    string(TOLOWER ${PROJECT_NAME} project_name_lower)
+    get_property(_qt_examples_should_unset_destdir
+        GLOBAL PROPERTY _qt_examples_should_unset_destdir_${project_name_lower})
+
+    if(_qt_examples_should_unset_destdir)
+        install(CODE "
+    # Restore the DESTDIR env var after examples have been installed.
+    set(ENV{DESTDIR} \"\${_qt_internal_examples_destdir_backup}\")
+    unset(_qt_internal_examples_destdir_backup)
+")
+    endif()
+
+    unset(_qt_examples_should_unset_destdir)
+    unset(project_name_lower)
 endmacro()
 
 # Allows building an example either as an ExternalProject or in-tree with the Qt build.
 # Also allows installing the example sources.
 function(qt_internal_add_example subdir)
+    # Don't show warnings for examples that were added via qt_internal_add_example.
+    # Those that are added via add_subdirectory will see the warning, due to the parent scope
+    # having the variable set to TRUE.
+    if(QT_FEATURE_developer_build AND NOT QT_NO_WARN_ABOUT_EXAMPLE_ADD_SUBDIRECTORY_WARNING)
+        set(QT_WARN_ABOUT_EXAMPLE_ADD_SUBDIRECTORY FALSE)
+    endif()
+
     # Pre-compute unique example name based on the subdir, in case of target name clashes.
     qt_internal_get_example_unique_name(unique_example_name "${subdir}")
 
@@ -179,7 +240,7 @@ function(qt_internal_get_example_install_prefix out_var)
     # Allow customizing the installation path of the examples. Will be used in CI.
     if(QT_INTERNAL_EXAMPLES_INSTALL_PREFIX)
         set(qt_example_install_prefix "${QT_INTERNAL_EXAMPLES_INSTALL_PREFIX}")
-    elseif(QT_BUILD_STANDALONE_EXAMPLES)
+    elseif(QT_BUILD_STANDALONE_EXAMPLES AND NOT QT_NO_FAKE_STANDALONE_EXAMPLE_INSTALL_PREFIX)
         # TODO: We might need to reset and pipe through an empty CMAKE_STAGING_PREFIX if we ever
         # try to run standalone examples in the CI when cross-compiling, similar how it's done in
         # qt_internal_set_up_fake_standalone_parts_install_prefix.
@@ -338,7 +399,7 @@ function(qt_internal_add_example_external_project subdir)
     list(TRANSFORM glob_prefixes APPEND "/${INSTALL_LIBDIR}/cmake/${QT_CMAKE_EXPORT_NAMESPACE}Qml")
 
     set(qml_plugin_cmake_config_file_glob_prefixes "")
-    foreach(glob_prefix IN LISTS glob_prefix)
+    foreach(glob_prefix IN LISTS glob_prefixes)
         if(EXISTS "${glob_prefix}")
             list(APPEND qml_plugin_cmake_config_file_glob_prefixes "${glob_prefix}")
         endif()
@@ -416,6 +477,8 @@ function(qt_internal_add_example_external_project subdir)
         QT_ADDITIONAL_PACKAGES_PREFIX_PATH:STRING
         QT_ADDITIONAL_QML_PLUGIN_GLOB_PREFIXES:STRING
         QT_INTERNAL_SKIP_DEPLOYMENT:BOOL
+        QT_REPO_EXAMPLES_WARNINGS_CLEAN:BOOL
+        WARNINGS_ARE_ERRORS:BOOL
         CMAKE_FIND_ROOT_PATH:STRING
         CMAKE_MODULE_PATH:STRING
         BUILD_SHARED_LIBS:BOOL
@@ -453,6 +516,15 @@ function(qt_internal_add_example_external_project subdir)
     if(QT_INTERNAL_VERBOSE_EXAMPLES)
         list(APPEND var_defs -DCMAKE_MESSAGE_LOG_LEVEL:STRING=DEBUG)
         list(APPEND var_defs -DCMAKE_AUTOGEN_VERBOSE:BOOL=TRUE)
+    endif()
+
+    # Pass active linker flags.
+    qt_internal_get_active_linker_flags(active_linker_flags)
+    if(active_linker_flags)
+        foreach(item_type EXE MODULE SHARED)
+            list(APPEND var_defs
+                "-DCMAKE_${item_type}_LINKER_FLAGS_INIT:STRING=${active_linker_flags}")
+        endforeach()
     endif()
 
     set(deps "")
@@ -548,6 +620,7 @@ function(qt_internal_add_example_external_project subdir)
         TEST_COMMAND     ""
         DEPENDS          ${deps}
         CMAKE_CACHE_ARGS ${var_defs}
+                         -DQT_INTERNAL_IS_EXAMPLE_EP_BUILD:BOOL=TRUE
                          -DCMAKE_INSTALL_PREFIX:STRING=<INSTALL_DIR>
                          -DQT_INTERNAL_SET_EXAMPLE_INSTALL_DIR_TO_DOT:BOOL=TRUE
         ${terminal_args}

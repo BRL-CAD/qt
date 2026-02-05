@@ -1,5 +1,6 @@
 // Copyright (C) 2016 The Qt Company Ltd.
 // SPDX-License-Identifier: LicenseRef-Qt-Commercial OR LGPL-3.0-only OR GPL-2.0-only OR GPL-3.0-only
+// Qt-Security score:significant reason:default
 
 #ifndef QDOCKAREALAYOUT_P_H
 #define QDOCKAREALAYOUT_P_H
@@ -143,8 +144,9 @@ public:
     int next(int idx) const;
     int prev(int idx) const;
 
-    QList<int> indexOf(QWidget *widget) const;
+    QList<int> indexOf(const QWidget *widget) const;
     QList<int> indexOfPlaceHolder(const QString &objectName) const;
+    std::unique_ptr<QLayoutItem> takeWidgetItem(QWidget *widget);
 
     QDockWidget *apply(bool animate);
 
@@ -217,7 +219,7 @@ public:
     bool restoreState(QDataStream &stream, const QList<QDockWidget*> &widgets, bool testing = false);
 
     QList<int> indexOfPlaceHolder(const QString &objectName) const;
-    QList<int> indexOf(QWidget *dockWidget) const;
+    QList<int> indexOf(const QWidget *dockWidget) const;
     QList<int> gapIndex(const QPoint &pos, bool disallowTabs) const;
     QList<int> findSeparator(const QPoint &pos) const;
 

@@ -9,6 +9,10 @@
 #include <QtTest/qtest.h>
 #include <QtTest/private/qcomparisontesthelper_p.h>
 
+#ifndef QTEST_THROW_ON_FAIL
+# error This test requires QTEST_THROW_ON_FAIL being active.
+#endif
+
 class tst_QCompareHelpers : public QObject
 {
     Q_OBJECT
@@ -55,8 +59,49 @@ private Q_SLOTS:
 
     void builtinOrder();
 
-    // Add new test cases to another cpp file, because minGW already complains
-    // about a too large tst_qcomparehelpers.cpp.obj object file
+    // Add new test cases to tst_qcomparehelpers1.cpp, because minGW already
+    // complains about a too large tst_qcomparehelpers.cpp.obj object file
+    void compareWithAttributes();
+
+    void totallyOrderedWrapperBasics();
+
+    void compareAutoReturnType();
+
+private:
+    template <typename LeftType, typename RightType, typename OrderingType>
+    void lexicographicalCompareThreeWayDataImpl();
+
+    template <typename LeftType, typename RightType, typename OrderingType>
+    void lexicographicalCompareThreeWayImpl();
+
+    template <typename LeftType, typename RightType, typename OrderingType>
+    void lexicographicalCompareThreeWayComparatorImpl();
+
+private slots:
+    void lexicographicalCompareThreeWay_ThreeWayCmp_Int_data();
+    void lexicographicalCompareThreeWay_ThreeWayCmp_Int();
+    void lexicographicalCompareThreeWay_ThreeWayCmp_Float_data();
+    void lexicographicalCompareThreeWay_ThreeWayCmp_Float();
+    void lexicographicalCompareThreeWay_ThreeWayCmp_Weak_data();
+    void lexicographicalCompareThreeWay_ThreeWayCmp_Weak();
+
+    void lexicographicalCompareThreeWay_Mixed_Int_data();
+    void lexicographicalCompareThreeWay_Mixed_Int();
+    void lexicographicalCompareThreeWay_Mixed_Float_data();
+    void lexicographicalCompareThreeWay_Mixed_Float();
+    void lexicographicalCompareThreeWay_Mixed_Weak_data();
+    void lexicographicalCompareThreeWay_Mixed_Weak();
+
+    void lexicographicalCompareThreeWay_Comparator_Int_data();
+    void lexicographicalCompareThreeWay_Comparator_Int();
+    void lexicographicalCompareThreeWay_Comparator_Float_data();
+    void lexicographicalCompareThreeWay_Comparator_Float();
+    void lexicographicalCompareThreeWay_Comparator_Weak_data();
+    void lexicographicalCompareThreeWay_Comparator_Weak();
+
+    void lexicographicalCompareThreeWay_Pointers();
+    void lexicographicalCompareThreeWay_NonCopyMove();
+    void lexicographicalCompareThreeWay_CustomPointerHelper();
 };
 
 #endif // TST_QCOMPAREHELPERS_H

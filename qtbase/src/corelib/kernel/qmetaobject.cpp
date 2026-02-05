@@ -26,6 +26,8 @@
 #include <ctype.h>
 #include <memory>
 
+#include <cstring>
+
 QT_BEGIN_NAMESPACE
 
 using namespace Qt::StringLiterals;
@@ -127,7 +129,7 @@ static inline const char *rawStringData(const QMetaObject *mo, int index)
     return reinterpret_cast<const char *>(mo->d.stringdata) + offset;
 }
 
-static inline QLatin1StringView stringDataView(const QMetaObject *mo, int index)
+static inline QByteArrayView stringDataView(const QMetaObject *mo, int index)
 {
     Q_ASSERT(priv(mo->d.data)->revision >= 7);
     uint offset = mo->d.stringdata[2*index];
@@ -136,10 +138,21 @@ static inline QLatin1StringView stringDataView(const QMetaObject *mo, int index)
     return {string, qsizetype(length)};
 }
 
+static inline QByteArray stringData(const QMetaObject *mo, QByteArrayView view)
+{
+    if (QMetaObjectPrivate::get(mo)->flags & AllocatedMetaObject) {
+        // allocate memory, in case the meta object disappears
+        return view.toByteArray();
+    }
+
+    // don't allocate memory: we assume that the meta object remains loaded
+    // forever (modern C++ libraries can't be unloaded from memory anyway)
+    return QByteArray::fromRawData(view.data(), view.size());
+}
+
 static inline QByteArray stringData(const QMetaObject *mo, int index)
 {
-    const auto view = stringDataView(mo, index);
-    return QByteArray::fromRawData(view.data(), view.size());
+    return stringData(mo, stringDataView(mo, index));
 }
 
 static inline QByteArrayView typeNameFromTypeInfo(const QMetaObject *mo, uint typeInfo)
@@ -154,7 +167,7 @@ static inline int typeFromTypeInfo(const QMetaObject *mo, uint typeInfo)
 {
     if (!(typeInfo & IsUnresolvedType))
         return typeInfo;
-    return QMetaType::fromName(rawStringData(mo, typeInfo & TypeNameIndexMask)).id();
+    return qMetaTypeTypeInternal(stringDataView(mo, typeInfo & TypeNameIndexMask));
 }
 
 static auto parse_scope(QByteArrayView qualifiedKey) noexcept
@@ -163,6 +176,8 @@ static auto parse_scope(QByteArrayView qualifiedKey) noexcept
         std::optional<QByteArrayView> scope;
         QByteArrayView key;
     };
+    if (qualifiedKey.startsWith("QFlags<") && qualifiedKey.endsWith('>'))
+        qualifiedKey.slice(7, qualifiedKey.length() - 8);
     const auto scopePos = qualifiedKey.lastIndexOf("::"_L1);
     if (scopePos < 0)
         return R{std::nullopt, qualifiedKey};
@@ -178,7 +193,8 @@ public:
     { return static_cast<const QMetaMethodPrivate *>(q); }
 
     inline QByteArray signature() const;
-    inline QByteArray name() const;
+    inline QByteArrayView qualifiedName() const noexcept;
+    inline QByteArrayView name() const noexcept;
     inline int typesDataIndex() const;
     inline const char *rawReturnTypeName() const;
     inline int returnType() const;
@@ -189,10 +205,10 @@ public:
     inline void getParameterTypes(int *types) const;
     inline const QtPrivate::QMetaTypeInterface *returnMetaTypeInterface() const;
     inline const QtPrivate::QMetaTypeInterface *const *parameterMetaTypeInterfaces() const;
-    inline QByteArray parameterTypeName(int index) const;
+    inline QByteArrayView parameterTypeName(int index) const noexcept;
     inline QList<QByteArray> parameterTypes() const;
     inline QList<QByteArray> parameterNames() const;
-    inline QByteArray tag() const;
+    inline const char *tag() const;
     inline int ownMethodIndex() const;
     inline int ownConstructorMethodIndex() const;
 
@@ -458,7 +474,7 @@ QMetaType QMetaObject::metaType() const
 
     The offset is the sum of all the methods in the class's
     superclasses (which is always positive since QObject has the
-    deleteLater() slot and a destroyed() signal).
+    \l{QObject::}{deleteLater()} slot and a \l{QObject::}{destroyed()} signal).
 
     \sa method(), methodCount(), indexOfMethod()
 */
@@ -501,7 +517,7 @@ int QMetaObject::enumeratorOffset() const
 
     The offset is the sum of all the properties in the class's
     superclasses (which is always positive since QObject has the
-    name() property).
+    \l{QObject::}{objectName} property).
 
     \sa property(), propertyCount(), indexOfProperty()
 */
@@ -631,7 +647,7 @@ int QMetaObject::classInfoCount() const
 // matches the given name, argument count and argument types, otherwise
 // returns \c false.
 bool QMetaObjectPrivate::methodMatch(const QMetaObject *m, const QMetaMethod &method,
-                        const QByteArray &name, int argc,
+                        QByteArrayView name, int argc,
                         const QArgumentType *types)
 {
     const QMetaMethod::Data &data = method.data;
@@ -639,17 +655,22 @@ bool QMetaObjectPrivate::methodMatch(const QMetaObject *m, const QMetaMethod &me
     if (priv->parameterCount() != argc)
         return false;
 
-    if (stringData(m, data.name()) != name)
+    // QMetaMethodPrivate::name() is looking for a colon and slicing the prefix
+    // away; that's too slow: we already know where the colon, if any, has to be:
+    if (const auto qname = priv->qualifiedName(); !qname.endsWith(name))
+        return false;
+    else if (const auto n = qname.chopped(name.size()); !n.isEmpty() && !n.endsWith(':'))
         return false;
 
     const QtPrivate::QMetaTypeInterface * const *ifaces = priv->parameterMetaTypeInterfaces();
     int paramsIndex = data.parameters() + 1;
     for (int i = 0; i < argc; ++i) {
         uint typeInfo = m->d.data[paramsIndex + i];
-        if (int id = types[i].type()) {
-            if (id == QMetaType(ifaces[i]).id())
+        QMetaType mt = types[i].metaType();
+        if (mt.isValid()) {
+            if (mt == QMetaType(ifaces[i]))
                 continue;
-            if (id != typeFromTypeInfo(m, typeInfo))
+            if (mt.id() != typeFromTypeInfo(m, typeInfo))
                 return false;
         } else {
             if (types[i].name() == QMetaType(ifaces[i]).name())
@@ -688,7 +709,7 @@ QMetaMethod QMetaObjectPrivate::firstMethod(const QMetaObject *baseObject, QByte
 */
 template<int MethodType>
 inline int QMetaObjectPrivate::indexOfMethodRelative(const QMetaObject **baseObject,
-                                        const QByteArray &name, int argc,
+                                        QByteArrayView name, int argc,
                                         const QArgumentType *types)
 {
     for (const QMetaObject *m = *baseObject; m; m = m->d.superdata) {
@@ -711,6 +732,7 @@ inline int QMetaObjectPrivate::indexOfMethodRelative(const QMetaObject **baseObj
 
 
 /*!
+    \fn int QMetaObject::indexOfConstructor(const char *constructor) const
     \since 4.5
 
     Finds \a constructor and returns its index; otherwise returns -1.
@@ -720,15 +742,50 @@ inline int QMetaObjectPrivate::indexOfMethodRelative(const QMetaObject **baseObj
 
     \sa constructor(), constructorCount(), normalizedSignature()
 */
+
+#if QT_DEPRECATED_SINCE(6, 10)
+Q_DECL_COLD_FUNCTION
+static int compat_indexOf(const char *what, const char *sig, const QMetaObject *mo,
+                          int (*indexOf)(const QMetaObject *, const char *))
+{
+    const QByteArray normalized = QByteArray(sig).replace("QVector<", "QList<");
+    const int i = indexOf(mo, normalized.data());
+    if (i >= 0) {
+        qWarning(R"(QMetaObject::indexOf%s: argument "%s" is not normalized, because it contains "QVector<". )"
+                 R"(Earlier versions of Qt 6 incorrectly normalized QVector< to QList<, silently. )"
+                 R"(This behavior is deprecated as of 6.10, and will be removed in a future version of Qt.)",
+                 what, sig);
+    }
+    return i;
+}
+
+#define INDEXOF_COMPAT(what, arg) \
+    do { \
+        if (i < 0 && Q_UNLIKELY(std::strstr(arg, "QVector<"))) \
+            i = compat_indexOf(#what, arg, this, &indexOf ## what ## _helper); \
+    } while (false)
+#else
+#define INDEXOF_COMPAT(what, arg)
+#endif // QT_DEPRECATED_SINCE(6, 10)
+
+static int indexOfConstructor_helper(const QMetaObject *mo, const char *constructor)
+{
+    QArgumentTypeArray types;
+    QByteArrayView name = QMetaObjectPrivate::decodeMethodSignature(constructor, types);
+    return QMetaObjectPrivate::indexOfConstructor(mo, name, types.size(), types.constData());
+}
+
 int QMetaObject::indexOfConstructor(const char *constructor) const
 {
     Q_ASSERT(priv(d.data)->revision >= 7);
-    QArgumentTypeArray types;
-    QByteArray name = QMetaObjectPrivate::decodeMethodSignature(constructor, types);
-    return QMetaObjectPrivate::indexOfConstructor(this, name, types.size(), types.constData());
+    int i = indexOfConstructor_helper(this, constructor);
+    INDEXOF_COMPAT(Constructor, constructor);
+    return i;
 }
 
 /*!
+    \fn int QMetaObject::indexOfMethod(const char *method) const
+
     Finds \a method and returns its index; otherwise returns -1.
 
     Note that the \a method has to be in normalized form, as returned
@@ -736,16 +793,23 @@ int QMetaObject::indexOfConstructor(const char *constructor) const
 
     \sa method(), methodCount(), methodOffset(), normalizedSignature()
 */
-int QMetaObject::indexOfMethod(const char *method) const
+
+static int indexOfMethod_helper(const QMetaObject *m, const char *method)
 {
-    const QMetaObject *m = this;
     int i;
     Q_ASSERT(priv(m->d.data)->revision >= 7);
     QArgumentTypeArray types;
-    QByteArray name = QMetaObjectPrivate::decodeMethodSignature(method, types);
+    QByteArrayView name = QMetaObjectPrivate::decodeMethodSignature(method, types);
     i = QMetaObjectPrivate::indexOfMethodRelative<0>(&m, name, types.size(), types.constData());
     if (i >= 0)
         i += m->methodOffset();
+    return i;
+}
+
+int QMetaObject::indexOfMethod(const char *method) const
+{
+    int i = indexOfMethod_helper(this, method);
+    INDEXOF_COMPAT(Method, method);
     return i;
 }
 
@@ -767,30 +831,30 @@ static void argumentTypesFromString(const char *str, const char *end,
                 --level;
             ++str;
         }
-        QByteArray argType(begin, str - begin);
-        argType.replace("QVector<", "QList<");
-        types += QArgumentType(std::move(argType));
+        types.emplace_back(QByteArrayView{begin, str - begin});
     }
 }
 
 // Given a method \a signature (e.g. "foo(int,double)"), this function
 // populates the argument \a types array and returns the method name.
-QByteArray QMetaObjectPrivate::decodeMethodSignature(
+QByteArrayView QMetaObjectPrivate::decodeMethodSignature(
         const char *signature, QArgumentTypeArray &types)
 {
     Q_ASSERT(signature != nullptr);
     const char *lparens = strchr(signature, '(');
     if (!lparens)
-        return QByteArray();
+        return QByteArrayView();
     const char *rparens = strrchr(lparens + 1, ')');
     if (!rparens || *(rparens+1))
-        return QByteArray();
+        return QByteArrayView();
     int nameLength = lparens - signature;
     argumentTypesFromString(lparens + 1, rparens, types);
-    return QByteArray::fromRawData(signature, nameLength);
+    return QByteArrayView(signature, nameLength);
 }
 
 /*!
+    \fn int QMetaObject::indexOfSignal(const char *signal) const
+
     Finds \a signal and returns its index; otherwise returns -1.
 
     This is the same as indexOfMethod(), except that it will return
@@ -801,16 +865,23 @@ QByteArray QMetaObjectPrivate::decodeMethodSignature(
 
     \sa indexOfMethod(), normalizedSignature(), method(), methodCount(), methodOffset()
 */
-int QMetaObject::indexOfSignal(const char *signal) const
+
+static int indexOfSignal_helper(const QMetaObject *m, const char *signal)
 {
-    const QMetaObject *m = this;
     int i;
     Q_ASSERT(priv(m->d.data)->revision >= 7);
     QArgumentTypeArray types;
-    QByteArray name = QMetaObjectPrivate::decodeMethodSignature(signal, types);
+    QByteArrayView name = QMetaObjectPrivate::decodeMethodSignature(signal, types);
     i = QMetaObjectPrivate::indexOfSignalRelative(&m, name, types.size(), types.constData());
     if (i >= 0)
         i += m->methodOffset();
+    return i;
+}
+
+int QMetaObject::indexOfSignal(const char *signal) const
+{
+    int i = indexOfSignal_helper(this, signal);
+    INDEXOF_COMPAT(Signal, signal);
     return i;
 }
 
@@ -821,7 +892,7 @@ int QMetaObject::indexOfSignal(const char *signal) const
     \a baseObject will be adjusted to the enclosing QMetaObject, or \nullptr if the signal is not found
 */
 int QMetaObjectPrivate::indexOfSignalRelative(const QMetaObject **baseObject,
-                                              const QByteArray &name, int argc,
+                                              QByteArrayView name, int argc,
                                               const QArgumentType *types)
 {
     int i = indexOfMethodRelative<MethodSignal>(baseObject, name, argc, types);
@@ -841,6 +912,8 @@ int QMetaObjectPrivate::indexOfSignalRelative(const QMetaObject **baseObject,
 }
 
 /*!
+    \fn int QMetaObject::indexOfSlot(const char *slot) const
+
     Finds \a slot and returns its index; otherwise returns -1.
 
     This is the same as indexOfMethod(), except that it will return
@@ -848,28 +921,37 @@ int QMetaObjectPrivate::indexOfSignalRelative(const QMetaObject **baseObject,
 
     \sa indexOfMethod(), method(), methodCount(), methodOffset()
 */
-int QMetaObject::indexOfSlot(const char *slot) const
+
+static int indexOfSlot_helper(const QMetaObject *m, const char *slot)
 {
-    const QMetaObject *m = this;
     int i;
     Q_ASSERT(priv(m->d.data)->revision >= 7);
     QArgumentTypeArray types;
-    QByteArray name = QMetaObjectPrivate::decodeMethodSignature(slot, types);
+    QByteArrayView name = QMetaObjectPrivate::decodeMethodSignature(slot, types);
     i = QMetaObjectPrivate::indexOfSlotRelative(&m, name, types.size(), types.constData());
     if (i >= 0)
         i += m->methodOffset();
     return i;
 }
 
+int QMetaObject::indexOfSlot(const char *slot) const
+{
+    int i = indexOfSlot_helper(this, slot);
+    INDEXOF_COMPAT(Slot, slot);
+    return i;
+}
+
+#undef INDEXOF_COMPAT
+
 // same as indexOfSignalRelative but for slots.
 int QMetaObjectPrivate::indexOfSlotRelative(const QMetaObject **m,
-                                            const QByteArray &name, int argc,
+                                            QByteArrayView name, int argc,
                                             const QArgumentType *types)
 {
     return indexOfMethodRelative<MethodSlot>(m, name, argc, types);
 }
 
-int QMetaObjectPrivate::indexOfSignal(const QMetaObject *m, const QByteArray &name,
+int QMetaObjectPrivate::indexOfSignal(const QMetaObject *m, QByteArrayView name,
                                       int argc, const QArgumentType *types)
 {
     int i = indexOfSignalRelative(&m, name, argc, types);
@@ -878,7 +960,7 @@ int QMetaObjectPrivate::indexOfSignal(const QMetaObject *m, const QByteArray &na
     return i;
 }
 
-int QMetaObjectPrivate::indexOfSlot(const QMetaObject *m, const QByteArray &name,
+int QMetaObjectPrivate::indexOfSlot(const QMetaObject *m, QByteArrayView name,
                                     int argc, const QArgumentType *types)
 {
     int i = indexOfSlotRelative(&m, name, argc, types);
@@ -887,7 +969,7 @@ int QMetaObjectPrivate::indexOfSlot(const QMetaObject *m, const QByteArray &name
     return i;
 }
 
-int QMetaObjectPrivate::indexOfMethod(const QMetaObject *m, const QByteArray &name,
+int QMetaObjectPrivate::indexOfMethod(const QMetaObject *m, QByteArrayView name,
                                       int argc, const QArgumentType *types)
 {
     int i = indexOfMethodRelative<0>(&m, name, argc, types);
@@ -896,7 +978,7 @@ int QMetaObjectPrivate::indexOfMethod(const QMetaObject *m, const QByteArray &na
     return i;
 }
 
-int QMetaObjectPrivate::indexOfConstructor(const QMetaObject *m, const QByteArray &name,
+int QMetaObjectPrivate::indexOfConstructor(const QMetaObject *m, QByteArrayView name,
                                            int argc, const QArgumentType *types)
 {
     for (int i = priv(m->d.data)->constructorCount-1; i >= 0; --i) {
@@ -1081,7 +1163,7 @@ int QMetaObjectPrivate::indexOfEnumerator(const QMetaObject *m, QByteArrayView n
         for (int i = 0; i < d->enumeratorCount; ++i) {
             const QMetaEnum e(m, i);
             const quint32 id = which == Which::Name ? e.data.name() : e.data.alias();
-            QLatin1StringView prop = stringDataView(m, id);
+            QByteArrayView prop = stringDataView(m, id);
             if (name == prop) {
                 i += m->enumeratorOffset();
                 return i;
@@ -1293,28 +1375,27 @@ bool QMetaObject::checkConnectArgs(const QMetaMethod &signal,
             QMetaMethodPrivate::get(&method));
 }
 
-static void qRemoveWhitespace(const char *s, char *d)
+static const char *trimSpacesFromLeft(QByteArrayView in)
 {
-    char last = 0;
-    while (*s && is_space(*s))
-        s++;
-    while (*s) {
-        while (*s && !is_space(*s))
-            last = *d++ = *s++;
-        while (*s && is_space(*s))
-            s++;
-        if (*s && ((is_ident_char(*s) && is_ident_char(last))
-                   || ((*s == ':') && (last == '<')))) {
-            last = *d++ = ' ';
-        }
-    }
-    *d = '\0';
+    return std::find_if_not(in.begin(), in.end(), is_space);
 }
 
-static char *qNormalizeType(char *d, int &templdepth, QByteArray &result)
+static QByteArrayView trimSpacesFromRight(QByteArrayView in)
 {
+    auto rit = std::find_if_not(in.rbegin(), in.rend(), is_space);
+    in = in.first(rit.base() - in.begin());
+    return in;
+}
+
+static const char *qNormalizeType(QByteArrayView in, int &templdepth, QByteArray &result)
+{
+    const char *d = in.begin();
     const char *t = d;
-    while (*d && (templdepth
+    const char *end = in.end();
+
+    // e.g. "QMap<a, QList<int const>>, QList<b>)"
+    // `t` is at the beginning; `d` is advanced to the `,` after the closing >>
+    while (d != end && (templdepth
                    || (*d != ',' && *d != ')'))) {
         if (*d == '<')
             ++templdepth;
@@ -1324,8 +1405,15 @@ static char *qNormalizeType(char *d, int &templdepth, QByteArray &result)
     }
     // "void" should only be removed if this is part of a signature that has
     // an explicit void argument; e.g., "void foo(void)" --> "void foo()"
-    if (strncmp("void)", t, d - t + 1) != 0)
-        result += normalizeTypeInternal(t, d);
+    auto type = QByteArrayView{t, d - t};
+    type = trimSpacesFromRight(type);
+    if (type == "void") {
+        const char *next = trimSpacesFromLeft(QByteArrayView{d, end});
+        if (next != end && *next == ')')
+            return next;
+    }
+
+    result += normalizeTypeInternal(t, d);
 
     return d;
 }
@@ -1351,6 +1439,8 @@ QByteArray QMetaObject::normalizedType(const char *type)
 }
 
 /*!
+    \fn QByteArray QMetaObject::normalizedSignature(const char *method)
+
     Normalizes the signature of the given \a method.
 
     Qt uses normalized signatures to decide whether two given signals
@@ -1361,24 +1451,39 @@ QByteArray QMetaObject::normalizedType(const char *type)
 
     \sa checkConnectArgs(), normalizedType()
  */
-QByteArray QMetaObject::normalizedSignature(const char *method)
+QByteArray QMetaObject::normalizedSignature(const char *_method)
 {
-    QByteArray result;
-    if (!method || !*method)
-        return result;
-    int len = int(strlen(method));
-    QVarLengthArray<char> stackbuf(len + 1);
-    char *d = stackbuf.data();
-    qRemoveWhitespace(method, d);
+    QByteArrayView method = trimSpacesFromRight(_method);
+    if (method.isEmpty())
+        return {};
 
-    result.reserve(len);
+    const char *d = method.begin();
+    const char *end = method.end();
+    d = trimSpacesFromLeft({d, end});
+
+    QByteArray result;
+    result.reserve(method.size());
 
     int argdepth = 0;
     int templdepth = 0;
-    while (*d) {
+    while (d != end) {
+        if (is_space(*d)) {
+            Q_ASSERT(!result.isEmpty());
+            ++d;
+            d = trimSpacesFromLeft({d, end});
+            // keep spaces only between two identifiers: int bar ( int )
+            //                                                  x x   x
+            if (d != end && is_ident_char(*d) && is_ident_char(result.back())) {
+                result += ' ';
+                result += *d++;
+                continue;
+            }
+            if (d == end)
+                break;
+        }
         if (argdepth == 1) {
-            d = qNormalizeType(d, templdepth, result);
-            if (!*d) //most likely an invalid signature.
+            d = qNormalizeType(QByteArrayView{d, end}, templdepth, result);
+            if (d == end) //most likely an invalid signature.
                 break;
         }
         if (*d == '(')
@@ -1392,7 +1497,7 @@ QByteArray QMetaObject::normalizedSignature(const char *method)
 }
 
 Q_DECL_COLD_FUNCTION static inline bool
-printMethodNotFoundWarning(const QMetaObject *meta, QLatin1StringView name, qsizetype paramCount,
+printMethodNotFoundWarning(const QMetaObject *meta, QByteArrayView name, qsizetype paramCount,
                            const char *const *names,
                            const QtPrivate::QMetaTypeInterface * const *metaTypes)
 {
@@ -1400,7 +1505,7 @@ printMethodNotFoundWarning(const QMetaObject *meta, QLatin1StringView name, qsiz
     QByteArray candidateMessage;
     for (int i = 0; i < meta->methodCount(); ++i) {
         const QMetaMethod method = meta->method(i);
-        if (method.name() == QByteArrayView(name))
+        if (method.name() == name)
             candidateMessage += "    " + method.methodSignature() + '\n';
     }
     if (!candidateMessage.isEmpty()) {
@@ -1586,7 +1691,7 @@ bool QMetaObject::invokeMethodImpl(QObject *obj, const char *member, Qt::Connect
     Q_ASSERT(typeNames);
 
     // find the method
-    QLatin1StringView name(member);
+    QByteArrayView name(member);
     if (name.isEmpty())
         return false;
 
@@ -1785,9 +1890,7 @@ bool QMetaObject::invokeMethodImpl(QObject *object, QtPrivate::QSlotObjectBase *
 /*!
     \fn QMetaObject::Connection::swap(Connection &other)
     \since 5.15
-
-    Swaps this Connection instance with \a other. This operation is very fast
-    and never fails.
+    \memberswap{Connection instance}
 */
 
 /*!
@@ -1798,6 +1901,7 @@ bool QMetaObject::invokeMethodImpl(QObject *object, QtPrivate::QSlotObjectBase *
     function.
 
     \ingroup objectmodel
+    \compares equality
 
     A QMetaMethod has a methodType(), a methodSignature(), a list of
     parameterTypes() and parameterNames(), a return typeName(), a
@@ -1825,19 +1929,19 @@ bool QMetaObject::invokeMethodImpl(QObject *object, QtPrivate::QSlotObjectBase *
     invoked), otherwise returns \c false.
 */
 
-/*! \fn bool QMetaMethod::operator==(const QMetaMethod &m1, const QMetaMethod &m2)
+/*! \fn bool QMetaMethod::operator==(const QMetaMethod &lhs, const QMetaMethod &rhs)
     \since 5.0
     \overload
 
-    Returns \c true if method \a m1 is equal to method \a m2,
+    Returns \c true if method \a lhs is equal to method \a rhs,
     otherwise returns \c false.
 */
 
-/*! \fn bool QMetaMethod::operator!=(const QMetaMethod &m1, const QMetaMethod &m2)
+/*! \fn bool QMetaMethod::operator!=(const QMetaMethod &lhs, const QMetaMethod &rhs)
     \since 5.0
     \overload
 
-    Returns \c true if method \a m1 is not equal to method \a m2,
+    Returns \c true if method \a lhs is not equal to method \a rhs,
     otherwise returns \c false.
 */
 
@@ -1906,10 +2010,18 @@ QByteArray QMetaMethodPrivate::signature() const
     return result;
 }
 
-QByteArray QMetaMethodPrivate::name() const
+QByteArrayView QMetaMethodPrivate::name() const noexcept
+{
+    QByteArrayView name = qualifiedName();
+    if (qsizetype colon = name.lastIndexOf(':'); colon > 0)
+        return name.sliced(colon + 1);
+    return name;
+}
+
+QByteArrayView QMetaMethodPrivate::qualifiedName() const noexcept
 {
     Q_ASSERT(priv(mobj->d.data)->revision >= 7);
-    return stringData(mobj, data.name());
+    return stringDataView(mobj, data.name());
 }
 
 int QMetaMethodPrivate::typesDataIndex() const
@@ -2020,10 +2132,10 @@ void QMetaMethodPrivate::getParameterTypes(int *types) const
     }
 }
 
-QByteArray QMetaMethodPrivate::parameterTypeName(int index) const
+QByteArrayView QMetaMethodPrivate::parameterTypeName(int index) const noexcept
 {
     int paramsIndex = parametersDataIndex();
-    return typeNameFromTypeInfo(mobj, mobj->d.data[paramsIndex + index]).toByteArray();
+    return typeNameFromTypeInfo(mobj, mobj->d.data[paramsIndex + index]);
 }
 
 QList<QByteArray> QMetaMethodPrivate::parameterTypes() const
@@ -2052,10 +2164,10 @@ QList<QByteArray> QMetaMethodPrivate::parameterNames() const
     return list;
 }
 
-QByteArray QMetaMethodPrivate::tag() const
+const char *QMetaMethodPrivate::tag() const
 {
     Q_ASSERT(priv(mobj->d.data)->revision >= 7);
-    return stringData(mobj, data.tag());
+    return rawStringData(mobj, data.tag());
 }
 
 int QMetaMethodPrivate::ownMethodIndex() const
@@ -2097,6 +2209,21 @@ QByteArray QMetaMethod::name() const
 {
     if (!mobj)
         return QByteArray();
+    // ### Qt 7: change the return type and make noexcept
+    return stringData(mobj, QMetaMethodPrivate::get(this)->name());
+}
+
+/*!
+    \since 6.9
+
+    Returns the name of this method.
+    The returned QByteArrayView is valid as long as the meta-object of
+    the class to which the method belongs is valid.
+
+    \sa name
+ */
+QByteArrayView QMetaMethod::nameView() const
+{
     return QMetaMethodPrivate::get(this)->name();
 }
 
@@ -2226,7 +2353,8 @@ QByteArray QMetaMethod::parameterTypeName(int index) const
 {
     if (!mobj || index < 0 || index >= parameterCount())
         return {};
-    return QMetaMethodPrivate::get(this)->parameterTypeName(index);
+    // ### Qt 7: change the return type and make noexcept
+    return stringData(mobj, QMetaMethodPrivate::get(this)->parameterTypeName(index));
 }
 
 /*!
@@ -2243,14 +2371,22 @@ QList<QByteArray> QMetaMethod::parameterNames() const
 
 
 /*!
-    Returns the return type name of this method.
+    Returns the return type name of this method. If this method is a
+    constructor, this function returns an empty string (constructors have no
+    return types).
 
-    \sa returnType(), QMetaType::type()
+    \note In Qt 7, this function will return a null pointer for constructors.
+
+    \sa returnType(), QMetaType::name()
 */
 const char *QMetaMethod::typeName() const
 {
     if (!mobj)
         return nullptr;
+#if QT_VERSION < QT_VERSION_CHECK(7, 0, 0)
+    if (methodType() == QMetaMethod::Constructor)
+        return "";
+#endif
     return QMetaMethodPrivate::get(this)->rawReturnTypeName();
 }
 
@@ -2282,7 +2418,7 @@ const char *QMetaMethod::tag() const
 {
     if (!mobj)
         return nullptr;
-    return QMetaMethodPrivate::get(this)->tag().constData();
+    return QMetaMethodPrivate::get(this)->tag();
 }
 
 
@@ -2323,20 +2459,27 @@ int QMetaMethod::relativeMethodIndex() const
 // This method has been around for a while, but the documentation was marked \internal until 5.1
 /*!
     \since 5.1
-    Returns the method revision if one was
-    specified by Q_REVISION, otherwise returns 0.
+    Returns the method revision if one was specified by Q_REVISION, otherwise
+    returns 0. Since Qt 6.0, non-zero values are encoded and can be decoded
+    using QTypeRevision::fromEncodedVersion().
  */
 int QMetaMethod::revision() const
 {
     if (!mobj)
         return 0;
-    if (data.flags() & MethodRevisioned) {
+    if ((data.flags() & MethodRevisioned) == 0)
+        return 0;
+#if QT_VERSION < QT_VERSION_CHECK(7, 0, 0)
+    if (priv(mobj->d.data)->revision < 13) {
+        // revision number located elsewhere
         int offset = priv(mobj->d.data)->methodData
                      + priv(mobj->d.data)->methodCount * Data::Size
                      + QMetaMethodPrivate::get(this)->ownMethodIndex();
         return mobj->d.data[offset];
     }
-    return 0;
+#endif
+
+    return mobj->d.data[data.parameters() - 1];
 }
 
 /*!
@@ -2635,7 +2778,7 @@ auto QMetaMethodInvoker::invokeImpl(QMetaMethod self, void *target,
     // 0 is the return type, 1 is the first formal parameter
     auto checkTypesAreCompatible = [=](int idx) {
         uint typeInfo = priv->parameterTypeInfo(idx - 1);
-        QLatin1StringView userTypeName(typeNames[idx] ? typeNames[idx] : metaTypes[idx]->name);
+        QByteArrayView userTypeName(typeNames[idx] ? typeNames[idx] : metaTypes[idx]->name);
 
         if ((typeInfo & IsUnresolvedType) == 0) {
             // this is a built-in type
@@ -2644,7 +2787,7 @@ auto QMetaMethodInvoker::invokeImpl(QMetaMethod self, void *target,
             return int(typeInfo) == metaTypes[idx]->typeId;
         }
 
-        QLatin1StringView methodTypeName = stringDataView(priv->mobj, typeInfo & TypeNameIndexMask);
+        QByteArrayView methodTypeName = stringDataView(priv->mobj, typeInfo & TypeNameIndexMask);
         if ((MetaTypesAreOptional && !metaTypes) || !metaTypes[idx]) {
             // compatibility call, compare strings
             if (methodTypeName == userTypeName)
@@ -2652,7 +2795,7 @@ auto QMetaMethodInvoker::invokeImpl(QMetaMethod self, void *target,
 
             // maybe the user type needs normalization
             QByteArray normalized = normalizeTypeInternal(userTypeName.begin(), userTypeName.end());
-            return methodTypeName == QLatin1StringView(normalized);
+            return methodTypeName == normalized;
         }
 
         QMetaType userType(metaTypes[idx]);
@@ -3021,6 +3164,20 @@ bool QMetaMethod::invokeOnGadget(void *gadget,
     representation. The scope() function returns the class scope this
     enumerator was declared in.
 
+    To use QMetaEnum functionality, register the enumerator within the meta-object
+    system using the Q_ENUM macro.
+
+    \code
+    enum AppleType {
+        Big,
+        Small
+    };
+    Q_ENUM(AppleType)
+
+    QMetaEnum metaEnum = QMetaEnum::fromType<ModelApple::AppleType>();
+    qDebug() << metaEnum.valueToKey(ModelApple::Big);
+    \endcode
+
     \sa QMetaObject, QMetaMethod, QMetaProperty
 */
 
@@ -3137,15 +3294,91 @@ const char *QMetaEnum::key(int index) const
     Returns the value with the given \a index; or returns -1 if there
     is no such value.
 
-    \sa keyCount(), key(), keyToValue()
+    If this is an enumeration with a 64-bit underlying type (see is64Bit()),
+    this function returns the low 32-bit portion of the value. Use value64() to
+    obtain the full value instead.
+
+    \sa value64(), keyCount(), key(), keyToValue()
 */
 int QMetaEnum::value(int index) const
 {
+    return value64(index).value_or(-1);
+}
+
+enum EnumExtendMode {
+    SignExtend = -1,
+    ZeroExtend,
+    Use64Bit = 64
+};
+Q_DECL_PURE_FUNCTION static inline EnumExtendMode enumExtendMode(const QMetaEnum &e)
+{
+    if (e.is64Bit())
+        return Use64Bit;
+    if (e.isFlag())
+        return ZeroExtend;
+    if (e.metaType().flags() & QMetaType::IsUnsignedEnumeration)
+        return ZeroExtend;
+    return SignExtend;
+}
+
+static constexpr bool isEnumValueSuitable(quint64 value, EnumExtendMode mode)
+{
+    if (mode == Use64Bit)
+        return true;        // any value is suitable
+
+    // 32-bit QMetaEnum
+    if (mode == ZeroExtend)
+        return value == uint(value);
+    return value == quint64(int(value));
+}
+
+template <typename... Mode> inline
+quint64 QMetaEnum::value_helper(uint index, Mode... modes) const noexcept
+{
+    static_assert(sizeof...(Mode) < 2);
+    if constexpr (sizeof...(Mode) == 0) {
+        return value_helper(index, enumExtendMode(*this));
+    } else if constexpr (sizeof...(Mode) == 1) {
+        auto mode = (modes, ...);
+        quint64 value = mobj->d.data[data.data() + 2U * index + 1];
+        if (mode > 0)
+            value |= quint64(mobj->d.data[data.data() + 2U * data.keyCount() + index]) << 32;
+        else if (mode < 0)
+            value = int(value);     // sign extend to 64-bit
+        return value;
+    }
+}
+
+/*!
+    \since 6.9
+
+    Returns the value with the given \a index if it exists; or returns a
+    \c{std::nullopt} if it doesn't.
+
+//! [qmetaenum-32bit-signextend-64bit]
+    This function always sign-extends the value of 32-bit enumerations to 64
+    bits, if their underlying type is signed (e.g., \c int, \c short). In most
+    cases, this is the expected behavior.
+
+    A notable exception is for flag values that have bit 31 set, like
+    0x8000'0000, because some compilers (such as Microsoft Visual Studio), do
+    not automatically switch to an unsigned underlying type. To avoid this
+    problem, explicitly specify the underlying type in the \c enum declaration.
+
+    \note For QMetaObjects compiled prior to Qt 6.6, this function always
+    sign-extends.
+//! [qmetaenum-32bit-signextend-64bit]
+
+    \sa keyCount(), key(), keyToValue(), is64Bit()
+*/
+std::optional<quint64> QMetaEnum::value64(int index) const
+{
     if (!mobj)
-        return 0;
-    if (index >= 0 && index < int(data.keyCount()))
-        return mobj->d.data[data.data() + 2 * index + 1];
-    return -1;
+        return std::nullopt;
+    if (index < 0 || index >= int(data.keyCount()))
+        return std::nullopt;
+
+    return value_helper(index);
 }
 
 /*!
@@ -3175,6 +3408,20 @@ bool QMetaEnum::isScoped() const
     if (!mobj)
         return false;
     return data.flags() & EnumIsScoped;
+}
+
+/*!
+    \since 6.9
+
+    Returns \c true if the underlying type of this enumeration is 64 bits wide.
+
+    \sa value64()
+*/
+bool QMetaEnum::is64Bit() const
+{
+    if (!mobj)
+        return false;
+    return data.flags() & EnumIs64Bit;
 }
 
 /*!
@@ -3226,25 +3473,44 @@ static bool isScopeMatch(QByteArrayView scope, const QMetaEnum *e)
 
     For flag types, use keysToValue().
 
-    \sa valueToKey(), isFlag(), keysToValue()
+    If this is a 64-bit enumeration (see is64Bit()), this function returns the
+    low 32-bit portion of the value. Use keyToValue64() to obtain the full value
+    instead.
+
+    \sa keyToValue64, valueToKey(), isFlag(), keysToValue(), is64Bit()
 */
 int QMetaEnum::keyToValue(const char *key, bool *ok) const
 {
+    auto value = keyToValue64(key);
     if (ok != nullptr)
-        *ok = false;
-    if (!mobj || !key)
-        return -1;
+        *ok = value.has_value();
+    return int(value.value_or(-1));
+}
 
+/*!
+    \since 6.9
+
+    Returns the integer value of the given enumeration \a key, or \c
+    std::nullopt if \a key is not defined.
+
+    For flag types, use keysToValue64().
+
+    \include qmetaobject.cpp qmetaenum-32bit-signextend-64bit
+
+    \sa valueToKey(), isFlag(), keysToValue64()
+*/
+std::optional<quint64> QMetaEnum::keyToValue64(const char *key) const
+{
+    if (!mobj || !key)
+        return std::nullopt;
     const auto [scope, enumKey] = parse_scope(QLatin1StringView(key));
     for (int i = 0; i < int(data.keyCount()); ++i) {
         if ((!scope || isScopeMatch(*scope, this))
             && enumKey == stringDataView(mobj, mobj->d.data[data.data() + 2 * i])) {
-            if (ok != nullptr)
-                *ok = true;
-            return mobj->d.data[data.data() + 2 * i + 1];
+            return value_helper(i);
         }
     }
-    return -1;
+    return std::nullopt;
 }
 
 /*!
@@ -3255,13 +3521,19 @@ int QMetaEnum::keyToValue(const char *key, bool *ok) const
 
     \sa isFlag(), valueToKeys()
 */
-const char *QMetaEnum::valueToKey(int value) const
+const char *QMetaEnum::valueToKey(quint64 value) const
 {
     if (!mobj)
         return nullptr;
-    for (int i = 0; i < int(data.keyCount()); ++i)
-        if (value == (int)mobj->d.data[data.data() + 2 * i + 1])
+
+    EnumExtendMode mode = enumExtendMode(*this);
+    if (!isEnumValueSuitable(value, mode))
+        return nullptr;
+
+    for (int i = 0; i < int(data.keyCount()); ++i) {
+        if (value == value_helper(i, mode))
             return rawStringData(mobj, mobj->d.data[data.data() + 2 * i]);
+    }
     return nullptr;
 }
 
@@ -3318,39 +3590,57 @@ static bool parseEnumFlags(QByteArrayView v, QVarLengthArray<QByteArrayView, 10>
     If \a keys is not defined, *\a{ok} is set to false; otherwise
     *\a{ok} is set to true.
 
-    \sa isFlag(), valueToKey(), valueToKeys()
+    If this is a 64-bit enumeration (see is64Bit()), this function returns the
+    low 32-bit portion of the value. Use keyToValue64() to obtain the full value
+    instead.
+
+    \sa keysToValue64(), isFlag(), valueToKey(), valueToKeys(), is64Bit()
 */
 int QMetaEnum::keysToValue(const char *keys, bool *ok) const
 {
+    auto value = keysToValue64(keys);
     if (ok != nullptr)
-        *ok = false;
-    if (!mobj || !keys)
-        return -1;
+        *ok = value.has_value();
+    return int(value.value_or(-1));
+}
 
-    auto lookup = [&] (QByteArrayView key) -> std::optional<int> {
+/*!
+    Returns the value derived from combining together the values of the \a keys
+    using the OR operator, or \c std::nullopt if \a keys is not defined. Note
+    that the strings in \a keys must be '|'-separated.
+
+    \include qmetaobject.cpp qmetaenum-32bit-signextend-64bit
+
+    \sa isFlag(), valueToKey(), valueToKeys()
+*/
+std::optional<quint64> QMetaEnum::keysToValue64(const char *keys) const
+{
+    if (!mobj || !keys)
+        return std::nullopt;
+
+    EnumExtendMode mode = enumExtendMode(*this);
+    auto lookup = [&] (QByteArrayView key) -> std::optional<quint64> {
         for (int i = data.keyCount() - 1; i >= 0; --i) {
             if (key == stringDataView(mobj, mobj->d.data[data.data() + 2*i]))
-                return mobj->d.data[data.data() + 2*i + 1];
+                return value_helper(i, mode);
         }
         return std::nullopt;
     };
 
-    int value = 0;
+    quint64 value = 0;
     QVarLengthArray<QByteArrayView, 10> list;
     const bool r = parseEnumFlags(QByteArrayView{keys}, list);
     if (!r)
-        return -1;
+        return std::nullopt;
     for (const auto &untrimmed : list) {
         const auto parsed = parse_scope(untrimmed.trimmed());
         if (parsed.scope && !isScopeMatch(*parsed.scope, this))
-            return -1; // wrong type name in qualified name
+            return std::nullopt; // wrong type name in qualified name
         if (auto thisValue = lookup(parsed.key))
             value |= *thisValue;
         else
-            return -1; // no such enumerator
+            return std::nullopt; // no such enumerator
     }
-    if (ok != nullptr)
-        *ok = true;
     return value;
 }
 
@@ -3380,18 +3670,28 @@ void join_reversed(String &s, const Container &c, Separator sep)
     Returns a byte array of '|'-separated keys that represents the
     given \a value.
 
+    \note Passing a 64-bit \a value to an enumeration whose underlying type is
+    32-bit (that is, if is64Bit() returns \c false) results in an empty string
+    being returned.
+
     \sa isFlag(), valueToKey(), keysToValue()
 */
-QByteArray QMetaEnum::valueToKeys(int value) const
+QByteArray QMetaEnum::valueToKeys(quint64 value) const
 {
     QByteArray keys;
     if (!mobj)
         return keys;
-    QVarLengthArray<QLatin1StringView, sizeof(int) * CHAR_BIT> parts;
-    int v = value;
+
+    EnumExtendMode mode = enumExtendMode(*this);
+    if (!isEnumValueSuitable(value, mode))
+        return keys;
+
+    QVarLengthArray<QByteArrayView, sizeof(int) * CHAR_BIT> parts;
+    quint64 v = value;
+
     // reverse iterate to ensure values like Qt::Dialog=0x2|Qt::Window are processed first.
     for (int i = data.keyCount() - 1; i >= 0; --i) {
-        int k = mobj->d.data[data.data() + 2 * i + 1];
+        quint64 k = value_helper(i, mode);
         if ((k != 0 && (v & k) == k) || (k == value)) {
             v = v & ~k;
             parts.push_back(stringDataView(mobj, mobj->d.data[data.data() + 2 * i]));
@@ -3412,7 +3712,10 @@ QMetaEnum::QMetaEnum(const QMetaObject *mobj, int index)
 
 int QMetaEnum::Data::index(const QMetaObject *mobj) const
 {
-    return (d - mobj->d.data - priv(mobj->d.data)->enumeratorData) / Size;
+#if QT_VERSION >= QT_VERSION_CHECK(7, 0, 0)
+#  warning "Consider changing Size to a power of 2"
+#endif
+    return (unsigned(d - mobj->d.data) - priv(mobj->d.data)->enumeratorData) / Size;
 }
 
 /*!
@@ -3436,7 +3739,7 @@ int QMetaEnum::Data::index(const QMetaObject *mobj) const
 
     \section1 Property Meta-Data
 
-    A property has a name() and a type(), as well as various
+    A property has a name() and a metaType(), as well as various
     attributes that specify its behavior: isReadable(), isWritable(),
     isDesignable(), isScriptable(), revision(), and isStored().
 
@@ -3550,7 +3853,10 @@ QMetaType QMetaProperty::metaType() const
 
 int QMetaProperty::Data::index(const QMetaObject *mobj) const
 {
-    return (d - mobj->d.data - priv(mobj->d.data)->propertyData) / Size;
+#if QT_VERSION >= QT_VERSION_CHECK(7, 0, 0)
+#  warning "Consider changing Size to a power of 2"
+#endif
+    return (unsigned(d - mobj->d.data) - priv(mobj->d.data)->propertyData) / Size;
 }
 
 /*!
@@ -3655,8 +3961,8 @@ QMetaProperty::QMetaProperty(const QMetaObject *mobj, int index)
       data(getMetaPropertyData(mobj, index))
 {
     Q_ASSERT(index >= 0 && index < priv(mobj->d.data)->propertyCount);
-
-    if (!(data.flags() & EnumOrFlag))
+    // The code below here just resolves menum if the property is an enum type:
+    if (!(data.flags() & EnumOrFlag) || !metaType().flags().testFlag(QMetaType::IsEnumeration))
         return;
     QByteArrayView enum_name = typeNameFromTypeInfo(mobj, data.type());
     menum = mobj->enumerator(QMetaObjectPrivate::indexOfEnumerator(mobj, enum_name));
@@ -3774,16 +4080,19 @@ bool QMetaProperty::write(QObject *object, QVariant &&v) const
         return false;
     QMetaType t(mobj->d.metaTypes[data.index(mobj)]);
     if (t != QMetaType::fromType<QVariant>() && t != v.metaType()) {
-        if (isEnumType() && !t.metaObject() && v.metaType().id() == QMetaType::QString) {
+        if (isEnumType() && !t.metaObject() && v.metaType() == QMetaType::fromType<QString>()) {
             // Assigning a string to a property of type Q_ENUMS (instead of Q_ENUM)
-            bool ok;
-            if (isFlagType())
-                v = QVariant(menum.keysToValue(v.toByteArray(), &ok));
-            else
-                v = QVariant(menum.keyToValue(v.toByteArray(), &ok));
-            if (!ok)
-                return false;
-        } else if (!v.isValid()) {
+            // means the QMetaType has no associated QMetaObject, so it can't
+            // do the conversion (see qmetatype.cpp:convertToEnum()).
+            std::optional value = isFlagType() ? menum.keysToValue64(v.toByteArray())
+                                               : menum.keyToValue64(v.toByteArray());
+            if (value)
+                v = QVariant(qlonglong(*value));
+
+            // If the key(s)ToValue64 call failed, the convert() call below
+            // gives QMetaType one last chance.
+        }
+        if (!v.isValid()) {
             if (isResettable())
                 return reset(object);
             v = QVariant(t, nullptr);
@@ -3974,14 +4283,14 @@ int QMetaProperty::notifySignalIndex() const
     if (!(methodIndex & IsUnresolvedSignal))
         return methodIndex + mobj->methodOffset();
     methodIndex &= ~IsUnresolvedSignal;
-    const QByteArray signalName = stringData(mobj, methodIndex);
+    const QByteArrayView signalName = stringDataView(mobj, methodIndex);
     const QMetaObject *m = mobj;
     // try 0-arg signal
     int idx = QMetaObjectPrivate::indexOfMethodRelative<MethodSignal>(&m, signalName, 0, nullptr);
     if (idx >= 0)
         return idx + m->methodOffset();
     // try 1-arg signal
-    QArgumentType argType(typeId());
+    QArgumentType argType(metaType());
     idx = QMetaObjectPrivate::indexOfMethodRelative<MethodSignal>(&m, signalName, 1, &argType);
     if (idx >= 0)
         return idx + m->methodOffset();
@@ -3994,8 +4303,9 @@ int QMetaProperty::notifySignalIndex() const
 /*!
     \since 5.1
 
-    Returns the property revision if one was
-    specified by REVISION, otherwise returns 0.
+    Returns the property revision if one was specified by Q_REVISION, otherwise
+    returns 0. Since Qt 6.0, non-zero values are encoded and can be decoded
+    using QTypeRevision::fromEncodedVersion().
  */
 int QMetaProperty::revision() const
 {
@@ -4300,15 +4610,22 @@ int QMetaObjectPrivate::originalClone(const QMetaObject *mobj, int local_method_
 
     Returns the parameter type names extracted from the given \a signature.
 */
-QList<QByteArray> QMetaObjectPrivate::parameterTypeNamesFromSignature(const char *signature)
+QList<QByteArray> QMetaObjectPrivate::parameterTypeNamesFromSignature(QByteArrayView sig)
 {
     QList<QByteArray> list;
-    while (*signature && *signature != '(')
-        ++signature;
-    while (*signature && *signature != ')' && *++signature != ')') {
+    const char *signature = static_cast<const char *>(memchr(sig.begin(), '(', sig.size()));
+    if (!signature)
+        return {};
+    ++signature; // skip '('
+    if (!sig.endsWith(')'))
+        return {};
+    const char *end = sig.end() - 1; // exclude ')'
+    while (signature != end) {
+        if (*signature == ',')
+            ++signature;
         const char *begin = signature;
         int level = 0;
-        while (*signature && (level > 0 || *signature != ',') && *signature != ')') {
+        while (signature != end && (level > 0 || *signature != ',')) {
             if (*signature == '<')
                 ++level;
             else if (*signature == '>')

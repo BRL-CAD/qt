@@ -1,5 +1,6 @@
 // Copyright (C) 2020 Klarälvdalens Datakonsult AB, a KDAB Group company, info@kdab.com, author Marc Mutz <marc.mutz@kdab.com>
 // SPDX-License-Identifier: LicenseRef-Qt-Commercial OR LGPL-3.0-only OR GPL-2.0-only OR GPL-3.0-only
+// Qt-Security score:significant reason:docs-only
 
 #include "qstringtokenizer.h"
 #include "qstringalgorithms.h"
@@ -24,24 +25,22 @@ QT_BEGIN_NAMESPACE
     enumerations Qt::SplitBehavior and Qt::CaseSensitivity further
     control the output.
 
-    QStringTokenizer drives QStringView::tokenize(), but, at least with a
-    recent compiler, you can use it directly, too:
+    QStringTokenizer drives QStringView::tokenize(), but you can use it
+    directly, too:
 
     \code
     for (auto it : QStringTokenizer{string, separator})
         use(*it);
     \endcode
 
-    \note You should never, ever, name the template arguments of a
-    QStringTokenizer explicitly.  If you can use C++17 Class Template
-    Argument Deduction (CTAD), you may write
-    \c{QStringTokenizer{string, separator}} (without template
-    arguments).  If you can't use C++17 CTAD, you must use the
-    QStringView::split() or QLatin1StringView::split() member functions
-    and store the return value only in \c{auto} variables:
+    \note You should never name the template arguments of a
+    QStringTokenizer explicitly. You may write
+    \c{QStringTokenizer{string, separator}} (without template arguments),
+    or use either QStringView::tokenize() or QLatin1StringView::tokenize(),
+    then store the return value only in an \c{auto} variable:
 
     \code
-    auto result = string.split(sep);
+    auto result = strview.tokenize(sep);
     \endcode
 
     This is because the template arguments of QStringTokenizer have a
@@ -320,10 +319,6 @@ QT_BEGIN_NAMESPACE
 
     Pass values from Qt::CaseSensitivity and Qt::SplitBehavior enumerators
     as \a flags to modify the behavior of the tokenizer.
-
-    You can use this function if your compiler doesn't, yet, support C++17 Class
-    Template Argument Deduction (CTAD). We recommend direct use of QStringTokenizer
-    with CTAD instead.
 */
 
 QT_END_NAMESPACE

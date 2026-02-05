@@ -9,6 +9,9 @@
 
 #include <optional>
 
+// Include minimal set of headers
+#define WIN32_LEAN_AND_MEAN
+#define NOGDI
 #include <qt_windows.h>
 
 QT_BEGIN_NAMESPACE
@@ -27,7 +30,7 @@ static constexpr QLatin1StringView truncatedSectionName =
 #  define QCOFFPEPARSER_DEBUG
 #endif
 #if defined(QCOFFPEPARSER_DEBUG)
-static Q_LOGGING_CATEGORY(lcCoffPeParser, "qt.core.plugin.coffpeparser")
+Q_STATIC_LOGGING_CATEGORY(lcCoffPeParser, "qt.core.plugin.coffpeparser")
 #  define peDebug       qCDebug(lcCoffPeParser) << reinterpret_cast<const char16_t *>(error.errMsg->constData()) << ':'
 #else
 #  define peDebug       if (false) {} else QNoDebug()
@@ -117,7 +120,7 @@ Q_DECL_UNUSED static QDebug &operator<<(QDebug &d, HeaderDebug h)
     switch (h.h->FileHeader.Machine) {
     case IMAGE_FILE_MACHINE_I386:       d << "i386"; break;
     case IMAGE_FILE_MACHINE_ARM:        d << "ARM"; break;
-    case IMAGE_FILE_MACHINE_ARMNT:      d << "ARM Thumb-2"; break;;
+    case IMAGE_FILE_MACHINE_ARMNT:      d << "ARM Thumb-2"; break;
     case IMAGE_FILE_MACHINE_THUMB:      d << "Thumb"; break;
     case IMAGE_FILE_MACHINE_IA64:       d << "IA-64"; break;
     case IMAGE_FILE_MACHINE_MIPS16:     d << "MIPS16"; break;

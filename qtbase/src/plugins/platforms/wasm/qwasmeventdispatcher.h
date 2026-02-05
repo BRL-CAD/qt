@@ -6,12 +6,20 @@
 
 #include <QtCore/private/qeventdispatcher_wasm_p.h>
 
+#include <memory>
+
 QT_BEGIN_NAMESPACE
+
+class QWasmSuspendResumeControl;
 
 class QWasmEventDispatcher : public QEventDispatcherWasm
 {
+public:
+    QWasmEventDispatcher(std::shared_ptr<QWasmSuspendResumeControl> suspendResume);
+
 protected:
-    bool processPostedEvents() override;
+    bool sendPostedEvents() override;
+    void onLoaded() override;
 };
 
 QT_END_NAMESPACE

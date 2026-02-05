@@ -23,6 +23,7 @@
 #include <QSignalSpy>
 #include <QtTest/private/qpropertytesthelper_p.h>
 
+#include <QtCore/private/qsingleshottimer_p.h>
 #include <qtimer.h>
 #include <qthread.h>
 #include <qelapsedtimer.h>
@@ -44,11 +45,11 @@ using namespace std::chrono_literals;
 class tst_QTimer : public QObject
 {
     Q_OBJECT
-public:
-    static void initMain();
 
 private slots:
+    void initTestCase();
     void cleanupTestCase();
+
     void zeroTimer();
     void singleShotTimeout();
     void timeout();
@@ -82,8 +83,13 @@ private slots:
     void singleShotToFunctors();
     void singleShot_chrono();
     void singleShot_static();
+    void singleShotDestructionBeforeEventDispatcher();
     void crossThreadSingleShotToFunctor_data();
     void crossThreadSingleShotToFunctor();
+#ifdef QT_BUILD_INTERNAL
+    void crossThreadSingleShotDestruction_data();
+    void crossThreadSingleShotDestruction();
+#endif
     void timerOrder();
     void timerOrder_data();
     void timerOrderBackgroundThread();
@@ -98,6 +104,9 @@ private slots:
     void automatedBindingTests();
 
     void negativeInterval();
+    void testTimerId();
+
+    void intervalOverflow();
 };
 
 void tst_QTimer::zeroTimer()
@@ -457,10 +466,10 @@ void tst_QTimer::basic_chrono()
 
 void tst_QTimer::livelock_data()
 {
-    QTest::addColumn<int>("interval");
-    QTest::newRow("zero timer") << 0;
-    QTest::newRow("non-zero timer") << 1;
-    QTest::newRow("longer than sleep") << 20;
+    QTest::addColumn<std::chrono::milliseconds>("interval");
+    QTest::newRow("zero timer") << 0ms;
+    QTest::newRow("non-zero timer") << 1ms;
+    QTest::newRow("longer than sleep") << 20ms;
 }
 
 /*!
@@ -472,14 +481,14 @@ void tst_QTimer::livelock_data()
 class LiveLockTester : public QObject
 {
 public:
-    LiveLockTester(int i)
+    LiveLockTester(std::chrono::milliseconds i)
         : interval(i),
           timeoutsForFirst(0), timeoutsForExtra(0), timeoutsForSecond(0),
           postEventAtRightTime(false)
     {
-        firstTimerId = startTimer(interval);
-        extraTimerId = startTimer(interval + 80);
-        secondTimerId = -1; // started later
+        firstTimerId = Qt::TimerId{startTimer(interval)};
+        extraTimerId = Qt::TimerId{startTimer(interval + 80ms)};
+        secondTimerId = Qt::TimerId::Invalid; // started later
     }
 
     bool event(QEvent *e) override
@@ -495,28 +504,28 @@ public:
 
     void timerEvent(QTimerEvent *te) override
     {
-        if (te->timerId() == firstTimerId) {
+        if (te->id() == firstTimerId) {
             if (++timeoutsForFirst == 1) {
                 killTimer(extraTimerId);
-                extraTimerId = -1;
+                extraTimerId = Qt::TimerId::Invalid;
                 QCoreApplication::postEvent(this, new QEvent(static_cast<QEvent::Type>(4002)));
-                secondTimerId = startTimer(interval);
+                secondTimerId = Qt::TimerId{startTimer(interval)};
             }
-        } else if (te->timerId() == secondTimerId) {
+        } else if (te->id() == secondTimerId) {
             ++timeoutsForSecond;
-        } else if (te->timerId() == extraTimerId) {
+        } else if (te->id() == extraTimerId) {
             ++timeoutsForExtra;
         }
 
         // sleep for 2ms
         QTest::qSleep(2);
-        killTimer(te->timerId());
+        killTimer(te->id());
     }
 
-    const int interval;
-    int firstTimerId;
-    int secondTimerId;
-    int extraTimerId;
+    const std::chrono::milliseconds interval;
+    Qt::TimerId firstTimerId;
+    Qt::TimerId secondTimerId;
+    Qt::TimerId extraTimerId;
     int timeoutsForFirst;
     int timeoutsForExtra;
     int timeoutsForSecond;
@@ -532,7 +541,7 @@ void tst_QTimer::livelock()
       events (since new posted events are not sent until the next
       iteration of the eventloop either).
     */
-    QFETCH(int, interval);
+    QFETCH(std::chrono::milliseconds, interval);
     LiveLockTester tester(interval);
     QTest::qWait(180); // we have to use wait here, since we're testing timers with a non-zero timeout
     QTRY_COMPARE(tester.timeoutsForFirst, 1);
@@ -816,12 +825,10 @@ void tst_QTimer::timerFiresOnlyOncePerProcessEvents()
 class TimerIdPersistsAfterThreadExitThread : public QThread
 {
 public:
-    QTimer *timer;
-    int timerId, returnValue;
+    QTimer *timer = nullptr;
+    Qt::TimerId timerId = Qt::TimerId::Invalid;
+    int returnValue = -1;
 
-    TimerIdPersistsAfterThreadExitThread()
-        : QThread(), timer(0), timerId(-1), returnValue(-1)
-    { }
     ~TimerIdPersistsAfterThreadExitThread()
     {
         delete timer;
@@ -833,10 +840,14 @@ public:
         timer = new QTimer;
         connect(timer, SIGNAL(timeout()), &eventLoop, SLOT(quit()));
         timer->start(100);
-        timerId = timer->timerId();
+        timerId = timer->id();
         returnValue = eventLoop.exec();
     }
 };
+
+namespace {
+int operator&(Qt::TimerId id, int i) { return qToUnderlying(id) & i; }
+}
 
 void tst_QTimer::timerIdPersistsAfterThreadExit()
 {
@@ -861,6 +872,19 @@ void tst_QTimer::cancelLongTimer()
     QVERIFY(timer.isActive()); //if the timer completes immediately with an error, then this will fail
     timer.stop();
     QVERIFY(!timer.isActive());
+}
+
+void tst_QTimer::testTimerId()
+{
+    QTimer timer;
+    timer.start(100ms);
+    QVERIFY(timer.isActive());
+    QCOMPARE_GT(timer.timerId(), 0);
+    QCOMPARE_GT(timer.id(), Qt::TimerId::Invalid);
+    timer.stop();
+    QVERIFY(!timer.isActive());
+    QCOMPARE(timer.timerId(), -1);
+    QCOMPARE(timer.id(), Qt::TimerId::Invalid);
 }
 
 class TimeoutCounter : public QObject
@@ -1122,7 +1146,7 @@ DontBlockEvents::DontBlockEvents()
 
 void DontBlockEvents::timerEvent(QTimerEvent* event)
 {
-    if (event->timerId() == m_timer.timerId()) {
+    if (event->id() == m_timer.id()) {
         QMetaObject::invokeMethod(this, "paintEvent", Qt::QueuedConnection);
         m_timer.start(0, this);
         count++;
@@ -1168,6 +1192,22 @@ void tst_QTimer::postedEventsShouldNotStarveTimers()
     SlotRepeater slotRepeater;
     slotRepeater.repeatThisSlot();
     QTRY_VERIFY_WITH_TIMEOUT(timeoutSpy.size() > 5, 100);
+}
+
+void tst_QTimer::singleShotDestructionBeforeEventDispatcher()
+{
+    // This makes sure the QSingleShotTimer doesn't cause a crash when the
+    // event dispatcher is deleted. As of the time of this test's writing, the
+    // QSST was parented to the dispatcher, so if it hadn't yet expired, it
+    // would be deleted by the QObject destructor, which is too late to
+    // unregister the timer.
+
+    std::unique_ptr<QThread> thr{QThread::create([] {
+        QObject o;
+        QTimer::singleShot(300s, &o, [] {});
+    })};
+    thr->start();
+    thr->wait();
 }
 
 struct DummyFunctor {
@@ -1219,6 +1259,90 @@ void tst_QTimer::crossThreadSingleShotToFunctor()
 
     QCOMPARE(DummyFunctor::callThread, &t);
 }
+
+#ifdef QT_BUILD_INTERNAL
+class SingleShotReceiver : public QObject
+{
+    Q_OBJECT
+public:
+    SingleShotReceiver() = default;
+
+    bool timeout = false;
+
+public slots:
+    void timerFired() {
+        timeout = true;
+        thread()->quit();
+    }
+};
+
+void tst_QTimer::crossThreadSingleShotDestruction_data()
+{
+    QTest::addColumn<std::chrono::milliseconds>("timeout");
+    QTest::addColumn<std::chrono::milliseconds>("threadWaitTime");
+
+    // No point in testing zero timeouts, we don't create a QSingleShotTimer
+    // for those anyway.
+    QTest::addRow("1ms") << 1ms << 10ms;
+    QTest::addRow("1s") << 1000ms << 10ms;
+}
+
+void tst_QTimer::crossThreadSingleShotDestruction()
+{
+    QFETCH(std::chrono::milliseconds, timeout);
+    QFETCH(std::chrono::milliseconds, threadWaitTime);
+
+    static bool deadTimerDestroyed;
+    class SingleShotTimer : public QSingleShotTimer
+    {
+    public:
+        using QSingleShotTimer::QSingleShotTimer;
+        ~SingleShotTimer() override { deadTimerDestroyed = true; }
+    };
+
+    {
+        QThread t;
+        std::unique_ptr<SingleShotReceiver> receiver(new SingleShotReceiver());
+        receiver->moveToThread(&t);
+
+        // create the timer before the thread is running. Otherwise, the
+        // assignment to QPointer might happen after the timer already fired and
+        // destroyed itself, leaving QPointer dangling.
+        QPointer<QSingleShotTimer> timer = new QSingleShotTimer(timeout, Qt::CoarseTimer,
+                                                                receiver.get(), SLOT(timerFired()));
+        t.start();
+
+        const bool threadQuit = t.wait(threadWaitTime);
+
+        // If we waited long enough, then the timer should have fired, quit
+        // the thread, and self-destructed; otherwise the wait will have timed
+        // out and the timer is still alive.
+        QCOMPARE(threadQuit, receiver->timeout);
+        QCOMPARE(threadQuit, !timer);
+        deadTimerDestroyed = threadQuit;
+
+        if (!threadQuit) {
+            t.quit();
+
+            // now that the thread is definitely dead, start a new timer that is
+            // never even going to get started. It should still be destroyed, as
+            // it will be (temporarily) owned by the event that we post to start
+            // the timer in the target thread.
+            // Note: we can't use QPointer here, as the thread is already
+            // running.
+            (void)new SingleShotTimer(timeout, Qt::CoarseTimer, receiver.get(), SLOT(timerFired()));
+            QVERIFY(t.wait());
+            // the timer should never have fired
+            QVERIFY(!receiver->timeout);
+        }
+
+        // the timer objects should be destroyed by now in all cases
+        QVERIFY(!timer);
+    }
+
+    QVERIFY(deadTimerDestroyed);
+}
+#endif
 
 void tst_QTimer::callOnTimeout()
 {
@@ -1291,22 +1415,23 @@ void tst_QTimer::bindToTimer()
     timer.stop();
     QVERIFY(!active);
 
-    auto ignoreMsg = [] {
-        QTest::ignoreMessage(QtWarningMsg,
-                             "QObject::startTimer: Timers cannot have negative intervals");
-    };
-
     // also test that using negative interval updates the binding correctly
     timer.start(100);
     QVERIFY(active);
-    ignoreMsg();
+    QTest::ignoreMessage(QtWarningMsg,
+                         "QTimer::setInterval: negative intervals aren't allowed; the interval "
+                         "will be set to 1ms.");
     timer.setInterval(-100);
-    QVERIFY(!active);
+    QVERIFY(active);
+    QCOMPARE(timer.intervalAsDuration(), 1ms);
     timer.start(100);
     QVERIFY(active);
-    ignoreMsg();
+    QTest::ignoreMessage(QtWarningMsg,
+                         "QTimer::start: negative intervals aren't allowed; the interval "
+                         "will be set to 1ms.");
     timer.start(-100);
-    QVERIFY(!active);
+    QVERIFY(active);
+    QCOMPARE(timer.intervalAsDuration(), 1ms);
 }
 
 void tst_QTimer::bindTimer()
@@ -1389,33 +1514,72 @@ void tst_QTimer::automatedBindingTests()
 
 void tst_QTimer::negativeInterval()
 {
-    auto ignoreMsg = [] {
-        QTest::ignoreMessage(QtWarningMsg,
-                             "QObject::startTimer: Timers cannot have negative intervals");
-    };
-
     QTimer timer;
 
-    // Starting with a negative interval does not change active state.
-    ignoreMsg();
+    QTest::ignoreMessage(QtWarningMsg,
+                         "QTimer::start: negative intervals aren't allowed; the interval "
+                         "will be set to 1ms.");
     timer.start(-100ms);
-    QVERIFY(!timer.isActive());
+    QVERIFY(timer.isActive());
+    QCOMPARE(timer.intervalAsDuration(), 1ms);
 
-    // Updating the interval to a negative value stops the timer and changes
-    // the active state.
     timer.start(100ms);
     QVERIFY(timer.isActive());
-    ignoreMsg();
+    QTest::ignoreMessage(QtWarningMsg,
+                         "QTimer::setInterval: negative intervals aren't allowed; the interval "
+                         "will be set to 1ms.");
     timer.setInterval(-100);
-    QVERIFY(!timer.isActive());
+    QVERIFY(timer.isActive());
+    QCOMPARE(timer.intervalAsDuration(), 1ms);
 
-    // Starting with a negative interval when already started leads to stop
-    // and inactive state.
     timer.start(100);
     QVERIFY(timer.isActive());
-    ignoreMsg();
+    QTest::ignoreMessage(QtWarningMsg,
+                         "QTimer::start: negative intervals aren't allowed; the interval "
+                         "will be set to 1ms.");
     timer.start(-100ms);
-    QVERIFY(!timer.isActive());
+    QVERIFY(timer.isActive());
+    QCOMPARE(timer.intervalAsDuration(), 1ms);
+}
+
+void tst_QTimer::intervalOverflow()
+{
+    QTimer timer;
+    constexpr auto maxInterval = INT_MAX * 1ms;
+    constexpr auto tooBig = maxInterval + 1ms;
+    auto ignoreStartWarningMsg = [] {
+        QTest::ignoreMessage(QtWarningMsg,
+                             "QTimer::start: interval exceeds maximum allowed interval, it will "
+                             "be clamped to INT_MAX ms (about 24 days).");
+    };
+    auto ignoreSetIntervalWarningMsg = [] {
+        QTest::ignoreMessage(QtWarningMsg,
+                             "QTimer::setInterval: interval exceeds maximum allowed interval, "
+                             "it will be clamped to INT_MAX ms (about 24 days).");
+    };
+
+    ignoreStartWarningMsg();
+    timer.start(tooBig);
+    QVERIFY(timer.isActive());
+    // Interval clamped to INT_MAX * 1ms
+    QCOMPARE(timer.intervalAsDuration(), maxInterval);
+
+    timer.stop();
+    ignoreSetIntervalWarningMsg();
+    timer.setInterval(tooBig); // The same but with setInterval()
+    QCOMPARE(timer.intervalAsDuration(), maxInterval);
+    timer.start();
+    QVERIFY(timer.isActive());
+
+    timer.stop();
+    ignoreStartWarningMsg();
+    timer.start(tooBig + 10min);
+    QVERIFY(timer.isActive());
+    QCOMPARE(timer.intervalAsDuration(), maxInterval);
+    ignoreSetIntervalWarningMsg();
+    timer.setInterval(tooBig + 1h); // With an already running timer
+    QVERIFY(timer.isActive());
+    QCOMPARE(timer.intervalAsDuration(), maxInterval);
 }
 
 class OrderHelper : public QObject
@@ -1514,11 +1678,11 @@ struct StaticSingleShotUser
 };
 
 // NOTE: to prevent any static initialization order fiasco, we implement
-//       initMain() to instantiate staticSingleShotUser before qApp
+//       initTestCase() to instantiate staticSingleShotUser before qApp
 
 static StaticSingleShotUser *s_staticSingleShotUser = nullptr;
 
-void tst_QTimer::initMain()
+void tst_QTimer::initTestCase()
 {
     s_staticSingleShotUser = new StaticSingleShotUser;
 }
@@ -1526,6 +1690,10 @@ void tst_QTimer::initMain()
 void tst_QTimer::cleanupTestCase()
 {
     delete s_staticSingleShotUser;
+
+    // Same as singleShotDestructionBeforeEventDispatcher() above, but for the
+    // main thread.
+    QTimer::singleShot(300s, this, [] {});
 }
 
 void tst_QTimer::singleShot_static()

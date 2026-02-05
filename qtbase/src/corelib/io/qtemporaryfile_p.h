@@ -1,5 +1,6 @@
 // Copyright (C) 2016 The Qt Company Ltd.
 // SPDX-License-Identifier: LicenseRef-Qt-Commercial OR LGPL-3.0-only OR GPL-2.0-only OR GPL-3.0-only
+// Qt-Security score:significant reason:default
 
 #ifndef QTEMPORARYFILE_P_H
 #define QTEMPORARYFILE_P_H
@@ -45,7 +46,7 @@ struct QTemporaryFileName
     QFileSystemEntry::NativePath generateNext();
 };
 
-#ifndef QT_NO_TEMPORARYFILE
+#if QT_CONFIG(temporaryfile)
 
 class QTemporaryFilePrivate : public QFilePrivate
 {
@@ -55,6 +56,8 @@ public:
     QTemporaryFilePrivate();
     explicit QTemporaryFilePrivate(const QString &templateNameIn);
     ~QTemporaryFilePrivate();
+
+    bool rename(const QString &newName, bool overwrite);
 
     QAbstractFileEngine *engine() const override;
     void resetFileEngine() const;
@@ -88,8 +91,7 @@ public:
         if (filePathIsTemplate) {
             d->fileEntry.clear();
         } else {
-            d->fileEntry = QFileSystemEntry(file);
-            QFSFileEngine::setFileName(file);
+            QFSFileEngine::setFileEntry(QFileSystemEntry(file));
         }
     }
     ~QTemporaryFileEngine();
@@ -116,7 +118,7 @@ public:
     bool unnamedFile = false;
 };
 
-#endif // QT_NO_TEMPORARYFILE
+#endif // QT_CONFIG(temporaryfile)
 
 QT_END_NAMESPACE
 

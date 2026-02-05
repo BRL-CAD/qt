@@ -1,5 +1,6 @@
 // Copyright (C) 2016 The Qt Company Ltd.
 // SPDX-License-Identifier: LicenseRef-Qt-Commercial OR LGPL-3.0-only OR GPL-2.0-only OR GPL-3.0-only
+// Qt-Security score:significant reason:default
 
 #ifndef QWINDOWSSTYLE_P_P_H
 #define QWINDOWSSTYLE_P_P_H
@@ -24,8 +25,6 @@
 
 QT_BEGIN_NAMESPACE
 
-class QTime;
-
 class Q_WIDGETS_EXPORT QWindowsStylePrivate : public QCommonStylePrivate
 {
     Q_DECLARE_PUBLIC(QWindowsStyle)
@@ -35,15 +34,12 @@ public:
     QWindowsStylePrivate();
     static int pixelMetricFromSystemDp(QStyle::PixelMetric pm, const QStyleOption *option = nullptr, const QWidget *widget = nullptr);
     static int fixedPixelMetric(QStyle::PixelMetric pm);
-    static qreal devicePixelRatio(const QWidget *widget = nullptr)
-        { return widget ? widget->devicePixelRatio() : QWindowsStylePrivate::appDevicePixelRatio(); }
     static qreal nativeMetricScaleFactor(const QWidget *widget = nullptr);
 
     bool hasSeenAlt(const QWidget *widget) const;
     bool altDown() const { return alt_down; }
     bool alt_down = false;
     QList<const QWidget *> seenAlt;
-    int menuBarTimer = 0;
 
     QColor inactiveCaptionText;
     QColor activeCaptionColor;
@@ -60,9 +56,6 @@ public:
         windowsRightBorder      = 15, // right border on windows
         windowsCheckMarkWidth   = 12  // checkmarks width on windows
     };
-
-private:
-    static qreal appDevicePixelRatio();
 };
 
 QT_END_NAMESPACE

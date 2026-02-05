@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: LicenseRef-Qt-Commercial OR GPL-3.0-only WITH Qt-GPL-exception-1.0
 #include <QCoreApplication>
 #include <QDir>
+#include <QDirListing>
 #include <QLibraryInfo>
 
 #include "../shared/shared.h"
@@ -44,13 +45,13 @@ int main(int argc, char **argv)
         qDebug() << "plugins are always copied, unless \"-no-plugins\" is specified.";
         qDebug() << "";
         qDebug() << "Qt plugins may use private API and will cause the app to be";
-        qDebug() << "rejected from the Mac App store. MacDeployQt will print a warning";
+        qDebug() << "rejected from the Mac App store. macdeployqt will print a warning";
         qDebug() << "when known incompatible plugins are deployed. Use -appstore-compliant ";
         qDebug() << "to skip these plugins. Currently two SQL plugins are known to";
         qDebug() << "be incompatible: qsqlodbc and qsqlpsql.";
         qDebug() << "";
-        qDebug() << "See the \"Deploying Applications on OS X\" topic in the";
-        qDebug() << "documentation for more information about deployment on OS X.";
+        qDebug() << "See the \"Qt for macOS - Deployment\" topic in the";
+        qDebug() << "documentation for more information about deployment on macOS.";
 
         return 1;
     }
@@ -100,39 +101,49 @@ int main(int argc, char **argv)
             int index = argument.indexOf("=");
             bool ok = false;
             int number = argument.mid(index+1).toInt(&ok);
-            if (!ok)
+            if (!ok) {
                 LogError() << "Could not parse verbose level";
-            else
+                return 1;
+            } else {
                 logLevel = number;
+            }
         } else if (argument.startsWith(QByteArray("-executable"))) {
             LogDebug() << "Argument found:" << argument;
             int index = argument.indexOf('=');
-            if (index == -1)
+            if (index == -1) {
                 LogError() << "Missing executable path";
-            else
+                return 1;
+            } else {
                 additionalExecutables << argument.mid(index+1);
+            }
         } else if (argument.startsWith(QByteArray("-qmldir"))) {
             LogDebug() << "Argument found:" << argument;
             qmldirArgumentUsed = true;
             int index = argument.indexOf('=');
-            if (index == -1)
+            if (index == -1) {
                 LogError() << "Missing qml directory path";
-            else
+                return 1;
+            } else {
                 qmlDirs << argument.mid(index+1);
+            }
         } else if (argument.startsWith(QByteArray("-qmlimport"))) {
             LogDebug() << "Argument found:" << argument;
             int index = argument.indexOf('=');
-            if (index == -1)
+            if (index == -1) {
                 LogError() << "Missing qml import path";
-            else
+                return 1;
+            } else {
                 qmlImportPaths << argument.mid(index+1);
+            }
         } else if (argument.startsWith(QByteArray("-libpath"))) {
             LogDebug() << "Argument found:" << argument;
             int index = argument.indexOf('=');
-            if (index == -1)
+            if (index == -1) {
                 LogError() << "Missing library search path";
-            else
+                return 1;
+            } else {
                 librarySearchPath << argument.mid(index+1);
+            }
         } else if (argument == QByteArray("-always-overwrite")) {
             LogDebug() << "Argument found:" << argument;
             alwaysOwerwriteEnabled = true;
@@ -141,6 +152,7 @@ int main(int argc, char **argv)
             int index = argument.indexOf("=");
             if (index < 0 || index >= argument.size()) {
                 LogError() << "Missing code signing identity";
+                return 1;
             } else {
                 runCodesign = true;
                 codesignIdentiy = argument.mid(index+1);
@@ -150,6 +162,7 @@ int main(int argc, char **argv)
             int index = argument.indexOf("=");
             if (index < 0 || index >= argument.size()) {
                 LogError() << "Missing code signing identity";
+                return 1;
             } else {
                 runCodesign = true;
                 hardenedRuntime = true;
@@ -174,10 +187,12 @@ int main(int argc, char **argv)
         } else if (argument.startsWith(QByteArray("-fs"))) {
             LogDebug() << "Argument found:" << argument;
             int index = argument.indexOf('=');
-            if (index == -1)
+            if (index == -1) {
                 LogError() << "Missing filesystem type";
-            else
+                return 1;
+            } else {
                 filesystem = argument.mid(index+1);
+            }
         } else if (argument.startsWith("-")) {
             LogError() << "Unknown argument" << argument << "\n";
             return 1;
@@ -194,10 +209,11 @@ int main(int argc, char **argv)
 
     // Convenience: Look for .qml files in the current directory if no -qmldir specified.
     if (qmlDirs.isEmpty()) {
-        QDir dir;
-        if (!dir.entryList(QStringList() << QStringLiteral("*.qml")).isEmpty()) {
+        using namespace Qt::StringLiterals;
+        using F = QDirListing::IteratorFlag;
+        QDirListing lister(QDir::currentPath(), QStringList(u"*.qml"_s), F::FilesOnly);
+        if (lister.cbegin() != lister.cend())
             qmlDirs += QStringLiteral(".");
-        }
     }
 
     if (!qmlDirs.isEmpty()) {

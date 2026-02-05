@@ -67,13 +67,21 @@ QT_BEGIN_NAMESPACE
 
     Currently the buttons are laid out in the following way if the button box is horizontal:
     \table
-    \row \li \inlineimage buttonbox-gnomelayout-horizontal.png GnomeLayout Horizontal
+    \row \li \inlineimage buttonbox-gnomelayout-horizontal.png
+             {Several buttons using the GnomeLayout horizontal layout}
+             GnomeLayout Horizontal
          \li Button box laid out in horizontal GnomeLayout
-    \row \li \inlineimage buttonbox-kdelayout-horizontal.png KdeLayout Horizontal
+    \row \li \inlineimage buttonbox-kdelayout-horizontal.png
+             {Several buttons using the KdeLayout horizontal layout}
+             KdeLayout Horizontal
          \li Button box laid out in horizontal KdeLayout
-    \row \li \inlineimage buttonbox-maclayout-horizontal.png MacLayout Horizontal
+    \row \li \inlineimage buttonbox-maclayout-horizontal.png
+             {Several buttons using the MacLayout horizontal layout}
+             MacLayout Horizontal
          \li Button box laid out in horizontal MacLayout
-    \row \li \inlineimage buttonbox-winlayout-horizontal.png  WinLayout Horizontal
+    \row \li \inlineimage buttonbox-winlayout-horizontal.png
+             {Several buttons using the WinLayout horizontal layout}
+             WinLayout Horizontal
          \li Button box laid out in horizontal WinLayout
     \endtable
 
@@ -84,10 +92,18 @@ QT_BEGIN_NAMESPACE
          \li KdeLayout
          \li MacLayout
          \li WinLayout
-    \row \li \inlineimage buttonbox-gnomelayout-vertical.png GnomeLayout Vertical
-         \li \inlineimage buttonbox-kdelayout-vertical.png KdeLayout Vertical
-         \li \inlineimage buttonbox-maclayout-vertical.png MacLayout Vertical
-         \li \inlineimage buttonbox-winlayout-vertical.png WinLayout Vertical
+    \row \li \inlineimage buttonbox-gnomelayout-vertical.png
+             {Several buttons using the GnomeLayout vertical layout}
+             GnomeLayout Vertical
+         \li \inlineimage buttonbox-kdelayout-vertical.png
+             {Several buttons using the KdeLayout vertical layout}
+             KdeLayout Vertical
+         \li \inlineimage buttonbox-maclayout-vertical.png
+             {Several buttons using the MacLayout vertical layout}
+             MacLayout Vertical
+         \li \inlineimage buttonbox-winlayout-vertical.png
+             {Several buttons using the WinLayout vertical layout}
+             WinLayout Vertical
     \endtable
 
     Additionally, button boxes that contain only buttons with ActionRole or
@@ -95,9 +111,13 @@ QT_BEGIN_NAMESPACE
 
     \table
     \row \li modeless horizontal MacLayout
-         \li \inlineimage buttonbox-mac-modeless-horizontal.png Screenshot of modeless horizontal MacLayout
+         \li \inlineimage buttonbox-mac-modeless-horizontal.png
+             {Several buttons using the horizontal modeless style on macOS}
+             Screenshot of modeless horizontal MacLayout
     \row \li modeless vertical MacLayout
-         \li \inlineimage buttonbox-mac-modeless-vertical.png Screenshot of modeless vertical MacLayout
+         \li \inlineimage buttonbox-mac-modeless-vertical.png
+             {Several buttons using the horizontal modeless style on macOS}
+             Screenshot of modeless vertical MacLayout
     \endtable
 
     When a button is clicked in the button box, the clicked() signal is emitted
@@ -189,7 +209,7 @@ void QDialogButtonBoxPrivate::layoutButtons()
     Q_Q(QDialogButtonBox);
     const int MacGap = 36 - 8;    // 8 is the default gap between a widget and a spacer item
 
-    QBoolBlocker blocker(ignoreShowAndHide);
+    QScopedValueRollback blocker(ignoreShowAndHide, true);
     for (int i = buttonLayout->count() - 1; i >= 0; --i) {
         QLayoutItem *item = buttonLayout->takeAt(i);
         if (QWidget *widget = item->widget())
@@ -374,7 +394,7 @@ QPushButton *QDialogButtonBoxPrivate::createButton(QDialogButtonBox::StandardBut
         button->setIcon(style->standardIcon(QStyle::StandardPixmap(icon), nullptr, q));
     if (style != QApplication::style()) // Propagate style
         button->setStyle(style);
-    standardButtonHash.insert(button, sbutton);
+    standardButtonMap.insert(button, sbutton);
     QPlatformDialogHelper::ButtonRole role = QPlatformDialogHelper::buttonRole(static_cast<QPlatformDialogHelper::StandardButton>(sbutton));
     if (Q_UNLIKELY(role == QPlatformDialogHelper::InvalidRole))
         qWarning("QDialogButtonBox::createButton: Invalid ButtonRole, button not added");
@@ -426,10 +446,10 @@ void QDialogButtonBoxPrivate::createStandardButtons(QDialogButtonBox::StandardBu
 
 void QDialogButtonBoxPrivate::retranslateStrings()
 {
-    for (auto &&[key, value] : std::as_const(standardButtonHash).asKeyValueRange()) {
-        const QString text = QGuiApplicationPrivate::platformTheme()->standardButtonText(value);
+    for (const auto &it : std::as_const(standardButtonMap)) {
+        const QString text = QGuiApplicationPrivate::platformTheme()->standardButtonText(it.second);
         if (!text.isEmpty())
-            key->setText(text);
+            it.first->setText(text);
     }
 }
 
@@ -493,6 +513,8 @@ QDialogButtonBox::~QDialogButtonBox()
     // otherwise the connection may kick in on child destruction and reach
     // the parent's destroyed private object
     d->disconnectAll();
+    // ditto event filter:
+    d->filter.reset();
 }
 
 /*!
@@ -644,7 +666,7 @@ void QDialogButtonBox::clear()
     Q_D(QDialogButtonBox);
     // Remove the created standard buttons, they should be in the other lists, which will
     // do the deletion
-    d->standardButtonHash.clear();
+    d->standardButtonMap.clear();
     for (int i = 0; i < NRoles; ++i) {
         QList<QAbstractButton *> &list = d->buttonLists[i];
         for (auto button : std::as_const(list)) {
@@ -680,7 +702,11 @@ QList<QAbstractButton *> QDialogButtonBoxPrivate::visibleButtons() const
 
 QList<QAbstractButton *> QDialogButtonBoxPrivate::allButtons() const
 {
-    return visibleButtons() << hiddenButtons.keys();
+    QList<QAbstractButton *> ret(visibleButtons());
+    ret.reserve(ret.size() + hiddenButtons.size());
+    for (const auto &it : hiddenButtons)
+        ret.push_back(it.first);
+    return ret;
 }
 
 /*!
@@ -718,9 +744,9 @@ void QDialogButtonBox::removeButton(QAbstractButton *button)
    Removes \param button.
    \param reason determines the behavior following the removal:
    \list
-   \li \c ManualRemove disconnects all signals and removes the button from standardButtonHash.
-   \li \c HideEvent keeps connections alive, standard buttons remain in standardButtonHash.
-   \li \c Destroyed removes the button from standardButtonHash. Signals remain untouched, because
+   \li \c ManualRemove disconnects all signals and removes the button from standardButtonMap.
+   \li \c HideEvent keeps connections alive, standard buttons remain in standardButtonMap.
+   \li \c Destroyed removes the button from standardButtonMap. Signals remain untouched, because
           the button might already be only a QObject, the destructor of which handles disconnecting.
    \endlist
  */
@@ -744,7 +770,7 @@ void QDialogButtonBoxPrivate::removeButton(QAbstractButton *button, RemoveReason
         button->removeEventFilter(filter.get());
         Q_FALLTHROUGH();
     case RemoveReason::Destroyed:
-        standardButtonHash.remove(reinterpret_cast<QPushButton *>(button));
+        standardButtonMap.remove(reinterpret_cast<QPushButton *>(button));
         break;
     case RemoveReason::HideEvent:
         break;
@@ -818,8 +844,9 @@ void QDialogButtonBox::setStandardButtons(StandardButtons buttons)
 {
     Q_D(QDialogButtonBox);
     // Clear out all the old standard buttons, then recreate them.
-    const auto toDelete = std::exchange(d->standardButtonHash, {});
-    qDeleteAll(toDelete.keyBegin(), toDelete.keyEnd());
+    const auto oldButtons = d->standardButtonMap.keys();
+    d->standardButtonMap.clear();
+    qDeleteAll(oldButtons);
 
     d->createStandardButtons(buttons);
 }
@@ -828,11 +855,8 @@ QDialogButtonBox::StandardButtons QDialogButtonBox::standardButtons() const
 {
     Q_D(const QDialogButtonBox);
     StandardButtons standardButtons = NoButton;
-    QHash<QPushButton *, StandardButton>::const_iterator it = d->standardButtonHash.constBegin();
-    while (it != d->standardButtonHash.constEnd()) {
-        standardButtons |= it.value();
-        ++it;
-    }
+    for (const auto value : d->standardButtonMap.values())
+        standardButtons |= value;
     return standardButtons;
 }
 
@@ -845,7 +869,12 @@ QDialogButtonBox::StandardButtons QDialogButtonBox::standardButtons() const
 QPushButton *QDialogButtonBox::button(StandardButton which) const
 {
     Q_D(const QDialogButtonBox);
-    return d->standardButtonHash.key(which);
+
+    for (const auto &it : std::as_const(d->standardButtonMap)) {
+        if (it.second == which)
+            return it.first;
+    }
+    return nullptr;
 }
 
 /*!
@@ -857,7 +886,7 @@ QPushButton *QDialogButtonBox::button(StandardButton which) const
 QDialogButtonBox::StandardButton QDialogButtonBox::standardButton(QAbstractButton *button) const
 {
     Q_D(const QDialogButtonBox);
-    return d->standardButtonHash.value(static_cast<QPushButton *>(button));
+    return d->standardButtonMap.value(static_cast<QPushButton *>(button));
 }
 
 void QDialogButtonBoxPrivate::handleButtonClicked()
@@ -965,16 +994,13 @@ bool QDialogButtonBox::centerButtons() const
 */
 void QDialogButtonBox::changeEvent(QEvent *event)
 {
-    typedef QHash<QPushButton *, QDialogButtonBox::StandardButton> StandardButtonHash;
-
     Q_D(QDialogButtonBox);
     switch (event->type()) {
     case QEvent::StyleChange:  // Propagate style
-        if (!d->standardButtonHash.empty()) {
+        if (!d->standardButtonMap.empty()) {
             QStyle *newStyle = style();
-            const StandardButtonHash::iterator end = d->standardButtonHash.end();
-            for (StandardButtonHash::iterator it = d->standardButtonHash.begin(); it != end; ++it)
-                it.key()->setStyle(newStyle);
+            for (auto key : d->standardButtonMap.keys())
+                key->setStyle(newStyle);
         }
 #ifdef Q_OS_MAC
         Q_FALLTHROUGH();

@@ -1,6 +1,7 @@
 // Copyright (C) 2021 The Qt Company Ltd.
 // Copyright (C) 2016 Intel Corporation.
 // SPDX-License-Identifier: LicenseRef-Qt-Commercial OR LGPL-3.0-only OR GPL-2.0-only OR GPL-3.0-only
+// Qt-Security score:critical reason:data-parser
 
 #include "qlocale_tools_p.h"
 #include "qdoublescanprint_p.h"
@@ -9,6 +10,8 @@
 
 #include <private/qtools_p.h>
 #include <private/qnumeric_p.h>
+
+#include <cstdio>
 
 #include <ctype.h>
 #include <errno.h>
@@ -115,7 +118,7 @@ void qt_doubleToAscii(double d, QLocaleData::DoubleForm form, int precision,
     else if (precision == QLocale::FloatingPointShortest)
         precision = std::numeric_limits<double>::max_digits10; // snprintf lacks "shortest" mode
 
-    if (isZero(d)) {
+    if (qIsNull(d)) {
         // Negative zero is expected as simple "0", not "-0". We cannot do d < 0, though.
         sign = false;
         buf[0] = '0';
@@ -298,9 +301,6 @@ QSimpleParsedNumber<double> qt_asciiToDouble(const char *num, qsizetype numLen,
     int conv_flags = double_conversion::StringToDoubleConverter::NO_FLAGS;
     if (strayCharMode == TrailingJunkAllowed) {
         conv_flags = double_conversion::StringToDoubleConverter::ALLOW_TRAILING_JUNK;
-    } else if (strayCharMode == WhitespacesAllowed) {
-        conv_flags = double_conversion::StringToDoubleConverter::ALLOW_LEADING_SPACES
-                | double_conversion::StringToDoubleConverter::ALLOW_TRAILING_SPACES;
     }
     double_conversion::StringToDoubleConverter conv(conv_flags, 0.0, qt_qnan(), nullptr, nullptr);
     if (int(numLen) != numLen) {
@@ -310,8 +310,8 @@ QSimpleParsedNumber<double> qt_asciiToDouble(const char *num, qsizetype numLen,
         d = conv.StringToDouble(num, int(numLen), &processed);
     }
 
-    if (!qIsFinite(d)) {
-        if (qIsNaN(d)) {
+    if (!qt_is_finite(d)) {
+        if (qt_is_nan(d)) {
             // Garbage found. We don't accept it and return 0.
             return {};
         } else {
@@ -324,17 +324,18 @@ QSimpleParsedNumber<double> qt_asciiToDouble(const char *num, qsizetype numLen,
     constexpr auto maxDigitsForULongLong = 1 + std::numeric_limits<unsigned long long>::digits10;
     // need to ensure that we don't read more than numLen of input:
     char fmt[1 + maxDigitsForULongLong + 4 + 1];
-    qsnprintf(fmt, sizeof fmt, "%s%llu%s", "%", static_cast<unsigned long long>(numLen), "lf%n");
+    std::snprintf(fmt, sizeof fmt, "%s%llu%s",
+                  "%", static_cast<unsigned long long>(numLen), "lf%n");
 
     if (qDoubleSscanf(num, QT_CLOCALE, fmt, &d, &processed) < 1)
         processed = 0;
 
-    if ((strayCharMode == TrailingJunkProhibited && processed != numLen) || qIsNaN(d)) {
+    if ((strayCharMode == TrailingJunkProhibited && processed != numLen) || qt_is_nan(d)) {
         // Implementation defined nan symbol or garbage found. We don't accept it.
         return {};
     }
 
-    if (!qIsFinite(d)) {
+    if (!qt_is_finite(d)) {
         // Overflow. Check for implementation-defined infinity symbols and reject them.
         // We assume that any infinity symbol has to contain a character that cannot be part of a
         // "normal" number (that is 0-9, ., -, +, e).
@@ -353,7 +354,7 @@ QSimpleParsedNumber<double> qt_asciiToDouble(const char *num, qsizetype numLen,
     Q_ASSERT(strayCharMode == TrailingJunkAllowed || processed == numLen);
 
     // Check if underflow has occurred.
-    if (isZero(d)) {
+    if (qIsNull(d)) {
         for (int i = 0; i < processed; ++i) {
             if (num[i] >= '1' && num[i] <= '9') {
                 // if a digit before any 'e' is not 0, then a non-zero number was intended.
@@ -470,7 +471,7 @@ QSimpleParsedNumber<qlonglong> qstrntoll(const char *begin, qsizetype size, int 
 }
 
 template <typename Char>
-static Q_ALWAYS_INLINE void qulltoString_helper(qulonglong number, int base, Char *&p)
+Q_ALWAYS_INLINE static void qulltoString_helper(qulonglong number, int base, Char *&p)
 {
     // Performance-optimized code. Compiler can generate faster code when base is known.
     switch (base) {
@@ -507,7 +508,7 @@ QString qulltoBasicLatin(qulonglong number, int base, bool negative)
     // We do not need a terminator.
     const unsigned maxlen = 65;
     static_assert(CHAR_BIT * sizeof(number) + 1 <= maxlen);
-    char16_t buff[maxlen];
+    Q_DECL_UNINITIALIZED char16_t buff[maxlen];
     char16_t *const end = buff + maxlen, *p = end;
 
     qulltoString_helper<char16_t>(number, base, p);
@@ -523,7 +524,7 @@ QString qulltoa(qulonglong number, int base, const QStringView zero)
     // per digit. We do not need a terminator.
     const unsigned maxlen = 128;
     static_assert(CHAR_BIT * sizeof(number) <= maxlen);
-    char16_t buff[maxlen];
+    Q_DECL_UNINITIALIZED char16_t buff[maxlen];
     char16_t *const end = buff + maxlen, *p = end;
 
     if (base != 10 || zero == u"0") {
@@ -550,6 +551,18 @@ QString qulltoa(qulonglong number, int base, const QStringView zero)
     }
 
     return QString(reinterpret_cast<QChar *>(p), end - p);
+}
+
+char *qulltoa2(char *p, qulonglong n, int base)
+{
+#if defined(QT_CHECK_RANGE)
+    if (base < 2 || base > 36) {
+        qWarning("QByteArray::setNum: Invalid base %d", base);
+        base = 10;
+    }
+#endif
+    qulltoString_helper(n, base, p);
+    return p;
 }
 
 /*!
@@ -651,7 +664,7 @@ static T dtoString(double d, QLocaleData::DoubleForm form, int precision, bool u
     int bufSize = 1;
     if (precision == QLocale::FloatingPointShortest)
         bufSize += D::max_digits10;
-    else if (form == QLocaleData::DFDecimal && qIsFinite(d))
+    else if (form == QLocaleData::DFDecimal && qt_is_finite(d))
         bufSize += wholePartSpace(qAbs(d)) + precision;
     else // Add extra digit due to different interpretations of precision.
         bufSize += qMax(2, precision) + 1; // Must also be big enough for "nan" or "inf"
@@ -666,7 +679,7 @@ static T dtoString(double d, QLocaleData::DoubleForm form, int precision, bool u
     QLatin1StringView view(buffer.data(), length);
     const bool succinct = form == QLocaleData::DFSignificantDigits;
     qsizetype total = (negative ? 1 : 0) + length;
-    if (qIsFinite(d)) {
+    if (qt_is_finite(d)) {
         if (succinct)
             form = resolveFormat(precision, decpt, view.size());
 
@@ -706,9 +719,9 @@ static T dtoString(double d, QLocaleData::DoubleForm form, int precision, bool u
     T result;
     result.reserve(total);
 
-    if (negative && !isZero(d)) // We don't return "-0"
+    if (negative && !qIsNull(d)) // We don't return "-0"
         result.append(Char('-'));
-    if (!qIsFinite(d)) {
+    if (!qt_is_finite(d)) {
         result.append(view);
         if (uppercase)
             result = std::move(result).toUpper();
@@ -794,5 +807,80 @@ QByteArray qdtoAscii(double d, QLocaleData::DoubleForm form, int precision, bool
 {
     return dtoString<QByteArray>(d, form, precision, uppercase);
 }
+
+#if defined(QT_SUPPORTS_INT128) || defined(QT_USE_MSVC_INT128)
+static inline quint64 toUInt64(qinternaluint128 v)
+{
+#if defined(QT_USE_MSVC_INT128)
+    return quint64(v._Word[0]);
+#else
+    return quint64(v);
+#endif
+}
+
+QString quint128toBasicLatin(qinternaluint128 number, int base)
+{
+    // We divide our 128-bit number into parts that we can do text
+    // concatenation with. This list is the maximum power of the
+    // base that is less than 2^64.
+    static constexpr auto dividers = []() constexpr {
+        std::array<quint64, 35> bases {};
+        for (int base = 2; base <= 36; ++base) {
+            quint64 v = base;
+            while (v * base > v)
+                v *= base;
+            bases[base - 2] = v;
+        }
+        return bases;
+    }();
+    static constexpr auto digitCounts = []() constexpr {
+        std::array<quint8, 35> digits{};
+        for (int base = 2; base <= 36; ++base) {
+            quint64 v = base;
+            int i = 0;
+            for (i = 0; v * base > v; ++i)
+                v *= base;
+            digits[base - 2] = i;
+        }
+        return digits;
+    }();
+
+    QString result;
+
+    constexpr unsigned flags = QLocaleData::NoFlags;
+    const QLocaleData *dd = QLocaleData::c();
+
+    // special base cases:
+    constexpr int Width = -1;
+    if (base == 2 || base == 4 || base == 16) {
+        // 2^64 is a power of 2, 4 and 16
+        result = dd->unsLongLongToString(quint64(number), 64, base, Width, flags);
+        result.prepend(dd->unsLongLongToString(quint64(number >> 64), -1, base, Width, flags));
+    } else {
+        int digitCount = digitCounts[base - 2];
+        quint64 divider = dividers[base - 2];
+        quint64 lower = toUInt64(number % divider);
+        number /= divider;
+        while (number) {
+            result.prepend(dd->unsLongLongToString(lower, digitCount, base, Width, flags));
+            lower = toUInt64(number % divider);
+            number /= divider;
+        }
+        result.prepend(dd->unsLongLongToString(lower, -1, base, Width, flags));
+    }
+    return result;
+}
+
+QString qint128toBasicLatin(qinternalint128 number, int base)
+{
+    const bool negative = number < 0;
+    if (negative)
+        number *= -1;
+    QString result = quint128toBasicLatin(qinternaluint128(number), base);
+    if (negative)
+        result.prepend(u'-');
+    return result;
+}
+#endif // defined(QT_SUPPORTS_INT128) || defined(QT_USE_MSVC_INT128)
 
 QT_END_NAMESPACE

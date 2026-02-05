@@ -15,6 +15,10 @@ QT_BEGIN_NAMESPACE
     \ingroup painting
     \reentrant
 
+    \compares equality
+    \compareswith equality QRectF
+    \endcompareswith
+
     \brief The QRect class defines a rectangle in the plane using
     integer precision.
 
@@ -79,8 +83,6 @@ QT_BEGIN_NAMESPACE
     empty QRect is defined in essentially the same way as QRectF.
 
     Finally, QRect objects can be streamed as well as compared.
-
-    \tableofcontents
 
     \section1 Rendering
 
@@ -786,7 +788,7 @@ QRect QRect::normalized() const noexcept
 
 bool QRect::contains(const QPoint &p, bool proper) const noexcept
 {
-    int l, r;
+    Representation l, r;
     if (x2 < x1 - 1) {
         l = x2 + 1;
         r = x1 - 1;
@@ -801,7 +803,7 @@ bool QRect::contains(const QPoint &p, bool proper) const noexcept
         if (p.x() < l || p.x() > r)
             return false;
     }
-    int t, b;
+    Representation t, b;
     if (y2 < y1 - 1) {
         t = y2 + 1;
         b = y1 - 1;
@@ -853,15 +855,15 @@ bool QRect::contains(const QRect &r, bool proper) const noexcept
     if (isNull() || r.isNull())
         return false;
 
-    int l1 = x1;
-    int r1 = x1 - 1;
+    Representation l1 = x1;
+    Representation r1 = x1 - 1;
     if (x2 < x1 - 1)
         l1 = x2 + 1;
     else
         r1 = x2;
 
-    int l2 = r.x1;
-    int r2 = r.x1 - 1;
+    Representation l2 = r.x1;
+    Representation r2 = r.x1 - 1;
     if (r.x2 < r.x1 - 1)
         l2 = r.x2 + 1;
     else
@@ -875,15 +877,15 @@ bool QRect::contains(const QRect &r, bool proper) const noexcept
             return false;
     }
 
-    int t1 = y1;
-    int b1 = y1 - 1;
+    Representation t1 = y1;
+    Representation b1 = y1 - 1;
     if (y2 < y1 - 1)
         t1 = y2 + 1;
     else
         b1 = y2;
 
-    int t2 = r.y1;
-    int b2 = r.y1 - 1;
+    Representation t2 = r.y1;
+    Representation b2 = r.y1 - 1;
     if (r.y2 < r.y1 - 1)
         t2 = r.y2 + 1;
     else
@@ -933,29 +935,29 @@ QRect QRect::operator|(const QRect &r) const noexcept
     if (r.isNull())
         return *this;
 
-    int l1 = x1;
-    int r1 = x1 - 1;
+    Representation l1 = x1;
+    Representation r1 = x1 - 1;
     if (x2 < x1 - 1)
         l1 = x2 + 1;
     else
         r1 = x2;
 
-    int l2 = r.x1;
-    int r2 = r.x1 - 1;
+    Representation l2 = r.x1;
+    Representation r2 = r.x1 - 1;
     if (r.x2 < r.x1 - 1)
         l2 = r.x2 + 1;
     else
         r2 = r.x2;
 
-    int t1 = y1;
-    int b1 = y1 - 1;
+    Representation t1 = y1;
+    Representation b1 = y1 - 1;
     if (y2 < y1 - 1)
         t1 = y2 + 1;
     else
         b1 = y2;
 
-    int t2 = r.y1;
-    int b2 = r.y1 - 1;
+    Representation t2 = r.y1;
+    Representation b2 = r.y1 - 1;
     if (r.y2 < r.y1 - 1)
         t2 = r.y2 + 1;
     else
@@ -995,15 +997,15 @@ QRect QRect::operator&(const QRect &r) const noexcept
     if (isNull() || r.isNull())
         return QRect();
 
-    int l1 = x1;
-    int r1 = x2;
+    Representation l1 = x1;
+    Representation r1 = x2;
     if (x2 < x1 - 1) {
         l1 = x2 + 1;
         r1 = x1 - 1;
     }
 
-    int l2 = r.x1;
-    int r2 = r.x2;
+    Representation l2 = r.x1;
+    Representation r2 = r.x2;
     if (r.x2 < r.x1 - 1) {
         l2 = r.x2 + 1;
         r2 = r.x1 - 1;
@@ -1012,15 +1014,15 @@ QRect QRect::operator&(const QRect &r) const noexcept
     if (l1 > r2 || l2 > r1)
         return QRect();
 
-    int t1 = y1;
-    int b1 = y2;
+    Representation t1 = y1;
+    Representation b1 = y2;
     if (y2 < y1 - 1) {
         t1 = y2 + 1;
         b1 = y1 - 1;
     }
 
-    int t2 = r.y1;
-    int b2 = r.y2;
+    Representation t2 = r.y1;
+    Representation b2 = r.y2;
     if (r.y2 < r.y1 - 1) {
         t2 = r.y2 + 1;
         b2 = r.y1 - 1;
@@ -1067,15 +1069,15 @@ bool QRect::intersects(const QRect &r) const noexcept
     if (isNull() || r.isNull())
         return false;
 
-    int l1 = x1;
-    int r1 = x2;
+    Representation l1 = x1;
+    Representation r1 = x2;
     if (x2 < x1 - 1) {
         l1 = x2 + 1;
         r1 = x1 - 1;
     }
 
-    int l2 = r.x1;
-    int r2 = r.x2;
+    Representation l2 = r.x1;
+    Representation r2 = r.x2;
     if (r.x2 < r.x1 - 1) {
         l2 = r.x2 + 1;
         r2 = r.x1 - 1;
@@ -1084,15 +1086,15 @@ bool QRect::intersects(const QRect &r) const noexcept
     if (l1 > r2 || l2 > r1)
         return false;
 
-    int t1 = y1;
-    int b1 = y2;
+    Representation t1 = y1;
+    Representation b1 = y2;
     if (y2 < y1 - 1) {
         t1 = y2 + 1;
         b1 = y1 - 1;
     }
 
-    int t2 = r.y1;
-    int b2 = r.y2;
+    Representation t2 = r.y1;
+    Representation b2 = r.y2;
     if (r.y2 < r.y1 - 1) {
         t2 = r.y2 + 1;
         b2 = r.y1 - 1;
@@ -1105,18 +1107,18 @@ bool QRect::intersects(const QRect &r) const noexcept
 }
 
 /*!
-    \fn bool QRect::operator==(const QRect &r1, const QRect &r2)
+    \fn bool QRect::operator==(const QRect &lhs, const QRect &rhs)
 
-    Returns \c true if the rectangles \a r1 and \a r2 are equal,
+    Returns \c true if the rectangles \a lhs and \a rhs are equal,
     otherwise returns \c false.
 */
 
 
 /*!
-    \fn bool QRect::operator!=(const QRect &r1, const QRect &r2)
+    \fn bool QRect::operator!=(const QRect &lhs, const QRect &rhs)
 
-    Returns \c true if the rectangles \a r1 and \a r2 are different, otherwise
-    returns \c false.
+    Returns \c true if the rectangles \a lhs and \a rhs are different,
+    otherwise returns \c false.
 */
 
 /*!
@@ -1279,6 +1281,10 @@ QDebug operator<<(QDebug dbg, const QRect &r)
     \ingroup painting
     \reentrant
 
+    \compares equality
+    \compareswith equality QRect
+    \endcompareswith
+
     \brief The QRectF class defines a finite rectangle in the plane using
     floating point precision.
 
@@ -1343,8 +1349,6 @@ QDebug operator<<(QDebug dbg, const QRect &r)
     empty QRectF is defined in essentially the same way as QRect.
 
     Finally, QRectF objects can be streamed as well as compared.
-
-    \tableofcontents
 
     \section1 Rendering
 
@@ -2329,10 +2333,10 @@ bool QRectF::intersects(const QRectF &r) const noexcept
 
 QRect QRectF::toAlignedRect() const noexcept
 {
-    int xmin = int(qFloor(xp));
-    int xmax = int(qCeil(xp + w));
-    int ymin = int(qFloor(yp));
-    int ymax = int(qCeil(yp + h));
+    int xmin = qFloor(xp);
+    int xmax = qCeil(xp + w);
+    int ymin = qFloor(yp);
+    int ymax = qCeil(yp + h);
     return QRect(xmin, ymin, xmax - xmin, ymax - ymin);
 }
 
@@ -2346,10 +2350,10 @@ QRect QRectF::toAlignedRect() const noexcept
 */
 
 /*!
-    \fn bool QRectF::operator==(const QRectF &r1, const QRectF &r2)
+    \fn bool QRectF::operator==(const QRectF &lhs, const QRectF &rhs)
 
-    Returns \c true if the rectangles \a r1 and \a r2 are \b approximately equal,
-    otherwise returns \c false.
+    Returns \c true if the rectangles \a lhs and \a rhs are \b approximately
+    equal, otherwise returns \c false.
 
     \warning This function does not check for strict equality; instead,
     it uses a fuzzy comparison to compare the rectangles' coordinates.
@@ -2359,9 +2363,9 @@ QRect QRectF::toAlignedRect() const noexcept
 
 
 /*!
-    \fn bool QRectF::operator!=(const QRectF &r1, const QRectF &r2)
+    \fn bool QRectF::operator!=(const QRectF &lhs, const QRectF &rhs)
 
-    Returns \c true if the rectangles \a r1 and \a r2 are sufficiently
+    Returns \c true if the rectangles \a lhs and \a rhs are sufficiently
     different, otherwise returns \c false.
 
     \warning This function does not check for strict inequality; instead,
@@ -2427,6 +2431,22 @@ QRect QRectF::toAlignedRect() const noexcept
     Returns a rectangle shrunk by the \a margins.
 
     \sa marginsRemoved(), operator+=(), marginsAdded()
+*/
+
+/*!
+    \fn bool QRectF::qFuzzyCompare(const QRectF &lhs, const QRectF &rhs)
+    \since 6.8
+
+    Returns \c true if the rectangle \a lhs is approximately equal to the
+    rectangle \a rhs; otherwise returns \c false.
+*/
+
+/*!
+    \fn bool QRectF::qFuzzyIsNull(const QRectF &rect)
+    \since 6.8
+
+    Returns \c true if both width and height of the rectangle \a rect are
+    approximately equal to zero; otherwise returns \c false.
 */
 
 /*****************************************************************************

@@ -89,17 +89,17 @@ public:
     constexpr quint16 blue16()  const { return qRound(blueNormalized()  * FastType(65535.0f)); }
     constexpr quint16 alpha16() const { return qRound(alphaNormalized() * FastType(65535.0f)); }
 
-    constexpr Q_ALWAYS_INLINE QRgbaFloat premultiplied() const
+    Q_ALWAYS_INLINE constexpr QRgbaFloat premultiplied() const
     {
         return QRgbaFloat{r * a, g * a, b * a, a};
     }
-    constexpr Q_ALWAYS_INLINE QRgbaFloat unpremultiplied() const
+    Q_ALWAYS_INLINE constexpr QRgbaFloat unpremultiplied() const
     {
         if (a <= F{0.0f})
             return QRgbaFloat{};    // default-initialization: zeroes
         if (a >= F{1.0f})
             return *this;
-        const FastType ia = 1.0f / a;
+        const FastType ia = FastType(1.0f) / FastType(a);
         return QRgbaFloat{F(r * ia), F(g * ia), F(b * ia), F(a)};
     }
     constexpr bool operator==(QRgbaFloat f) const

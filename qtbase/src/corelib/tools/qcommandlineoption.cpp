@@ -197,9 +197,7 @@ QCommandLineOption &QCommandLineOption::operator=(const QCommandLineOption &othe
 
 /*!
     \fn void QCommandLineOption::swap(QCommandLineOption &other)
-
-    Swaps option \a other with this option. This operation is very
-    fast and never fails.
+    \memberswap{option}
 */
 
 /*!
@@ -388,6 +386,10 @@ void QCommandLineOption::setFlags(Flags flags)
     This allows flags such as \c{-DDEFINE=VALUE} or \c{-I/include/path} to be
     interpreted as short flags even when the parser is in
     QCommandLineParser::ParseAsLongOptions mode.
+
+    \value IgnoreOptionsAfter [since 6.9] No options beyond this one will be parsed. Useful
+    for cases where you need to send extra command line arguments to a secondary
+    application. If a value is provided for this option, it will be ignored.
 
     \sa QCommandLineOption::setFlags(), QCommandLineOption::flags()
 */

@@ -1,5 +1,6 @@
 // Copyright (C) 2021 The Qt Company Ltd.
 // SPDX-License-Identifier: LicenseRef-Qt-Commercial OR LGPL-3.0-only OR GPL-2.0-only OR GPL-3.0-only
+// Qt-Security score:critical reason:cryptography
 
 #include "qsslsocket_openssl_symbols_p.h"
 #include "qx509_openssl_p.h"
@@ -110,8 +111,6 @@ QSslCertificate findCertificateToFetch(const QList<QSslError> &tlsErrors, bool c
 } // unnamed namespace
 
 namespace QTlsPrivate {
-
-extern "C" {
 
 int q_X509Callback(int ok, X509_STORE_CTX *ctx)
 {
@@ -357,8 +356,6 @@ void qt_AlertInfoCallback(const SSL *connection, int from, int value)
     else
         crypto->alertMessageReceived(value);
 }
-
-} // extern "C"
 
 #if QT_CONFIG(ocsp)
 namespace {

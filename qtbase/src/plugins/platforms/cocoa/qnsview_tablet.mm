@@ -8,8 +8,6 @@
 #include <QtGui/qpointingdevice.h>
 #include <QtCore/private/qflatmap_p.h>
 
-Q_LOGGING_CATEGORY(lcQpaTablet, "qt.qpa.input.tablet")
-
 using QCocoaTabletDeviceMap = QFlatMap<qint64, const QPointingDevice*>;
 Q_GLOBAL_STATIC(QCocoaTabletDeviceMap, devicesInProximity)
 
@@ -27,6 +25,9 @@ Q_GLOBAL_STATIC(QCocoaTabletDeviceMap, devicesInProximity)
         return false; // Not a tablet event.
 
     ulong timestamp = [theEvent timestamp] * 1000;
+
+    QCocoaDrag* nativeDrag = QCocoaIntegration::instance()->drag();
+    nativeDrag->setLastInputEvent(theEvent, self);
 
     QPointF windowPoint;
     QPointF screenPoint;

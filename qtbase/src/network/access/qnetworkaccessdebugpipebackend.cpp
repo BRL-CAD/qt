@@ -1,5 +1,6 @@
 // Copyright (C) 2016 The Qt Company Ltd.
 // SPDX-License-Identifier: LicenseRef-Qt-Commercial OR LGPL-3.0-only OR GPL-2.0-only OR GPL-3.0-only
+// Qt-Security score:significant reason:default
 
 #include "qnetworkaccessdebugpipebackend_p.h"
 #include "QtCore/qdatastream.h"
@@ -97,7 +98,9 @@ qint64 QNetworkAccessDebugPipeBackend::read(char *data, qint64 maxlen)
     if (haveRead == -1) {
         hasDownloadFinished = true;
         // this ensures a good last downloadProgress is emitted
-        setHeader(QNetworkRequest::ContentLengthHeader, QVariant());
+        auto h = headers();
+        h.removeAll(QHttpHeaders::WellKnownHeader::ContentLength);
+        setHeaders(std::move(h));
         possiblyFinish();
         return haveRead;
     }
@@ -184,7 +187,7 @@ void QNetworkAccessDebugPipeBackend::possiblyFinish()
 
 void QNetworkAccessDebugPipeBackend::close()
 {
-    qWarning("QNetworkAccessDebugPipeBackend::closeDownstreamChannel() %d",operation());;
+    qWarning("QNetworkAccessDebugPipeBackend::closeDownstreamChannel() %d",operation());
     //if (operation() == QNetworkAccessManager::GetOperation)
     //    socket.disconnectFromHost();
 }

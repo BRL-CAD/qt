@@ -1,5 +1,6 @@
 // Copyright (C) 2016 The Qt Company Ltd.
 // SPDX-License-Identifier: LicenseRef-Qt-Commercial OR LGPL-3.0-only OR GPL-2.0-only OR GPL-3.0-only
+// Qt-Security score:significant reason:default
 
 //#define QHTTPTHREADDELEGATE_DEBUG
 #include "qhttpthreaddelegate_p.h"
@@ -9,6 +10,7 @@
 #include <QAuthenticator>
 #include <QEventLoop>
 #include <QCryptographicHash>
+#include <QtCore/qscopedvaluerollback.h>
 
 #include "private/qhttpnetworkreply_p.h"
 #include "private/qnetworkaccesscache_p.h"
@@ -95,7 +97,9 @@ static QByteArray makeCacheKey(QUrl &url, QNetworkProxy *proxy, const QString &p
     QUrl copy = url;
     QString scheme = copy.scheme();
     bool isEncrypted = scheme == "https"_L1 || scheme == "preconnect-https"_L1;
-    copy.setPort(copy.port(isEncrypted ? 443 : 80));
+    const bool isLocalSocket = scheme.startsWith("unix"_L1);
+    if (!isLocalSocket)
+        copy.setPort(copy.port(isEncrypted ? 443 : 80));
     if (scheme == "preconnect-http"_L1)
         copy.setScheme("http"_L1);
     else if (scheme == "preconnect-https"_L1)
@@ -145,12 +149,12 @@ class QNetworkAccessCachedHttpConnection: public QHttpNetworkConnection,
 {
     // Q_OBJECT
 public:
-    QNetworkAccessCachedHttpConnection(quint16 connectionCount, const QString &hostName, quint16 port, bool encrypt,
+    QNetworkAccessCachedHttpConnection(quint16 connectionCount, const QString &hostName, quint16 port, bool encrypt, bool isLocalSocket,
                                        QHttpNetworkConnection::ConnectionType connectionType)
-        : QHttpNetworkConnection(connectionCount, hostName, port, encrypt, /*parent=*/nullptr, connectionType)
+        : QHttpNetworkConnection(connectionCount, hostName, port, encrypt, isLocalSocket, /*parent=*/nullptr, connectionType)
+        ,CacheableObject(Option::Expires | Option::Shareable)
     {
-        setExpires(true);
-        setShareable(true);
+
     }
 
     virtual void dispose() override
@@ -213,7 +217,7 @@ void QHttpThreadDelegate::startRequestSynchronously()
     synchronous = true;
 
     QEventLoop synchronousRequestLoop;
-    this->synchronousRequestLoop = &synchronousRequestLoop;
+    QScopedValueRollback<QEventLoop*> guard(this->synchronousRequestLoop, &synchronousRequestLoop);
 
     // Worst case timeout
     QTimer::singleShot(30*1000, this, SLOT(abortRequest()));
@@ -244,7 +248,9 @@ void QHttpThreadDelegate::startRequest()
 
     // check if we have an open connection to this host
     QUrl urlCopy = httpRequest.url();
-    urlCopy.setPort(urlCopy.port(ssl ? 443 : 80));
+    const bool isLocalSocket = urlCopy.scheme().startsWith("unix"_L1);
+    if (!isLocalSocket)
+        urlCopy.setPort(urlCopy.port(ssl ? 443 : 80));
 
     QHttpNetworkConnection::ConnectionType connectionType
         = httpRequest.isHTTP2Allowed() ? QHttpNetworkConnection::ConnectionTypeHTTP2
@@ -279,8 +285,17 @@ void QHttpThreadDelegate::startRequest()
         } else
 #endif // QT_CONFIG(ssl)
         {
-            urlCopy.setScheme(QStringLiteral("h2"));
+            if (isLocalSocket)
+                urlCopy.setScheme(QStringLiteral("unix+h2"));
+            else
+                urlCopy.setScheme(QStringLiteral("h2"));
         }
+    }
+
+    QString extraData = httpRequest.peerVerifyName();
+    if (isLocalSocket) {
+        if (QString path = httpRequest.fullLocalServerName(); !path.isEmpty())
+            extraData = path;
     }
 
 #ifndef QT_NO_NETWORKPROXY
@@ -295,10 +310,19 @@ void QHttpThreadDelegate::startRequest()
     // the http object is actually a QHttpNetworkConnection
     httpConnection = static_cast<QNetworkAccessCachedHttpConnection *>(connections.localData()->requestEntryNow(cacheKey));
     if (!httpConnection) {
+
+        QString host = urlCopy.host();
+        // Update the host if a unix socket path or named pipe is used:
+        if (isLocalSocket) {
+            if (QString path = httpRequest.fullLocalServerName(); !path.isEmpty())
+                host = path;
+        }
+
         // no entry in cache; create an object
         // the http object is actually a QHttpNetworkConnection
-        httpConnection = new QNetworkAccessCachedHttpConnection(http1Parameters.numberOfConnectionsPerHost(), urlCopy.host(), urlCopy.port(), ssl,
-                                                                connectionType);
+        httpConnection = new QNetworkAccessCachedHttpConnection(
+                http1Parameters.numberOfConnectionsPerHost(), host, urlCopy.port(), ssl,
+                isLocalSocket, connectionType);
         if (connectionType == QHttpNetworkConnection::ConnectionTypeHTTP2
             || connectionType == QHttpNetworkConnection::ConnectionTypeHTTP2Direct) {
             httpConnection->setHttp2Parameters(http2Parameters);
@@ -464,6 +488,21 @@ void QHttpThreadDelegate::readyReadSlot()
     }
 }
 
+static QString makeServerErrorString(int code, const QUrl &url, const QString &reasonPhrase)
+{
+    QString msg;
+    if (!reasonPhrase.isEmpty()) {
+        msg = QLatin1StringView(QT_TRANSLATE_NOOP("QNetworkReply",
+                                                  "Error transferring %1 - server replied: %2"))
+                      .arg(url.toString(), reasonPhrase);
+    } else {
+        msg = QLatin1StringView(QT_TRANSLATE_NOOP("QNetworkReply",
+                                                  "Error transferring %1 - server replied with status code %2"))
+                      .arg(url.toString(), QString::number(code));
+    }
+    return msg;
+}
+
 void QHttpThreadDelegate::finishedSlot()
 {
     if (!httpReply)
@@ -485,12 +524,11 @@ void QHttpThreadDelegate::finishedSlot()
 #endif
 
     if (httpReply->statusCode() >= 400) {
-            // it's an error reply
-            QString msg = QLatin1StringView(QT_TRANSLATE_NOOP("QNetworkReply",
-                                                              "Error transferring %1 - server replied: %2"));
-            msg = msg.arg(httpRequest.url().toString(), httpReply->reasonPhrase());
-            emit error(statusCodeFromHttp(httpReply->statusCode(), httpRequest.url()), msg);
-        }
+        // it's an error reply
+        QString msg = makeServerErrorString(httpReply->statusCode(), httpRequest.url(),
+                                            httpReply->reasonPhrase());
+        emit error(statusCodeFromHttp(httpReply->statusCode(), httpRequest.url()), msg);
+    }
 
     if (httpRequest.isFollowRedirects() && httpReply->isRedirecting())
         emit redirected(httpReply->redirectUrl(), httpReply->statusCode(), httpReply->request().redirectCount() - 1);
@@ -511,11 +549,10 @@ void QHttpThreadDelegate::synchronousFinishedSlot()
     qDebug() << "QHttpThreadDelegate::synchronousFinishedSlot() thread=" << QThread::currentThreadId() << "result=" << httpReply->statusCode();
 #endif
     if (httpReply->statusCode() >= 400) {
-            // it's an error reply
-            QString msg = QLatin1StringView(QT_TRANSLATE_NOOP("QNetworkReply",
-                                                              "Error transferring %1 - server replied: %2"));
-            incomingErrorDetail = msg.arg(httpRequest.url().toString(), httpReply->reasonPhrase());
-            incomingErrorCode = statusCodeFromHttp(httpReply->statusCode(), httpRequest.url());
+        // it's an error reply
+        incomingErrorDetail = makeServerErrorString(httpReply->statusCode(), httpRequest.url(),
+                                                    httpReply->reasonPhrase());
+        incomingErrorCode = statusCodeFromHttp(httpReply->statusCode(), httpRequest.url());
     }
 
     isCompressed = httpReply->isCompressed();

@@ -1,5 +1,6 @@
 // Copyright (C) 2013 BogDan Vatra <bogdan@kde.org>
 // SPDX-License-Identifier: LicenseRef-Qt-Commercial OR LGPL-3.0-only OR GPL-2.0-only OR GPL-3.0-only
+// Qt-Security score:significant reason:default
 
 #include "qandroidstyle_p.h"
 
@@ -1209,7 +1210,7 @@ const QAndroidStyle::AndroidDrawable * QAndroidStyle::AndroidStateDrawable::best
 
 int QAndroidStyle::AndroidStateDrawable::extractState(const QVariantMap &value)
 {
-    QStyle::State state = QStyle::State_Enabled | QStyle::State_Active;;
+    QStyle::State state = QStyle::State_Enabled | QStyle::State_Active;
     for (auto it = value.cbegin(), end = value.cend(); it != end; ++it) {
         const QString &key = it.key();
         bool val = it.value().toString() == QLatin1String("true");

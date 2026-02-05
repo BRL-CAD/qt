@@ -85,7 +85,8 @@ Q_LOGGING_CATEGORY(lcPermissions, "qt.permissions", QtWarningMsg);
     \target apple-usage-description
 
     Each permission you request must be accompanied by a so called
-    \e {usage description} string in the application's \c Info.plist
+    \e {usage description} string in the application's
+    \l{Information Property List Files}{\c Info.plist}
     file, describing why the application needs to access the given
     permission. For example:
 
@@ -97,7 +98,11 @@ Q_LOGGING_CATEGORY(lcPermissions, "qt.permissions", QtWarningMsg);
     The relevant usage description keys are described in the documentation
     for each permission type.
 
-    \sa {Information Property List Files}.
+    To ensure the relevant permission backend is included with your
+    application, please \l{Information Property List Files}
+    {point the build system to your custom \c Info.plist}.
+
+    \sa {Information Property List Files}
 
     \section3 Android
     \target android-uses-permission
@@ -111,8 +116,17 @@ Q_LOGGING_CATEGORY(lcPermissions, "qt.permissions", QtWarningMsg);
         </manifest>
     \endcode
 
+    To ensure the relevant permission backend is included with your
+    application, please \l {QT_ANDROID_PACKAGE_SOURCE_DIR}
+    {point the build system to your custom \c AndroidManifest.xml}
+    or use \l {qt_add_android_permission()}.
+
     The relevant permission names are described in the documentation
     for each permission type.
+
+    \note When using this API, the \c{<!-- %%INSERT_PERMISSIONS -->} tag must be present in
+    the AndroidManifest.xml. For further information on the use of this tag,
+    see \l {Qt Permissions and Features}
 
     \sa {Qt Creator: Editing Manifest Files}.
 
@@ -121,6 +135,10 @@ Q_LOGGING_CATEGORY(lcPermissions, "qt.permissions", QtWarningMsg);
     The following permissions types are available:
 
     \annotatedlist permissions
+
+    \note The available permission types cover core functionality of Qt modules
+    like Qt Multimedia and Qt Positioning, but do not encompass all platform-specific
+    permissions. Custom permission types are not currently supported.
 
     \section1 Best Practices
 
@@ -132,8 +150,8 @@ Q_LOGGING_CATEGORY(lcPermissions, "qt.permissions", QtWarningMsg);
         \li Request the minimal set of permissions needed. For example, if you only
         need access to the microphone, do \e not request camera permission just in case.
         Use the properties of individual permission types to limit the permission scope
-        even further, for example QContactsPermission::setReadOnly() to request read
-        only access.
+        even further, for example \l{QContactsPermission::setAccessMode()}
+        to request read only access.
 
         \li Request permissions in response to specific actions by the user. For example,
         defer requesting microphone permission until the user presses the button to record
@@ -189,7 +207,7 @@ Q_LOGGING_CATEGORY(lcPermissions, "qt.permissions", QtWarningMsg);
 
     \code
     qApp->requestPermission(QCameraPermission{}, [](const QPermission &permission) {
-        if (permission.status() == Qt::PermissionStatus:Granted)
+        if (permission.status() == Qt::PermissionStatus::Granted)
             takePhoto();
     });
     \endcode
@@ -206,7 +224,7 @@ Q_LOGGING_CATEGORY(lcPermissions, "qt.permissions", QtWarningMsg);
     \code
     void LocationWidget::permissionUpdated(const QPermission &permission)
     {
-        if (permission.status() != Qt::PermissionStatus:Granted)
+        if (permission.status() != Qt::PermissionStatus::Granted)
             return;
         auto locationPermission = permission.value<QLocationPermission>();
         if (!locationPermission || locationPermission->accuracy() != QLocationPermission::Precise)
@@ -233,8 +251,8 @@ Q_LOGGING_CATEGORY(lcPermissions, "qt.permissions", QtWarningMsg);
     You do not need to construct this type explicitly, as the type is automatically
     used when checking or requesting permissions.
 
-    This constructor participates in overload resolution only if \c T is one of
-    the \l{typed permission} classes:
+    \constraints
+    \c T is one of the \l{typed permission} classes:
 
     \annotatedlist permissions
 */
@@ -247,8 +265,8 @@ Q_LOGGING_CATEGORY(lcPermissions, "qt.permissions", QtWarningMsg);
 
     Use type() for dynamically choosing which typed permission to request.
 
-    This function participates in overload resolution only if \c T is one of
-    the \l{typed permission} classes:
+    \constraints
+    \c T is one of the \l{typed permission} classes:
 
     \annotatedlist permissions
 */
@@ -366,16 +384,19 @@ QT_PERMISSION_IMPL_COMMON(QMicrophonePermission)
                 \li \c android.permission.BLUETOOTH_ADVERTISE
                 \li \c android.permission.BLUETOOTH_CONNECT
                 \li \c android.permission.BLUETOOTH_SCAN
-                \li \c android.permission.ACCESS_FINE_LOCATION
             \endlist
     \include permissions.qdocinc end-usage-declarations
 
-    \note Currently on Android the \c android.permission.ACCESS_FINE_LOCATION
-    permission is requested together with Bluetooth permissions. This is
-    required for Bluetooth to work properly, unless the application provides a
-    strong assertion in the application manifest that it does not use Bluetooth
-    to derive a physical location. This permission coupling may change in
-    future.
+    \note Since Qt 6.8.1, the ACCESS_FINE_LOCATION permission is no longer
+    requested if API Level >= 31. This
+    \l {Android Bluetooth Permissions}{may limit some Bluetooth scan results}.
+    Users needing these results need
+    to request the location permission separately (see
+    \l {QLocationPermission::Precise}{precise location}) and ensure that
+    \c {BLUETOOTH_SCAN} permission doesn't have the
+    \c {android:usesPermissionFlags="neverForLocation"} attribute set.
+    For setting and customizing permissions in the application manifest,
+    \l {Qt Permissions and Features}{see this guide}.
 
     \include permissions.qdocinc permission-metadata
 */
@@ -398,10 +419,6 @@ QT_PERMISSION_IMPL_COMMON(QBluetoothPermission)
     \note The fine-grained permissions are currently supported only on
     Android 12 and newer. On older Android versions, as well as on Apple
     operating systems, any mode results in full Bluetooth access.
-
-    \note For now the \c Access mode on Android also requests the
-    \l {QLocationPermission::Precise}{precise location} permission.
-    This permission coupling may change in the future.
 */
 
 /*!
@@ -569,7 +586,7 @@ QT_PERMISSION_IMPL_COMMON(QContactsPermission)
 {}
 
 /*!
-    Sets whether the request is for read-write (\a mode == AccessMode::ReadOnly) or
+    Sets whether the request is for read-write (\a mode == AccessMode::ReadWrite) or
     read-only (\a mode == AccessMode::ReadOnly) access to the contacts.
 */
 void QContactsPermission::setAccessMode(AccessMode mode)
@@ -626,7 +643,7 @@ QT_PERMISSION_IMPL_COMMON(QCalendarPermission)
 {}
 
 /*!
-    Sets whether the request is for read-write (\a mode == AccessMode::ReadOnly) or
+    Sets whether the request is for read-write (\a mode == AccessMode::ReadWrite) or
     read-only (\a mode == AccessMode::ReadOnly) access to the calendar.
 */
 void QCalendarPermission::setAccessMode(AccessMode mode)

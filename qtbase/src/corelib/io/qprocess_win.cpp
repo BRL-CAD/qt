@@ -1,6 +1,7 @@
 // Copyright (C) 2016 The Qt Company Ltd.
 // Copyright (C) 2017 Intel Corporation.
 // SPDX-License-Identifier: LicenseRef-Qt-Commercial OR LGPL-3.0-only OR GPL-2.0-only OR GPL-3.0-only
+// Qt-Security score:critical reason:execute-external-code
 
 //#define QPROCESS_DEBUG
 #include <qdebug.h>
@@ -513,6 +514,12 @@ bool QProcessPrivate::callCreateProcess(QProcess::CreateProcessArguments *cpargs
                                  cpargs->inheritHandles, cpargs->flags, cpargs->environment,
                                  cpargs->currentDirectory, cpargs->startupInfo,
                                  cpargs->processInformation);
+    if (!success) {
+        // don't CloseHandle here (we'll do that in cleanup()) so GetLastError()
+        // remains unmodified
+        return false;
+    }
+
     if (stdinChannel.pipe[0] != INVALID_Q_PIPE) {
         CloseHandle(stdinChannel.pipe[0]);
         stdinChannel.pipe[0] = INVALID_Q_PIPE;
@@ -544,7 +551,7 @@ void QProcessPrivate::startProcess()
         return;
     }
 
-    const QString args = qt_create_commandline(program, arguments, nativeArguments);
+    QString args = qt_create_commandline(program, arguments, nativeArguments);
     QByteArray envlist;
     if (!environment.inheritsFromParent())
         envlist = qt_create_environment(environment.d.constData()->vars);
@@ -566,7 +573,7 @@ void QProcessPrivate::startProcess()
     STARTUPINFOW startupInfo = createStartupInfo();
     const QString nativeWorkingDirectory = QDir::toNativeSeparators(workingDirectory);
     QProcess::CreateProcessArguments cpargs = {
-        nullptr, reinterpret_cast<wchar_t *>(const_cast<ushort *>(args.utf16())),
+        nullptr, reinterpret_cast<wchar_t *>(args.data_ptr().data()),
         nullptr, nullptr, true, dwCreationFlags,
         environment.inheritsFromParent() ? nullptr : envlist.data(),
         nativeWorkingDirectory.isEmpty()
@@ -576,9 +583,10 @@ void QProcessPrivate::startProcess()
 
     if (!callCreateProcess(&cpargs)) {
         // Capture the error string before we do CloseHandle below
-        QString errorString = QProcess::tr("Process failed to start: %1").arg(qt_error_string());
+        QString errorString = qt_error_string();
         cleanup();
-        setErrorAndEmit(QProcess::FailedToStart, errorString);
+        setErrorAndEmit(QProcess::FailedToStart,
+                        QProcess::tr("Process failed to start: %1").arg(errorString));
         return;
     }
 
@@ -920,7 +928,7 @@ bool QProcessPrivate::startDetached(qint64 *pid)
     dwCreationFlags |= CREATE_UNICODE_ENVIRONMENT;
     STARTUPINFOW startupInfo = createStartupInfo();
     QProcess::CreateProcessArguments cpargs = {
-        nullptr, reinterpret_cast<wchar_t *>(const_cast<ushort *>(args.utf16())),
+        nullptr, reinterpret_cast<wchar_t *>(args.data_ptr().data()),
         nullptr, nullptr, true, dwCreationFlags, envPtr,
         workingDirectory.isEmpty()
             ? nullptr : reinterpret_cast<const wchar_t *>(workingDirectory.utf16()),
@@ -946,7 +954,9 @@ bool QProcessPrivate::startDetached(qint64 *pid)
     if (!success) {
         if (pid)
             *pid = -1;
-        setErrorAndEmit(QProcess::FailedToStart);
+        QString errorString = qt_error_string();
+        setErrorAndEmit(QProcess::FailedToStart,
+                        QProcess::tr("Process failed to start: %1").arg(errorString));
     }
 
     closeChannels();

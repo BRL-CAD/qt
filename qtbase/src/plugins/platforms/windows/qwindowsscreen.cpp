@@ -122,15 +122,27 @@ namespace {
 struct DiRegKeyHandleTraits
 {
     using Type = HKEY;
-    static Type invalidValue()
+    static Type invalidValue() noexcept
     {
         // The setupapi.h functions return INVALID_HANDLE_VALUE when failing to open a registry key
         return reinterpret_cast<HKEY>(INVALID_HANDLE_VALUE);
     }
-    static bool close(Type handle) { return RegCloseKey(handle) == ERROR_SUCCESS; }
+    static bool close(Type handle) noexcept { return RegCloseKey(handle) == ERROR_SUCCESS; }
 };
 
 using DiRegKeyHandle = QUniqueHandle<DiRegKeyHandleTraits>;
+
+struct DevInfoHandleTraits
+{
+    using Type = HDEVINFO;
+    static Type invalidValue() noexcept
+    {
+        return reinterpret_cast<HDEVINFO>(INVALID_HANDLE_VALUE);
+    }
+    static bool close(Type handle) noexcept { return SetupDiDestroyDeviceInfoList(handle) == TRUE; }
+};
+
+using DevInfoHandle = QUniqueHandle<DevInfoHandleTraits>;
 
 }
 
@@ -181,13 +193,16 @@ static void setMonitorDataFromSetupApi(QWindowsScreenData &data,
         constexpr GUID GUID_DEVINTERFACE_MONITOR = {
             0xe6f07b5f, 0xee97, 0x4a90, { 0xb0, 0x76, 0x33, 0xf5, 0x7b, 0xf4, 0xea, 0xa7 }
         };
-        const HDEVINFO devInfo = SetupDiGetClassDevs(&GUID_DEVINTERFACE_MONITOR, nullptr, nullptr,
-                                                     DIGCF_DEVICEINTERFACE);
+        const DevInfoHandle devInfo{ SetupDiGetClassDevs(
+                &GUID_DEVINTERFACE_MONITOR, nullptr, nullptr, DIGCF_DEVICEINTERFACE) };
+
+        if (!devInfo.isValid())
+            continue;
 
         SP_DEVICE_INTERFACE_DATA deviceInterfaceData{};
         deviceInterfaceData.cbSize = sizeof(deviceInterfaceData);
 
-        if (!SetupDiOpenDeviceInterfaceW(devInfo, deviceName.monitorDevicePath, DIODI_NO_ADD,
+        if (!SetupDiOpenDeviceInterfaceW(devInfo.get(), deviceName.monitorDevicePath, DIODI_NO_ADD,
                                          &deviceInterfaceData)) {
             qCWarning(lcQpaScreen)
                     << u"Unable to open monitor interface to %1:"_s.arg(data.deviceName)
@@ -196,7 +211,7 @@ static void setMonitorDataFromSetupApi(QWindowsScreenData &data,
         }
 
         DWORD requiredSize{ 0 };
-        if (SetupDiGetDeviceInterfaceDetailW(devInfo, &deviceInterfaceData, nullptr, 0,
+        if (SetupDiGetDeviceInterfaceDetailW(devInfo.get(), &deviceInterfaceData, nullptr, 0,
                                              &requiredSize, nullptr)
             || GetLastError() != ERROR_INSUFFICIENT_BUFFER) {
             continue;
@@ -207,7 +222,7 @@ static void setMonitorDataFromSetupApi(QWindowsScreenData &data,
         devicePath->cbSize = sizeof(std::remove_pointer_t<decltype(devicePath)>);
         SP_DEVINFO_DATA deviceInfoData{};
         deviceInfoData.cbSize = sizeof(deviceInfoData);
-        if (!SetupDiGetDeviceInterfaceDetailW(devInfo, &deviceInterfaceData, devicePath,
+        if (!SetupDiGetDeviceInterfaceDetailW(devInfo.get(), &deviceInterfaceData, devicePath,
                                               requiredSize, nullptr, &deviceInfoData)) {
             qCDebug(lcQpaScreen) << u"Unable to get monitor metadata for %1:"_s.arg(data.deviceName)
                                  << QSystemError::windowsString();
@@ -215,7 +230,7 @@ static void setMonitorDataFromSetupApi(QWindowsScreenData &data,
         }
 
         const DiRegKeyHandle edidRegistryKey{ SetupDiOpenDevRegKey(
-                devInfo, &deviceInfoData, DICS_FLAG_GLOBAL, 0, DIREG_DEV, KEY_READ) };
+                devInfo.get(), &deviceInfoData, DICS_FLAG_GLOBAL, 0, DIREG_DEV, KEY_READ) };
 
         if (!edidRegistryKey.isValid())
             continue;
@@ -538,12 +553,14 @@ void QWindowsScreen::handleChanges(const QWindowsScreenData &newData)
     const bool orientationChanged = m_data.orientation != newData.orientation;
     const bool primaryChanged = (newData.flags & QWindowsScreenData::PrimaryScreen)
             && !(m_data.flags & QWindowsScreenData::PrimaryScreen);
+    const bool refreshRateChanged = m_data.refreshRateHz != newData.refreshRateHz;
     m_data.dpi = newData.dpi;
     m_data.orientation = newData.orientation;
     m_data.geometry = newData.geometry;
     m_data.availableGeometry = newData.availableGeometry;
     m_data.flags = (m_data.flags & ~QWindowsScreenData::PrimaryScreen)
             | (newData.flags & QWindowsScreenData::PrimaryScreen);
+    m_data.refreshRateHz = newData.refreshRateHz;
 
     if (dpiChanged) {
         QWindowSystemInterface::handleScreenLogicalDotsPerInchChange(screen(),
@@ -558,6 +575,9 @@ void QWindowsScreen::handleChanges(const QWindowsScreenData &newData)
     }
     if (primaryChanged)
         QWindowSystemInterface::handlePrimaryScreenChanged(this);
+
+    if (refreshRateChanged)
+        QWindowSystemInterface::handleScreenRefreshRateChange(screen(), newData.refreshRateHz);
 }
 
 HMONITOR QWindowsScreen::handle() const
@@ -662,7 +682,7 @@ QPlatformScreen::SubpixelAntialiasingType QWindowsScreen::subpixelAntialiasingTy
     \internal
 */
 
-extern "C" LRESULT QT_WIN_CALLBACK qDisplayChangeObserverWndProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam)
+LRESULT QT_WIN_CALLBACK qDisplayChangeObserverWndProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam)
 {
     if (message == WM_DISPLAYCHANGE) {
         qCDebug(lcQpaScreen) << "Handling WM_DISPLAYCHANGE";
@@ -747,10 +767,33 @@ static void moveToVirtualScreen(QWindow *w, const QScreen *newScreen)
     w->setGeometry(geometry);
 }
 
+void QWindowsScreenManager::addScreen(const QWindowsScreenData &screenData)
+{
+    auto *newScreen = new QWindowsScreen(screenData);
+    m_screens.push_back(newScreen);
+    QWindowSystemInterface::handleScreenAdded(newScreen,
+                                              screenData.flags & QWindowsScreenData::PrimaryScreen);
+    qCDebug(lcQpaScreen) << "New Monitor: " << screenData;
+
+    // When a new screen is attached Window might move windows to the new screen
+    // automatically, in which case they will get a WM_DPICHANGED event. But at
+    // that point we have not received WM_DISPLAYCHANGE yet, so we fail to reflect
+    // the new screen's DPI. To account for this we explicitly check for screen
+    // change here, now that we are processing the WM_DISPLAYCHANGE.
+    const auto allWindows = QGuiApplication::allWindows();
+    for (QWindow *w : allWindows) {
+        if (w->isVisible() && w->handle() && w->type() != Qt::Desktop) {
+            if (QWindowsWindow *window = QWindowsWindow::windowsWindowOf(w))
+                window->checkForScreenChanged(QWindowsWindow::ScreenChangeMode::FromScreenAdded);
+        }
+    }
+}
+
 void QWindowsScreenManager::removeScreen(int index)
 {
     qCDebug(lcQpaScreen) << "Removing Monitor:" << m_screens.at(index)->data();
-    QScreen *screen = m_screens.at(index)->screen();
+    QPlatformScreen *platformScreen = m_screens.takeAt(index);
+    QScreen *screen = platformScreen->screen();
     QScreen *primaryScreen = QGuiApplication::primaryScreen();
     // QTBUG-38650: When a screen is disconnected, Windows will automatically
     // move the Window to another screen. This will trigger a geometry change
@@ -768,7 +811,7 @@ void QWindowsScreenManager::removeScreen(int index)
                     && (QWindowsWindow::baseWindowOf(w)->exStyle() & WS_EX_TOOLWINDOW)) {
                     moveToVirtualScreen(w, primaryScreen);
                 } else {
-                    QWindowSystemInterface::handleWindowScreenChanged(w, primaryScreen);
+                    QWindowSystemInterface::handleWindowScreenChanged<QWindowSystemInterface::SynchronousDelivery>(w, primaryScreen);
                 }
                 ++movedWindowCount;
             }
@@ -776,7 +819,7 @@ void QWindowsScreenManager::removeScreen(int index)
         if (movedWindowCount)
             QWindowSystemInterface::flushWindowSystemEvents();
     }
-    QWindowSystemInterface::handleScreenRemoved(m_screens.takeAt(index));
+    QWindowSystemInterface::handleScreenRemoved(platformScreen);
 }
 
 /*!
@@ -797,11 +840,7 @@ bool QWindowsScreenManager::handleScreenChanges()
             if (existingIndex == 0)
                 primaryScreenChanged = true;
         } else {
-            auto *newScreen = new QWindowsScreen(newData);
-            m_screens.push_back(newScreen);
-            QWindowSystemInterface::handleScreenAdded(newScreen,
-                                                             newData.flags & QWindowsScreenData::PrimaryScreen);
-            qCDebug(lcQpaScreen) << "New Monitor: " << newData;
+            addScreen(newData);
         }    // exists
     }        // for new screens.
     // Remove deleted ones but keep main monitors if we get only the
@@ -835,9 +874,8 @@ const QWindowsScreen *QWindowsScreenManager::screenAtDp(const QPoint &p) const
     return nullptr;
 }
 
-const QWindowsScreen *QWindowsScreenManager::screenForHwnd(HWND hwnd) const
+const QWindowsScreen *QWindowsScreenManager::screenForMonitor(HMONITOR hMonitor) const
 {
-    HMONITOR hMonitor = MonitorFromWindow(hwnd, MONITOR_DEFAULTTONULL);
     if (hMonitor == nullptr)
         return nullptr;
     const auto it =
@@ -848,6 +886,20 @@ const QWindowsScreen *QWindowsScreenManager::screenForHwnd(HWND hwnd) const
                              && (s->data().flags & QWindowsScreenData::VirtualDesktop) != 0;
                      });
     return it != m_screens.cend() ? *it : nullptr;
+}
+
+const QWindowsScreen *QWindowsScreenManager::screenForHwnd(HWND hwnd) const
+{
+    HMONITOR hMonitor = MonitorFromWindow(hwnd, MONITOR_DEFAULTTONULL);
+    return screenForMonitor(hMonitor);
+}
+
+const QWindowsScreen *QWindowsScreenManager::screenForRect(const RECT *rect) const
+{
+    if (rect == nullptr)
+        return nullptr;
+    HMONITOR hMonitor = MonitorFromRect(rect, MONITOR_DEFAULTTONULL);
+    return screenForMonitor(hMonitor);
 }
 
 QT_END_NAMESPACE

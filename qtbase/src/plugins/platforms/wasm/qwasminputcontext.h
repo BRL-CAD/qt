@@ -6,13 +6,16 @@
 
 
 #include <qpa/qplatforminputcontext.h>
-#include <QtCore/qpointer.h>
 #include <private/qstdweb_p.h>
+#include <QtCore/qloggingcategory.h>
+
 #include <emscripten/bind.h>
 #include <emscripten/html5.h>
 #include <emscripten/emscripten.h>
 
 QT_BEGIN_NAMESPACE
+
+Q_DECLARE_LOGGING_CATEGORY(qLcQpaWasmInputContext)
 
 class QWasmInputContext : public QPlatformInputContext
 {
@@ -28,19 +31,40 @@ public:
     void hideInputPanel() override;
     bool isValid() const override { return true; }
 
-    void focusWindowChanged(QWindow *focusWindow);
-    void inputStringChanged(QString &, int eventType, QWasmInputContext *context);
-    emscripten::val m_inputElement = emscripten::val::null();
+    const QString preeditString() { return m_preeditString; }
+    void setPreeditString(QString preeditStr, int replaceSize);
+    void insertPreedit(int repalcementLength = 0);
+    void commitPreeditAndClear();
+
+    void insertText(QString inputStr, bool replace = false);
+    void replaceText(QString inputString, int replaceFrom, int replaceSize);
+
+    bool usingTextInput() const { return m_inputMethodAccepted; }
+    void setFocusObject(QObject *object) override;
+
+    void inputCallback(emscripten::val event);
+    void compositionEndCallback(emscripten::val event);
+    void compositionStartCallback(emscripten::val event);
+    void compositionUpdateCallback(emscripten::val event);
+    void beforeInputCallback(emscripten::val event);
+
+    void updateGeometry();
+
+    bool isActive() const {
+        return m_focusObject && m_inputMethodAccepted;
+    }
 
 private:
-    emscripten::val inputHandlerElementForFocusedWindow();
+    void updateInputElement();
 
-    bool m_inputPanelVisible = false;
+private:
+    QString m_preeditString;
+    int m_replaceIndex = 0;
 
-    QPointer<QWindow> m_focusWindow;
-    std::unique_ptr<qstdweb::EventCallback> m_blurEventHandler;
-    std::unique_ptr<qstdweb::EventCallback> m_inputEventHandler;
-    bool inputPanelIsOpen = false;
+    bool m_inputMethodAccepted = false;
+    QObject *m_focusObject = nullptr;
+    emscripten::val m_inputElement = emscripten::val::null();
+    QPair<int, int> rangesPair;
 };
 
 QT_END_NAMESPACE

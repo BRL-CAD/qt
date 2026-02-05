@@ -22,6 +22,7 @@
 QT_BEGIN_NAMESPACE
 
 using namespace Qt::StringLiterals;
+using namespace QtGuiPrivate; // for D-Bus accessibility wrappers
 
 /*!
     \class QSpiAccessibleBridge
@@ -31,7 +32,7 @@ using namespace Qt::StringLiterals;
 QSpiAccessibleBridge::QSpiAccessibleBridge()
     : cache(nullptr), dec(nullptr), dbusAdaptor(nullptr)
 {
-    dbusConnection = new DBusConnection();
+    dbusConnection = new QAtSpiDBusConnection();
     connect(dbusConnection, SIGNAL(enabledChanged(bool)), this, SLOT(enabledChanged(bool)));
     // Now that we have connected the signal, make sure we didn't miss a change,
     // e.g. when running as root or when AT_SPI_BUS_ADDRESS is set by hand.
@@ -131,7 +132,7 @@ static RoleMapping map[] = {
     //: Role of an accessible object
     { QAccessible::Dialog, ATSPI_ROLE_DIALOG, QT_TRANSLATE_NOOP("QSpiAccessibleBridge", "dialog") },
     //: Role of an accessible object
-    { QAccessible::Border, ATSPI_ROLE_FRAME, QT_TRANSLATE_NOOP("QSpiAccessibleBridge", "frame") },
+    { QAccessible::Border, ATSPI_ROLE_PANEL, QT_TRANSLATE_NOOP("QSpiAccessibleBridge", "panel") },
     //: Role of an accessible object
     { QAccessible::Grouping, ATSPI_ROLE_PANEL, QT_TRANSLATE_NOOP("QSpiAccessibleBridge", "panel") },
     //: Role of an accessible object
@@ -246,6 +247,8 @@ static RoleMapping map[] = {
     { QAccessible::Desktop, ATSPI_ROLE_DESKTOP_FRAME, QT_TRANSLATE_NOOP("QSpiAccessibleBridge", "desktop") },
     //: Role of an accessible object
     { QAccessible::Notification, ATSPI_ROLE_NOTIFICATION, QT_TRANSLATE_NOOP("QSpiAccessibleBridge", "notification") },
+    //: Role of an accessible object
+    { QAccessible::BlockQuote, ATSPI_ROLE_BLOCK_QUOTE, QT_TRANSLATE_NOOP("QSpiAccessibleBridge", "block quote") },
     //: Role of an accessible object
     { QAccessible::UserRole, ATSPI_ROLE_UNKNOWN, QT_TRANSLATE_NOOP("QSpiAccessibleBridge", "unknown") }
 };

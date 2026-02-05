@@ -1,5 +1,6 @@
 // Copyright (C) 2016 The Qt Company Ltd.
 // SPDX-License-Identifier: LicenseRef-Qt-Commercial OR LGPL-3.0-only OR GPL-2.0-only OR GPL-3.0-only
+// Qt-Security score:significant reason:default
 
 #ifndef QTHREADPOOL_H
 #define QTHREADPOOL_H
@@ -9,9 +10,9 @@
 #include <QtCore/qthread.h>
 #include <QtCore/qrunnable.h>
 
+#if QT_CORE_REMOVED_SINCE(6, 6)
 #include <functional>
-
-QT_REQUIRE_CONFIG(thread);
+#endif
 
 QT_BEGIN_NAMESPACE
 
@@ -70,7 +71,12 @@ public:
     void reserveThread();
     void releaseThread();
 
-    bool waitForDone(int msecs = -1);
+    void setServiceLevel(QThread::QualityOfService serviceLevel);
+    QThread::QualityOfService serviceLevel() const;
+
+    QT_CORE_INLINE_SINCE(6, 8)
+    bool waitForDone(int msecs);
+    bool waitForDone(QDeadlineTimer deadline = QDeadlineTimer::Forever);
 
     void clear();
 
@@ -100,6 +106,13 @@ void QThreadPool::startOnReservedThread(Callable &&functionToRun)
 {
     startOnReservedThread(QRunnable::create(std::forward<Callable>(functionToRun)));
 }
+
+#if QT_CORE_INLINE_IMPL_SINCE(6, 8)
+bool QThreadPool::waitForDone(int msecs)
+{
+    return waitForDone(QDeadlineTimer(msecs));
+}
+#endif
 
 QT_END_NAMESPACE
 

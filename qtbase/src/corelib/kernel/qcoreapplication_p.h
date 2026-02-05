@@ -21,9 +21,6 @@
 #endif
 #include "QtCore/qreadwritelock.h"
 #include "QtCore/qtranslator.h"
-#if QT_CONFIG(settings)
-#include "QtCore/qsettings.h"
-#endif
 #ifndef QT_NO_QOBJECT
 #include "private/qobject_p.h"
 #include "private/qlocking_p.h"
@@ -51,7 +48,7 @@ class Q_CORE_EXPORT QCoreApplicationPrivate
     Q_DECLARE_PUBLIC(QCoreApplication)
 
 public:
-    enum Type {
+    enum Type : quint8 {
         Tty,
         Gui
     };
@@ -73,7 +70,10 @@ public:
     static QString infoDictionaryStringProperty(const QString &propertyName);
 #endif
 
-    void initConsole();
+#ifdef Q_OS_WINDOWS
+    void initDebuggingConsole();
+    void cleanupDebuggingConsole();
+#endif
     static void initLocale();
 
     static bool checkInstance(const char *method);
@@ -90,6 +90,7 @@ public:
 
     virtual void createEventDispatcher();
     virtual void eventDispatcherReady();
+    virtual bool compressEvent(QEvent *event, QObject *receiver, QPostEventList *postedEvents);
     static void removePostedEvent(QEvent *);
 #ifdef Q_OS_WIN
     static void removePostedTimerEvent(QObject *object, int timerId);
@@ -103,8 +104,8 @@ public:
     virtual void quit();
 
     static QBasicAtomicPointer<QThread> theMainThread;
+    static QBasicAtomicPointer<void> theMainThreadId;
     static QThread *mainThread();
-    static bool threadRequiresCoreApplication();
 
     static void sendPostedEvents(QObject *receiver, int event_type, QThreadData *data);
 
@@ -124,35 +125,31 @@ public:
     int &argc;
     char **argv;
 #if defined(Q_OS_WIN)
-    int origArgc;
-    char **origArgv; // store unmodified arguments for QCoreApplication::arguments()
+    // store unmodified arguments for QCoreApplication::arguments()
+    int origArgc = 0;
+    std::unique_ptr<char *[]> origArgv;
+
     bool consoleAllocated = false;
-#endif
-    void appendApplicationPathToLibraryPaths(void);
-
-#ifndef QT_NO_TRANSLATION
-    QTranslatorList translators;
-    QReadWriteLock translateMutex;
-    static bool isTranslatorInstalled(QTranslator *translator);
+    static void *mainInstanceHandle;    // HINSTANCE without <windows.h>
 #endif
 
-    QCoreApplicationPrivate::Type application_type;
-
-    QString cachedApplicationDirPath;
-    static QString *cachedApplicationFilePath;
-    static void setApplicationFilePath(const QString &path);
-    static inline void clearApplicationFilePath() { delete cachedApplicationFilePath; cachedApplicationFilePath = nullptr; }
+    Type application_type = Tty;
 
 #ifndef QT_NO_QOBJECT
     void execCleanup();
 
-    bool in_exec;
-    bool aboutToQuitEmitted;
-    bool threadData_clean;
+    bool in_exec = false;
+    bool aboutToQuitEmitted = false;
+    bool threadData_clean = false;
 
     static QAbstractEventDispatcher *eventDispatcher;
     static bool is_app_running;
     static bool is_app_closing;
+#endif
+#ifndef QT_NO_TRANSLATION
+    QTranslatorList translators;
+    QReadWriteLock translateMutex;
+    static bool isTranslatorInstalled(QTranslator *translator);
 #endif
 
     static bool setuidAllowed;
@@ -160,11 +157,12 @@ public:
     static inline bool testAttribute(uint flag) { return attribs & (1 << flag); }
 
     void processCommandLineArguments();
+    QString cachedApplicationFilePath;
     QString qmljs_debug_arguments; // a string containing arguments for js/qml debugging.
     inline QString qmljsDebugArgumentsString() const { return qmljs_debug_arguments; }
 
 #ifdef QT_NO_QOBJECT
-    QCoreApplication *q_ptr;
+    QCoreApplication *q_ptr = nullptr;
 #endif
 };
 

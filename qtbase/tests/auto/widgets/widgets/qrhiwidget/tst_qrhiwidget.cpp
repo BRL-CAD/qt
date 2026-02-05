@@ -64,7 +64,7 @@ void tst_QRhiWidget::testData()
     QTest::newRow("Null") << QRhiWidget::Api::Null;
 #endif
 
-#if QT_CONFIG(opengl)
+#if QT_CONFIG(opengl) && QT_CONFIG(run_opengl_tests)
     if (QGuiApplicationPrivate::platformIntegration()->hasCapability(QPlatformIntegration::OpenGL))
         QTest::newRow("OpenGL") << QRhiWidget::Api::OpenGL;
 #endif
@@ -80,7 +80,7 @@ void tst_QRhiWidget::testData()
     }
 #endif
 
-#if defined(Q_OS_MACOS) || defined(Q_OS_IOS)
+#if QT_CONFIG(metal)
     QRhiMetalInitParams metalInitParams;
     if (QRhi::probe(QRhi::Metal, &metalInitParams))
         QTest::newRow("Metal") << QRhiWidget::Api::Metal;
@@ -327,6 +327,13 @@ void tst_QRhiWidget::simple()
 {
     QFETCH(QRhiWidget::Api, api);
 
+#ifdef Q_OS_ANDROID
+    if ((QNativeInterface::QAndroidApplication::sdkVersion() == 36)
+        && (QRhiWidget::Api::OpenGL==api)) {
+        QSKIP("Fails and crashes on Android 16 (QTBUG-140627)");
+    }
+#endif
+
     SimpleRhiWidget *rhiWidget = new SimpleRhiWidget;
     rhiWidget->setApi(api);
     QSignalSpy frameSpy(rhiWidget, &QRhiWidget::frameSubmitted);
@@ -398,7 +405,7 @@ void tst_QRhiWidget::simple()
                             readResult.pixelSize.width(), readResult.pixelSize.height(),
                             QImage::Format_RGBA8888);
         if (rhi->isYUpInFramebuffer())
-            resultOne = wrapperImage.mirrored();
+            resultOne = wrapperImage.flipped();
         else
             resultOne = wrapperImage.copy();
 
@@ -481,7 +488,7 @@ void tst_QRhiWidget::msaa()
                             QImage::Format_RGBA8888);
         QImage result;
         if (rhi->isYUpInFramebuffer())
-            result = wrapperImage.mirrored();
+            result = wrapperImage.flipped();
         else
             result = wrapperImage.copy();
 
@@ -726,7 +733,7 @@ void tst_QRhiWidget::grabFramebufferWhileStillInvisible()
                             readResult.pixelSize.width(), readResult.pixelSize.height(),
                             QImage::Format_RGBA8888);
         if (w.rhi()->isYUpInFramebuffer())
-            image = wrapperImage.mirrored();
+            image = wrapperImage.flipped();
         else
             image = wrapperImage.copy();
         QRgb c = image.pixel(image.width() / 2, image.height() / 2);
@@ -810,7 +817,7 @@ void tst_QRhiWidget::mirror()
                             QImage::Format_RGBA8888);
         QImage image;
         if (rhi->isYUpInFramebuffer())
-            image = wrapperImage.mirrored();
+            image = wrapperImage.flipped();
         else
             image = wrapperImage.copy();
 

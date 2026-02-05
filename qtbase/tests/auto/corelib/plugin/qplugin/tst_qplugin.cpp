@@ -11,6 +11,10 @@
 
 #include <private/qplugin_p.h>
 
+#ifdef Q_OS_ANDROID
+#include <private/qjnihelpers_p.h>
+#endif
+
 class tst_QPlugin : public QObject
 {
     Q_OBJECT
@@ -49,7 +53,7 @@ void tst_QPlugin::initTestCase()
 
 void tst_QPlugin::loadDebugPlugin()
 {
-    const auto fileNames = dir.entryList(QStringList() << "*debug*", QDir::Files);
+    const auto fileNames = dir.entryList(QStringList() << "*debugplugin*", QDir::Files);
     if (fileNames.isEmpty())
         QSKIP("No debug plugins found - skipping test");
 
@@ -82,7 +86,7 @@ void tst_QPlugin::loadDebugPlugin()
 
 void tst_QPlugin::loadReleasePlugin()
 {
-    const auto fileNames = dir.entryList(QStringList() << "*release*", QDir::Files);
+    const auto fileNames = dir.entryList(QStringList() << "*releaseplugin*", QDir::Files);
     if (fileNames.isEmpty())
         QSKIP("No release plugins found - skipping test");
 
@@ -180,7 +184,7 @@ void tst_QPlugin::scanInvalidPlugin()
 #if defined(Q_OS_MACOS) && defined(Q_PROCESSOR_ARM)
     QSKIP("This test crashes on ARM macOS");
 #endif
-    const auto fileNames = dir.entryList({"*invalid*"}, QDir::Files);
+    const auto fileNames = dir.entryList({"*invalidplugin*"}, QDir::Files);
     QString invalidPluginName;
     if (fileNames.isEmpty())
         QSKIP("No invalid plugin found - skipping test");
@@ -198,6 +202,11 @@ void tst_QPlugin::scanInvalidPlugin()
 
     {
         QFile f(newName);
+#ifdef Q_OS_ANDROID
+        // set write permission to plugin file that's copied from read-only location
+        if (QtAndroidPrivate::isUncompressedNativeLibs())
+            f.setPermissions(QFileDevice::WriteOwner | f.permissions());
+#endif
         QVERIFY(f.open(QIODevice::ReadWrite | QIODevice::Unbuffered));
         QVERIFY(f.size() > qint64(strlen(invalidPluginSignature)));
         uchar *data = f.map(0, f.size());

@@ -12,8 +12,8 @@
 #include <CoreGraphics/CoreGraphics.h>
 #include <CoreVideo/CoreVideo.h>
 
-Q_FORWARD_DECLARE_OBJC_CLASS(NSScreen);
-Q_FORWARD_DECLARE_OBJC_CLASS(NSArray);
+#import <AppKit/NSScreen.h>
+#import <Foundation/NSArray.h>
 
 QT_BEGIN_NAMESPACE
 
@@ -50,7 +50,6 @@ public:
 
     bool requestUpdate();
     void deliverUpdateRequests();
-    bool isRunningDisplayLink() const;
 
     static QCocoaScreen *primaryScreen();
     static QCocoaScreen *get(NSScreen *nsScreen);
@@ -66,6 +65,8 @@ private:
     static void initializeScreens();
     static void updateScreens();
     static void cleanupScreens();
+
+    static void updateHdrWindows();
 
     static QMacNotificationObserver s_screenParameterObserver;
     static CGDisplayReconfigurationCallBack s_displayReconfigurationCallBack;
@@ -95,7 +96,10 @@ private:
 
     CVDisplayLinkRef m_displayLink = nullptr;
     dispatch_source_t m_displayLinkSource = nullptr;
-    QAtomicInt m_pendingUpdates;
+    QAtomicInt m_pendingUpdateRequests;
+    QAtomicInt m_pendingDisplayLinkUpdates;
+
+    void maybeStopDisplayLink();
 
     friend class QCocoaIntegration;
     friend class QCocoaWindow;

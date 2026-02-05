@@ -1,5 +1,6 @@
 // Copyright (C) 2016 The Qt Company Ltd.
 // SPDX-License-Identifier: LicenseRef-Qt-Commercial OR LGPL-3.0-only OR GPL-2.0-only OR GPL-3.0-only
+// Qt-Security score:significant reason:default
 
 #ifndef QLABEL_P_H
 #define QLABEL_P_H
@@ -26,9 +27,8 @@
 #if QT_CONFIG(movie)
 #include "qmovie.h"
 #endif
-#include "qimage.h"
-#include "qbitmap.h"
 #include "qpicture.h"
+#include "qpixmap.h"
 #if QT_CONFIG(menu)
 #include "qmenu.h"
 #endif
@@ -86,9 +86,8 @@ public:
     mutable QSize sh;
     mutable QSize msh;
     QString text;
-    std::optional<QPixmap> pixmap;
-    std::optional<QPixmap> scaledpixmap;
-    std::optional<QImage> cachedimage;
+    std::optional<QIcon> icon;
+    QSize pixmapSize;
 #ifndef QT_NO_PICTURE
     std::optional<QPicture> picture;
 #endif
@@ -96,22 +95,22 @@ public:
     QPointer<QMovie> movie;
     std::array<QMetaObject::Connection, 2> movieConnections;
 #endif
-    mutable QWidgetTextControl *control;
+    mutable QWidgetTextControl *control = nullptr;
     mutable QTextCursor shortcutCursor;
 #ifndef QT_NO_CURSOR
     QCursor cursor;
 #endif
 #ifndef QT_NO_SHORTCUT
     QPointer<QWidget> buddy;
-    int shortcutId;
+    int shortcutId = 0;
 #endif
-    Qt::TextFormat textformat;
-    Qt::TextFormat effectiveTextFormat;
-    Qt::TextInteractionFlags textInteractionFlags;
+    Qt::TextFormat textformat = Qt::AutoText;
+    Qt::TextFormat effectiveTextFormat = Qt::PlainText;
+    Qt::TextInteractionFlags textInteractionFlags = Qt::LinksAccessibleByMouse;
     mutable QSizePolicy sizePolicy;
-    int margin;
-    ushort align;
-    short indent;
+    int margin = 0;
+    int align = Qt::AlignLeft | Qt::AlignVCenter | Qt::TextExpandTabs;
+    int indent = -1;
     mutable uint valid_hints : 1;
     uint scaledcontents : 1;
     mutable uint textLayoutDirty : 1;
@@ -124,7 +123,7 @@ public:
 #endif
     uint openExternalLinks : 1;
     // <-- space for more bit field values here
-    QTextDocument::ResourceProvider resourceProvider;
+    QTextDocument::ResourceProvider resourceProvider = nullptr;
 
     friend class QMessageBoxPrivate;
 };

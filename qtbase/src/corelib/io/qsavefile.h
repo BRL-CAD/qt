@@ -1,12 +1,13 @@
 // Copyright (C) 2012 David Faure <faure@kde.org>
 // SPDX-License-Identifier: LicenseRef-Qt-Commercial OR LGPL-3.0-only OR GPL-2.0-only OR GPL-3.0-only
+// Qt-Security score:significant reason:header-decls-only
 
 #ifndef QSAVEFILE_H
 #define QSAVEFILE_H
 
 #include <QtCore/qglobal.h>
 
-#ifndef QT_NO_TEMPORARYFILE
+#if QT_CONFIG(temporaryfile)
 
 #include <QtCore/qfiledevice.h>
 #include <QtCore/qstring.h>
@@ -22,24 +23,20 @@ class QSaveFilePrivate;
 
 class Q_CORE_EXPORT QSaveFile : public QFileDevice
 {
-#ifndef QT_NO_QOBJECT
     Q_OBJECT
-#endif
     Q_DECLARE_PRIVATE(QSaveFile)
 
 public:
 
     explicit QSaveFile(const QString &name);
-#ifndef QT_NO_QOBJECT
     explicit QSaveFile(QObject *parent = nullptr);
     explicit QSaveFile(const QString &name, QObject *parent);
-#endif
     ~QSaveFile();
 
     QString fileName() const override;
     void setFileName(const QString &name);
 
-    bool open(OpenMode flags) override;
+    QFILE_MAYBE_NODISCARD bool open(OpenMode flags) override;
     bool commit();
 
     void cancelWriting();
@@ -58,10 +55,11 @@ private:
 
 private:
     Q_DISABLE_COPY(QSaveFile)
+    friend class QFilePrivate;
 };
 
 QT_END_NAMESPACE
 
-#endif // QT_NO_TEMPORARYFILE
+#endif // QT_CONFIG(temporaryfile)
 
 #endif // QSAVEFILE_H

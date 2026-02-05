@@ -22,7 +22,8 @@ void QContiguousCacheData::dump() const
 
 QContiguousCacheData *QContiguousCacheData::allocateData(qsizetype size, qsizetype alignment)
 {
-    return static_cast<QContiguousCacheData *>(qMallocAligned(size_t(size), size_t(alignment)));
+    void *mem = qMallocAligned(size_t(size), size_t(alignment));
+    return new (mem) QContiguousCacheData{/*ref=*/1, 0, 0, 0, 0};
 }
 
 void QContiguousCacheData::freeData(QContiguousCacheData *data)
@@ -164,9 +165,7 @@ void QContiguousCacheData::freeData(QContiguousCacheData *data)
 
 /*! \fn template<typename T> void QContiguousCache<T>::swap(QContiguousCache<T> &other)
     \since 4.8
-
-    Swaps cache \a other with this cache. This operation is very
-    fast and never fails.
+    \memberswap{cache}
 */
 
 /*! \fn template<typename T> bool QContiguousCache<T>::operator==(const QContiguousCache<T> &other) const

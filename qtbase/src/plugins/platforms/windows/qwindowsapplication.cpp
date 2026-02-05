@@ -2,7 +2,9 @@
 // SPDX-License-Identifier: LicenseRef-Qt-Commercial OR LGPL-3.0-only OR GPL-2.0-only OR GPL-3.0-only
 
 #include "qwindowsapplication.h"
+#if QT_CONFIG(clipboard)
 #include "qwindowsclipboard.h"
+#endif
 #include "qwindowscontext.h"
 #include "qwindowsmimeregistry.h"
 #include "qwin10helpers.h"
@@ -70,11 +72,6 @@ bool QWindowsApplication::setWinTabEnabled(bool enabled)
     if (!ctx)
         return false;
     return enabled ? ctx->initTablet() : ctx->disposeTablet();
-}
-
-bool QWindowsApplication::isDarkMode() const
-{
-    return QWindowsContext::isDarkMode();
 }
 
 QWindowsApplication::DarkModeHandling QWindowsApplication::darkModeHandling() const

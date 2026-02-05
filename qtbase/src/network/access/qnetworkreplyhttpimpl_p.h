@@ -1,5 +1,6 @@
 // Copyright (C) 2016 The Qt Company Ltd.
 // SPDX-License-Identifier: LicenseRef-Qt-Commercial OR LGPL-3.0-only OR GPL-2.0-only OR GPL-3.0-only
+// Qt-Security score:significant reason:default
 
 #ifndef QNETWORKREPLYHTTPIMPL_P_H
 #define QNETWORKREPLYHTTPIMPL_P_H
@@ -57,6 +58,7 @@ public:
 
     void close() override;
     void abort() override;
+    void abortImpl(QNetworkReply::NetworkError error);
     qint64 bytesAvailable() const override;
     bool isSequential () const override;
     qint64 size() const override;
@@ -123,7 +125,7 @@ class QNetworkReplyHttpImplPrivate: public QNetworkReplyPrivate
 {
 public:
 
-    static QHttpNetworkRequest::Priority convert(const QNetworkRequest::Priority& prio);
+    static QHttpNetworkRequest::Priority convert(QNetworkRequest::Priority prio);
 
     QNetworkReplyHttpImplPrivate();
     ~QNetworkReplyHttpImplPrivate();
@@ -162,6 +164,7 @@ public:
     QString reasonPhrase;
 
     // upload
+    void maybeDropUploadDevice(const QNetworkRequest &newHttpRequest);
     QNonContiguousByteDevice* createUploadByteDevice();
     std::shared_ptr<QNonContiguousByteDevice> uploadByteDevice;
     qint64 uploadByteDevicePosition;
@@ -244,7 +247,7 @@ public:
     // From HTTP thread:
     void replyDownloadData(QByteArray);
     void replyFinished();
-    void replyDownloadMetaData(const QList<QPair<QByteArray,QByteArray> > &, int, const QString &,
+    void replyDownloadMetaData(const QHttpHeaders &, int, const QString &,
                                bool, QSharedPointer<char>, qint64, qint64, bool, bool);
     void replyDownloadProgressSlot(qint64,qint64);
     void httpAuthenticationRequired(const QHttpNetworkRequest &request, QAuthenticator *auth);

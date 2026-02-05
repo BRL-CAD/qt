@@ -1,5 +1,6 @@
 // Copyright (C) 2016 The Qt Company Ltd.
 // SPDX-License-Identifier: LicenseRef-Qt-Commercial OR LGPL-3.0-only OR GPL-2.0-only OR GPL-3.0-only
+// Qt-Security score:significant reason:default
 
 #ifndef QABSTRACTITEMVIEW_P_H
 #define QABSTRACTITEMVIEW_P_H
@@ -25,7 +26,6 @@
 #include "QtGui/qpainter.h"
 #include "QtGui/qregion.h"
 
-#include "QtCore/qdebug.h"
 #include "QtCore/qbasictimer.h"
 #include "QtCore/qelapsedtimer.h"
 #include <QtCore/qpointer.h>
@@ -164,10 +164,11 @@ public:
     inline void paintDropIndicator(QPainter *painter)
     {
         if (showDropIndicator && state == QAbstractItemView::DraggingState
+            && !dropIndicatorRect.isNull()
 #ifndef QT_NO_CURSOR
             && viewport->cursor().shape() != Qt::ForbiddenCursor
 #endif
-            ) {
+        ) {
             QStyleOption opt;
             opt.initFrom(q_func());
             opt.rect = dropIndicatorRect;
@@ -351,6 +352,7 @@ public:
     Qt::KeyboardModifiers pressedModifiers;
     QPoint pressedPosition;
     QPoint draggedPosition;
+    QPoint draggedPositionOffset;
     bool pressedAlreadySelected;
     bool releaseFromDoubleClick;
 
@@ -420,6 +422,8 @@ public:
     // Whether scroll mode has been explicitly set or its value come from SH_ItemView_ScrollMode
     bool verticalScrollModeSet;
     bool horizontalScrollModeSet;
+
+    int updateThreshold;
 
     virtual QRect visualRect(const QModelIndex &index) const { return q_func()->visualRect(index); }
 

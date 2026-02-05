@@ -1,6 +1,7 @@
 // Copyright (C) 2021 The Qt Company Ltd.
 // Copyright (C) 2014 BlackBerry Limited. All rights reserved.
 // SPDX-License-Identifier: LicenseRef-Qt-Commercial OR LGPL-3.0-only OR GPL-2.0-only OR GPL-3.0-only
+// Qt-Security score:significant reason:default
 
 
 //#define QSSLSOCKET_DEBUG
@@ -363,6 +364,12 @@
 QT_BEGIN_NAMESPACE
 
 using namespace Qt::StringLiterals;
+
+#ifdef Q_OS_VXWORKS
+constexpr auto isVxworks = true;
+#else
+constexpr auto isVxworks = false;
+#endif
 
 class QSslSocketGlobalData
 {
@@ -1837,7 +1844,7 @@ void QSslSocket::continueInterruptedHandshake()
 }
 
 /*!
-    \internal
+    \reimp
 */
 void QSslSocket::connectToHost(const QString &hostName, quint16 port, OpenMode openMode, NetworkLayerProtocol protocol)
 {
@@ -1868,7 +1875,7 @@ void QSslSocket::connectToHost(const QString &hostName, quint16 port, OpenMode o
 }
 
 /*!
-    \internal
+    \reimp
 */
 void QSslSocket::disconnectFromHost()
 {
@@ -2416,8 +2423,10 @@ void QSslSocketPrivate::setPaused(bool p)
     paused = p;
 }
 
-bool QSslSocketPrivate::bind(const QHostAddress &address, quint16 port, QAbstractSocket::BindMode mode)
+bool QSslSocketPrivate::bind(const QHostAddress &address, quint16 port, QAbstractSocket::BindMode mode,
+                             const QNetworkInterface *iface)
 {
+    Q_UNUSED(iface); // only relevant for QUdpSocket for now
     // this function is called from QAbstractSocket::bind
     if (!initialized)
         init();
@@ -2956,7 +2965,8 @@ QList<QByteArray> QSslSocketPrivate::unixRootCertDirectories()
     static const QByteArray dirs[] = {
         ba("/etc/ssl/certs/"), // (K)ubuntu, OpenSUSE, Mandriva ...
         ba("/usr/lib/ssl/certs/"), // Gentoo, Mandrake
-        ba("/usr/share/ssl/"), // Centos, Redhat, SuSE
+        ba("/usr/share/ssl/"), // Red Hat pre-2004, SuSE
+        ba("/etc/pki/ca-trust/extracted/pem/directory-hash/"), // Red Hat 2021+
         ba("/usr/local/ssl/"), // Normal OpenSSL Tarball
         ba("/var/ssl/certs/"), // AIX
         ba("/usr/local/ssl/certs/"), // Solaris
@@ -2964,7 +2974,13 @@ QList<QByteArray> QSslSocketPrivate::unixRootCertDirectories()
         ba("/opt/openssl/certs/"), // HP-UX
         ba("/etc/ssl/"), // OpenBSD
     };
-    return QList<QByteArray>::fromReadOnlyData(dirs);
+    QList<QByteArray> result = QList<QByteArray>::fromReadOnlyData(dirs);
+    if constexpr (isVxworks) {
+        static QByteArray vxworksCertsDir = qgetenv("VXWORKS_CERTS_DIR");
+        if (!vxworksCertsDir.isEmpty())
+            result.push_back(vxworksCertsDir);
+    }
+    return result;
 }
 
 /*!

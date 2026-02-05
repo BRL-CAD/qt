@@ -2,6 +2,7 @@
 // Copyright (C) 2017 Intel Corporation.
 // Copyright (C) 2016 The Qt Company Ltd.
 // SPDX-License-Identifier: LicenseRef-Qt-Commercial OR LGPL-3.0-only OR GPL-2.0-only OR GPL-3.0-only
+// Qt-Security score:significant reason:default
 
 #include "private/qlockfile_p.h"
 
@@ -101,12 +102,26 @@ static qint64 qt_write_loop(int fd, const char *data, qint64 len)
  * actually the same. Therefore, it's a very bad idea to mix them in the same
  * process.
  *
- * We therefore use only flock(2).
+ * We therefore use only flock(2), except on Android.
+ *
+ * Android Compatibility:
+ * Some versions of Android have known issues where flock does not function correctly.
+ * As a result, on Android, we use POSIX fcntl(F_SETLK) to handle file locking.
+ * fcntl is better integrated with Android’s underlying system, avoiding
+ * the limitations of flock.
  */
 
 static bool setNativeLocks(int fd)
 {
-#if defined(LOCK_EX) && defined(LOCK_NB)
+#if defined(Q_OS_ANDROID)
+    struct flock fl;
+    fl.l_type = F_WRLCK;
+    fl.l_whence = SEEK_SET;
+    fl.l_start = 0;
+    fl.l_len = 0;
+    if (fcntl(fd, F_SETLK, &fl) == -1)
+        return false;
+#elif defined(LOCK_EX) && defined(LOCK_NB)
     if (flock(fd, LOCK_EX | LOCK_NB) == -1) // other threads, and other processes on a local fs
         return false;
 #else
@@ -139,8 +154,9 @@ QLockFile::LockError QLockFilePrivate::tryLock_sys()
     QByteArray fileData = lockFileContents();
     if (qt_write_loop(fd, fileData.constData(), fileData.size()) < fileData.size()) {
         qt_safe_close(fd);
-        if (!QFile::remove(fileName))
-            qWarning("QLockFile: Could not remove our own lock file %ls.", qUtf16Printable(fileName));
+        if (unlink(lockFileName) != 0)
+            qWarning("QLockFile: Could not remove our own lock file %s: %ls.",
+                     lockFileName.constBegin(), qUtf16Printable(qt_error_string()));
         return QLockFile::UnknownError; // partition full
     }
 
@@ -274,12 +290,16 @@ void QLockFile::unlock()
     Q_D(QLockFile);
     if (!d->isLocked)
         return;
-    close(d->fileHandle);
-    d->fileHandle = -1;
-    if (!QFile::remove(d->fileName)) {
-        qWarning() << "Could not remove our own lock file" << d->fileName << "maybe permissions changed meanwhile?";
+
+    const QByteArray lockFileName = QFile::encodeName(d->fileName);
+    if (unlink(lockFileName) != 0) {
+        qWarning("Could not remove our own lock file %s: %ls (maybe permissions changed meanwhile?)",
+                 lockFileName.constBegin(), qUtf16Printable(qt_error_string()));
         // This is bad because other users of this lock file will now have to wait for the stale-lock-timeout...
     }
+
+    close(d->fileHandle);
+    d->fileHandle = -1;
     d->lockError = QLockFile::NoError;
     d->isLocked = false;
 }

@@ -1,5 +1,6 @@
 // Copyright (C) 2016 The Qt Company Ltd.
 // SPDX-License-Identifier: LicenseRef-Qt-Commercial OR LGPL-3.0-only OR GPL-2.0-only OR GPL-3.0-only
+// Qt-Security score:significant reason:default
 
 #include "qfilesystemiterator_p.h"
 #include "qfilesystemengine_p.h"
@@ -7,6 +8,7 @@
 #include "qplatformdefs.h"
 
 #include <QtCore/qt_windows.h>
+#include <QtCore/private/wcharhelpers_win_p.h>
 
 QT_BEGIN_NAMESPACE
 
@@ -14,17 +16,14 @@ using namespace Qt::StringLiterals;
 
 bool done = true;
 
-QFileSystemIterator::QFileSystemIterator(const QFileSystemEntry &entry, QDir::Filters filters,
-                                         const QStringList &nameFilters, QDirIterator::IteratorFlags flags)
-    : nativePath(entry.nativeFilePath())
-    , dirPath(entry.filePath())
+QFileSystemIterator::QFileSystemIterator(const QFileSystemEntry &entry)
+    : dirPath(entry.filePath())
+    , nativePath(entry.nativeFilePath())
     , findFileHandle(INVALID_HANDLE_VALUE)
     , uncFallback(false)
     , uncShareIndex(0)
     , onlyDirs(false)
 {
-    Q_UNUSED(nameFilters);
-    Q_UNUSED(flags);
     if (nativePath.endsWith(u".lnk"_s) && !QFileSystemEngine::isDirPath(dirPath, nullptr)) {
         QFileSystemMetaData metaData;
         QFileSystemEntry link = QFileSystemEngine::getLinkTarget(entry, metaData);
@@ -36,8 +35,20 @@ QFileSystemIterator::QFileSystemIterator(const QFileSystemEntry &entry, QDir::Fi
     // In MSVC2015+ case we prepend //?/ for longer file-name support
     if (!dirPath.endsWith(u'/'))
         dirPath.append(u'/');
+}
+
+QFileSystemIterator::QFileSystemIterator(const QFileSystemEntry &entry, QDir::Filters filters)
+    : QFileSystemIterator(entry)
+{
     if ((filters & (QDir::Dirs|QDir::Drives)) && (!(filters & (QDir::Files))))
         onlyDirs = true;
+}
+
+QFileSystemIterator::QFileSystemIterator(const QFileSystemEntry &entry,
+                                         QDirListing::IteratorFlags flags)
+    : QFileSystemIterator(entry)
+{
+    onlyDirs = flags.testAnyFlags(QDirListing::IteratorFlag::DirsOnly);
 }
 
 QFileSystemIterator::~QFileSystemIterator()
@@ -60,7 +71,8 @@ bool QFileSystemIterator::advance(QFileSystemEntry &fileEntry, QFileSystemMetaDa
         int searchOps =  0;         // FindExSearchNameMatch
         if (onlyDirs)
             searchOps = 1 ;         // FindExSearchLimitToDirectories
-        findFileHandle = FindFirstFileEx((const wchar_t *)nativePath.utf16(), FINDEX_INFO_LEVELS(infoLevel), &findData,
+        findFileHandle = FindFirstFileEx(qt_castToWchar(nativePath),
+                                         FINDEX_INFO_LEVELS(infoLevel), &findData,
                                          FINDEX_SEARCH_OPS(searchOps), 0, dwAdditionalFlags);
         if (findFileHandle == INVALID_HANDLE_VALUE) {
             if (nativePath.startsWith("\\\\?\\UNC\\"_L1)) {
@@ -90,17 +102,15 @@ bool QFileSystemIterator::advance(QFileSystemEntry &fileEntry, QFileSystemMetaDa
     if (uncFallback) {
         fileEntry = QFileSystemEntry(dirPath + uncShares.at(uncShareIndex));
         metaData.fillFromFileAttribute(FILE_ATTRIBUTE_DIRECTORY);
-        return true;
     } else {
         QString fileName = QString::fromWCharArray(findData.cFileName);
         fileEntry = QFileSystemEntry(dirPath + fileName);
         metaData = QFileSystemMetaData();
-        if (!fileName.endsWith(".lnk"_L1)) {
+        if (findData.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY || !fileName.endsWith(".lnk"_L1)) {
             metaData.fillFromFindData(findData, true);
         }
-        return true;
     }
-    return false;
+    return true;
 }
 
 QT_END_NAMESPACE

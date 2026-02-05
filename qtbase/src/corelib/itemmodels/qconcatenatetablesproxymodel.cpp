@@ -1,5 +1,6 @@
 // Copyright (C) 2016 Klarälvdalens Datakonsult AB, a KDAB Group company, info@kdab.com, author David Faure <david.faure@kdab.com>
 // SPDX-License-Identifier: LicenseRef-Qt-Commercial OR LGPL-3.0-only OR GPL-2.0-only OR GPL-3.0-only
+// Qt-Security score:significant reason:default
 
 #include "qconcatenatetablesproxymodel.h"
 #include <private/qabstractitemmodel_p.h>
@@ -30,10 +31,18 @@ public:
     void slotRowsInserted(const QModelIndex &, int start, int end);
     void slotRowsAboutToBeRemoved(const QModelIndex &, int start, int end);
     void slotRowsRemoved(const QModelIndex &, int start, int end);
+    void slotRowsAboutToBeMoved(const QModelIndex &sourceParent, int sourceStart, int sourceEnd,
+                                const QModelIndex &destinationParent, int destinationRow);
+    void slotRowsMoved(const QModelIndex &sourceParent, int sourceStart, int sourceEnd,
+                       const QModelIndex &destinationParent, int destinationRow);
     void slotColumnsAboutToBeInserted(const QModelIndex &parent, int start, int end);
     void slotColumnsInserted(const QModelIndex &parent, int, int);
     void slotColumnsAboutToBeRemoved(const QModelIndex &parent, int start, int end);
     void slotColumnsRemoved(const QModelIndex &parent, int, int);
+    void slotColumnsAboutToBeMoved(const QModelIndex &sourceParent, int sourceStart, int sourceEnd,
+                                   const QModelIndex &destinationParent, int destination);
+    void slotColumnsMoved(const QModelIndex &sourceParent, int sourceStart, int sourceEnd,
+                          const QModelIndex &destinationParent, int destination);
     void slotDataChanged(const QModelIndex &from, const QModelIndex &to, const QList<int> &roles);
     void slotSourceLayoutAboutToBeChanged(const QList<QPersistentModelIndex> &sourceParents, QAbstractItemModel::LayoutChangeHint hint);
     void slotSourceLayoutChanged(const QList<QPersistentModelIndex> &sourceParents, QAbstractItemModel::LayoutChangeHint hint);
@@ -46,13 +55,14 @@ public:
                                     int *sourceRow, int *sourceColumn, QModelIndex *sourceParent, QAbstractItemModel **sourceModel) const;
 
     struct ModelInfo {
-        using ConnArray = std::array<QMetaObject::Connection, 13>;
+        using ConnArray = std::array<QMetaObject::Connection, 17>;
         ModelInfo(QAbstractItemModel *m, ConnArray &&con)
             : model(m), connections(std::move(con)) {}
         QAbstractItemModel *model = nullptr;
         ConnArray connections;
     };
     QList<ModelInfo> m_models;
+    mutable QHash<int, QByteArray> m_roleNames;
 
     QList<ModelInfo>::const_iterator findSourceModel(const QAbstractItemModel *m) const
     {
@@ -69,6 +79,9 @@ public:
     // for columns{AboutToBe,}{Inserted,Removed}
     int m_newColumnCount;
 
+    mutable uint m_roleNamesDirty : 1;
+    uint m_reserved : 31;
+
     // for layoutAboutToBeChanged/layoutChanged
     QList<QPersistentModelIndex> layoutChangePersistentIndexes;
     QList<QModelIndex> layoutChangeProxyIndexes;
@@ -77,7 +90,9 @@ public:
 QConcatenateTablesProxyModelPrivate::QConcatenateTablesProxyModelPrivate()
     : m_rowCount(0),
       m_columnCount(0),
-      m_newColumnCount(0)
+      m_newColumnCount(0),
+      m_roleNamesDirty(true),
+      m_reserved(0)
 {
 }
 
@@ -472,6 +487,10 @@ void QConcatenateTablesProxyModel::addSourceModel(QAbstractItemModel *sourceMode
                                 d, &QConcatenateTablesProxyModelPrivate::slotRowsAboutToBeInserted),
         QObjectPrivate::connect(sourceModel, &QAbstractItemModel::rowsAboutToBeRemoved,
                                 d, &QConcatenateTablesProxyModelPrivate::slotRowsAboutToBeRemoved),
+        QObjectPrivate::connect(sourceModel, &QAbstractItemModel::rowsMoved,
+                                d, &QConcatenateTablesProxyModelPrivate::slotRowsMoved),
+        QObjectPrivate::connect(sourceModel, &QAbstractItemModel::rowsAboutToBeMoved,
+                                d, &QConcatenateTablesProxyModelPrivate::slotRowsAboutToBeMoved),
 
         QObjectPrivate::connect(sourceModel, &QAbstractItemModel::columnsInserted,
                                 d, &QConcatenateTablesProxyModelPrivate::slotColumnsInserted),
@@ -481,6 +500,10 @@ void QConcatenateTablesProxyModel::addSourceModel(QAbstractItemModel *sourceMode
                                 d, &QConcatenateTablesProxyModelPrivate::slotColumnsAboutToBeInserted),
         QObjectPrivate::connect(sourceModel, &QAbstractItemModel::columnsAboutToBeRemoved,
                                 d, &QConcatenateTablesProxyModelPrivate::slotColumnsAboutToBeRemoved),
+        QObjectPrivate::connect(sourceModel, &QAbstractItemModel::columnsMoved,
+                                d, &QConcatenateTablesProxyModelPrivate::slotColumnsMoved),
+        QObjectPrivate::connect(sourceModel, &QAbstractItemModel::columnsAboutToBeMoved,
+                                d, &QConcatenateTablesProxyModelPrivate::slotColumnsAboutToBeMoved),
 
         QObjectPrivate::connect(sourceModel, &QAbstractItemModel::layoutAboutToBeChanged,
                                 d, &QConcatenateTablesProxyModelPrivate::slotSourceLayoutAboutToBeChanged),
@@ -491,6 +514,12 @@ void QConcatenateTablesProxyModel::addSourceModel(QAbstractItemModel *sourceMode
         QObjectPrivate::connect(sourceModel, &QAbstractItemModel::modelReset,
                                 d, &QConcatenateTablesProxyModelPrivate::slotModelReset),
     });
+    if (!d->m_roleNamesDirty) {
+        // do update immediately, since append() is a simple update:
+        const auto newRoleNames = sourceModel->roleNames();
+        for (const auto &[k, v] : newRoleNames.asKeyValueRange())
+            d->m_roleNames.insert_or_assign(k, v);
+    }
     if (newRows > 0)
         endInsertRows();
 
@@ -517,11 +546,32 @@ void QConcatenateTablesProxyModel::removeSourceModel(QAbstractItemModel *sourceM
     if (rowsRemoved > 0)
         beginRemoveRows(QModelIndex(), rowsPrior, rowsPrior + rowsRemoved - 1);
     d->m_models.erase(it);
+    d->m_roleNamesDirty = true;
     d->m_rowCount -= rowsRemoved;
     if (rowsRemoved > 0)
         endRemoveRows();
 
     d->updateColumnCount();
+}
+
+/*!
+    \since 6.9.0
+    \reimp
+    Returns the union of the roleNames() of the underlying models.
+
+    In case source models associate different names to the same role,
+    the name used in last source model overrides the name used in earlier models.
+*/
+QHash<int, QByteArray> QConcatenateTablesProxyModel::roleNames() const
+{
+    Q_D(const QConcatenateTablesProxyModel);
+    if (d->m_roleNamesDirty) {
+        d->m_roleNames = QAbstractItemModelPrivate::defaultRoleNames();
+        for (const auto &[model, _] : d->m_models)
+            d->m_roleNames.insert(model->roleNames());
+        d->m_roleNamesDirty = false;
+    }
+    return d->m_roleNames;
 }
 
 void QConcatenateTablesProxyModelPrivate::slotRowsAboutToBeInserted(const QModelIndex &parent,
@@ -563,6 +613,33 @@ void QConcatenateTablesProxyModelPrivate::slotRowsRemoved(const QModelIndex &par
         return;
     m_rowCount -= end - start + 1;
     q->endRemoveRows();
+}
+
+void QConcatenateTablesProxyModelPrivate::slotRowsAboutToBeMoved(
+        const QModelIndex &sourceParent, int sourceStart, int sourceEnd,
+        const QModelIndex &destinationParent, int destinationRow)
+{
+    Q_Q(QConcatenateTablesProxyModel);
+    if (sourceParent.isValid() || destinationParent.isValid())
+        return;
+    const QAbstractItemModel *const model = static_cast<QAbstractItemModel *>(q->sender());
+    const int rowsPrior = computeRowsPrior(model);
+    q->beginMoveRows(sourceParent, rowsPrior + sourceStart, rowsPrior + sourceEnd,
+                     destinationParent, rowsPrior + destinationRow);
+}
+
+void QConcatenateTablesProxyModelPrivate::slotRowsMoved(const QModelIndex &sourceParent,
+                                                        int sourceStart, int sourceEnd,
+                                                        const QModelIndex &destinationParent,
+                                                        int destinationRow)
+{
+    Q_Q(QConcatenateTablesProxyModel);
+    Q_UNUSED(sourceStart)
+    Q_UNUSED(sourceEnd)
+    Q_UNUSED(destinationRow)
+    if (sourceParent.isValid() || destinationParent.isValid())
+        return;
+    q->endMoveRows();
 }
 
 void QConcatenateTablesProxyModelPrivate::slotColumnsAboutToBeInserted(const QModelIndex &parent,
@@ -623,6 +700,31 @@ void QConcatenateTablesProxyModelPrivate::slotColumnsRemoved(const QModelIndex &
         m_columnCount = m_newColumnCount;
         q->endRemoveColumns();
     }
+}
+
+void QConcatenateTablesProxyModelPrivate::slotColumnsAboutToBeMoved(
+        const QModelIndex &sourceParent, int sourceStart, int sourceEnd,
+        const QModelIndex &destinationParent, int destination)
+{
+    Q_UNUSED(sourceStart)
+    Q_UNUSED(sourceEnd)
+    Q_UNUSED(destination)
+    if (sourceParent.isValid() || destinationParent.isValid())
+        return;
+    slotSourceLayoutAboutToBeChanged({}, QAbstractItemModel::HorizontalSortHint);
+}
+
+void QConcatenateTablesProxyModelPrivate::slotColumnsMoved(const QModelIndex &sourceParent,
+                                                           int sourceStart, int sourceEnd,
+                                                           const QModelIndex &destinationParent,
+                                                           int destination)
+{
+    Q_UNUSED(sourceStart)
+    Q_UNUSED(sourceEnd)
+    Q_UNUSED(destination)
+    if (sourceParent.isValid() || destinationParent.isValid())
+        return;
+    slotSourceLayoutChanged({}, QAbstractItemModel::HorizontalSortHint);
 }
 
 void QConcatenateTablesProxyModelPrivate::slotDataChanged(const QModelIndex &from,

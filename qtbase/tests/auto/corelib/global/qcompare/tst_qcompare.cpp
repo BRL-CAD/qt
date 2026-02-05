@@ -11,6 +11,17 @@
 class tst_QCompare: public QObject
 {
     Q_OBJECT
+
+    enum TestEnum : int {
+        Smaller,
+        Bigger
+    };
+
+#ifdef __cpp_lib_three_way_comparison
+    template<typename LeftType, typename RightType, typename OrderingType>
+    void compare3WayHelper(LeftType lhs, RightType rhs, OrderingType order);
+#endif
+
 private slots:
     void legacyPartialOrdering();
     void legacyConversions();
@@ -22,6 +33,8 @@ private slots:
     void conversions();
     void is_eq_overloads();
     void compareThreeWay();
+    void unorderedNeqLiteralZero();
+    void compare3WayMacro();
 };
 
 void tst_QCompare::legacyPartialOrdering()
@@ -52,21 +65,21 @@ void tst_QCompare::legacyPartialOrdering()
     static_assert(QPartialOrdering::Greater == QPartialOrdering::Greater);
 
     static_assert(!is_eq  (QPartialOrdering::Unordered));
-    static_assert(!is_neq (QPartialOrdering::Unordered));
+    static_assert( is_neq (QPartialOrdering::Unordered));
     static_assert(!is_lt  (QPartialOrdering::Unordered));
     static_assert(!is_lteq(QPartialOrdering::Unordered));
     static_assert(!is_gt  (QPartialOrdering::Unordered));
     static_assert(!is_gteq(QPartialOrdering::Unordered));
 
     static_assert(!(QPartialOrdering::Unordered == 0));
-    static_assert(!(QPartialOrdering::Unordered != 0));
+    static_assert( (QPartialOrdering::Unordered != 0));
     static_assert(!(QPartialOrdering::Unordered <  0));
     static_assert(!(QPartialOrdering::Unordered <= 0));
     static_assert(!(QPartialOrdering::Unordered >  0));
     static_assert(!(QPartialOrdering::Unordered >= 0));
 
     static_assert(!(0 == QPartialOrdering::Unordered));
-    static_assert(!(0 != QPartialOrdering::Unordered));
+    static_assert( (0 != QPartialOrdering::Unordered));
     static_assert(!(0 <  QPartialOrdering::Unordered));
     static_assert(!(0 <= QPartialOrdering::Unordered));
     static_assert(!(0 >  QPartialOrdering::Unordered));
@@ -224,21 +237,21 @@ void tst_QCompare::partialOrdering()
     static_assert(Qt::partial_ordering::greater == Qt::partial_ordering::greater);
 
     static_assert(!is_eq  (Qt::partial_ordering::unordered));
-    static_assert(!is_neq (Qt::partial_ordering::unordered));
+    static_assert( is_neq (Qt::partial_ordering::unordered));
     static_assert(!is_lt  (Qt::partial_ordering::unordered));
     static_assert(!is_lteq(Qt::partial_ordering::unordered));
     static_assert(!is_gt  (Qt::partial_ordering::unordered));
     static_assert(!is_gteq(Qt::partial_ordering::unordered));
 
     static_assert(!(Qt::partial_ordering::unordered == 0));
-    static_assert(!(Qt::partial_ordering::unordered != 0));
+    static_assert( (Qt::partial_ordering::unordered != 0));
     static_assert(!(Qt::partial_ordering::unordered <  0));
     static_assert(!(Qt::partial_ordering::unordered <= 0));
     static_assert(!(Qt::partial_ordering::unordered >  0));
     static_assert(!(Qt::partial_ordering::unordered >= 0));
 
     static_assert(!(0 == Qt::partial_ordering::unordered));
-    static_assert(!(0 != Qt::partial_ordering::unordered));
+    static_assert( (0 != Qt::partial_ordering::unordered));
     static_assert(!(0 <  Qt::partial_ordering::unordered));
     static_assert(!(0 <= Qt::partial_ordering::unordered));
     static_assert(!(0 >  Qt::partial_ordering::unordered));
@@ -755,7 +768,7 @@ private:
     { return comparesEqual(lhs, StringWrapper(QString::number(rhs))); }
     friend Qt::weak_ordering compareThreeWay(const StringWrapper &lhs, int rhs)
     { return compareHelper(lhs.m_val, QString::number(rhs)); }
-    Q_DECLARE_WEAKLY_ORDERED(StringWrapper, int)
+    Q_DECLARE_WEAKLY_ORDERED_NON_NOEXCEPT(StringWrapper, int)
 
     QString m_val;
 };
@@ -776,18 +789,14 @@ void tst_QCompare::compareThreeWay()
     static_assert(noexcept(qCompareThreeWay(std::declval<float>(), std::declval<int>())));
     static_assert(noexcept(qCompareThreeWay(std::declval<double>(), std::declval<float>())));
     static_assert(noexcept(qCompareThreeWay(std::declval<int>(), std::declval<int>())));
-
     // enums
-    enum TestEnum : int {
-        Smaller,
-        Bigger
-    };
     static_assert(noexcept(qCompareThreeWay(std::declval<TestEnum>(), std::declval<TestEnum>())));
 
     // pointers
-    static_assert(noexcept(qCompareThreeWay(std::declval<StringWrapper *>(),
-                                            std::declval<StringWrapper *>())));
-    static_assert(noexcept(qCompareThreeWay(std::declval<StringWrapper *>(), nullptr)));
+    using StringWrapperPtr = Qt::totally_ordered_wrapper<StringWrapper *>;
+    static_assert(noexcept(qCompareThreeWay(std::declval<StringWrapperPtr>(),
+                                            std::declval<StringWrapperPtr>())));
+    static_assert(noexcept(qCompareThreeWay(std::declval<StringWrapperPtr>(), nullptr)));
 
     // Test some actual comparison results
 
@@ -832,8 +841,107 @@ void tst_QCompare::compareThreeWay()
 
     // pointers
     std::array<int, 2> arr{1, 0};
+#if QT_DEPRECATED_SINCE(6, 8)
+QT_WARNING_PUSH
+QT_WARNING_DISABLE_DEPRECATED
     QCOMPARE_EQ(qCompareThreeWay(&arr[1], &arr[0]), Qt::strong_ordering::greater);
     QCOMPARE_EQ(qCompareThreeWay(arr.data(), &arr[0]), Qt::strong_ordering::equivalent);
+QT_WARNING_POP
+#endif // QT_DEPRECATED_SINCE(6, 8)
+    const auto a0 = Qt::totally_ordered_wrapper(&arr[0]);
+    const auto a1 = Qt::totally_ordered_wrapper(&arr[1]);
+    QCOMPARE_EQ(qCompareThreeWay(a1, a0), Qt::strong_ordering::greater);
+    QCOMPARE_EQ(qCompareThreeWay(arr.data(), a0), Qt::strong_ordering::equivalent);
+}
+
+void tst_QCompare::unorderedNeqLiteralZero()
+{
+    // This test is checking QTBUG-127759
+    constexpr auto qtUnordered = Qt::partial_ordering::unordered;
+    constexpr auto qtLegacyUnordered = QPartialOrdering::Unordered;
+#ifdef __cpp_lib_three_way_comparison
+    constexpr auto stdUnordered = std::partial_ordering::unordered;
+
+    QVERIFY(stdUnordered != 0);
+    QVERIFY(0 != stdUnordered);
+    QVERIFY(is_neq(stdUnordered));
+
+    QCOMPARE_EQ(qtUnordered != 0, stdUnordered != 0);
+    QCOMPARE_EQ(0 != qtUnordered, 0 != stdUnordered);
+    QCOMPARE_EQ(is_neq(qtUnordered), is_neq(stdUnordered));
+
+    QCOMPARE_EQ(qtLegacyUnordered != 0, stdUnordered != 0);
+    QCOMPARE_EQ(0 != qtLegacyUnordered, 0 != stdUnordered);
+    QCOMPARE_EQ(is_neq(qtLegacyUnordered), is_neq(stdUnordered));
+#endif
+    QVERIFY(qtUnordered != 0);
+    QVERIFY(0 != qtUnordered);
+    QVERIFY(is_neq(qtUnordered));
+
+    QVERIFY(qtLegacyUnordered != 0);
+    QVERIFY(0 != qtLegacyUnordered);
+    QVERIFY(is_neq(qtLegacyUnordered));
+}
+
+#ifdef __cpp_lib_three_way_comparison
+template<typename LeftType, typename RightType, typename OrderingType>
+void tst_QCompare::compare3WayHelper(LeftType lhs, RightType rhs, OrderingType order)
+{
+    // check Qt ordering type.
+    QCOMPARE_3WAY(lhs, rhs, QtOrderingPrivate::to_Qt(order));
+    // Also check std ordering type.
+    QCOMPARE_3WAY(lhs, rhs, QtOrderingPrivate::to_std(order));
+}
+#endif
+
+void tst_QCompare::compare3WayMacro()
+{
+#ifdef __cpp_lib_three_way_comparison
+    constexpr std::array comparison_array = {1, 0};
+    // for custom types
+    compare3WayHelper(StringWrapper("ABC"), StringWrapper("abc"),
+                      Qt::weak_ordering::equivalent);
+    compare3WayHelper(StringWrapper("ABC"), StringWrapper("qwe"),
+                      Qt::weak_ordering::less);
+    compare3WayHelper(StringWrapper("qwe"), StringWrapper("ABC"),
+                      Qt::weak_ordering::greater);
+
+    compare3WayHelper(StringWrapper("10"), 10, Qt::weak_ordering::equivalent);
+    compare3WayHelper(StringWrapper("10"), 12, Qt::weak_ordering::less);
+    compare3WayHelper(StringWrapper("12"), 10, Qt::weak_ordering::greater);
+
+    // reversed compareThreeWay()
+    compare3WayHelper(10, StringWrapper("12"), Qt::weak_ordering::less);
+    compare3WayHelper(12, StringWrapper("10"), Qt::weak_ordering::greater);
+    compare3WayHelper(10, StringWrapper("10"), Qt::weak_ordering::equivalent);
+
+    // built-in types
+    compare3WayHelper(1, 1.0, Qt::partial_ordering::equivalent);
+    compare3WayHelper(1, 2, Qt::strong_ordering::less);
+    compare3WayHelper(2.0f, 1.0, Qt::partial_ordering::greater);
+
+    // enums
+    compare3WayHelper(Smaller, Bigger, Qt::strong_ordering::less);
+
+    // pointers
+    compare3WayHelper(&comparison_array[1], &comparison_array[0], Qt::strong_ordering::greater);
+    compare3WayHelper(comparison_array.data(),
+                      &comparison_array[0], Qt::strong_ordering::equivalent);
+
+    const QString lhs = QStringLiteral("abc");
+
+    // We don't want to put those into test data since we want to specifically test comparison
+    // against inline string literals.
+    compare3WayHelper(lhs, u"", Qt::strong_ordering::greater);
+    compare3WayHelper(lhs, u"abc", Qt::strong_ordering::equal);
+    compare3WayHelper(lhs, u"abcd", Qt::strong_ordering::less);
+
+    compare3WayHelper(lhs, "", Qt::strong_ordering::greater);
+    compare3WayHelper(lhs, "abc", Qt::strong_ordering::equal);
+    compare3WayHelper(lhs, "abcd", Qt::strong_ordering::less);
+#else
+    QSKIP("This test requires C++20 comparison support enabled in the standard library");
+#endif
 }
 
 QTEST_MAIN(tst_QCompare)

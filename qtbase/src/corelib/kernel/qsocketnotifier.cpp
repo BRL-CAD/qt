@@ -20,9 +20,6 @@
 
 QT_BEGIN_NAMESPACE
 
-Q_DECLARE_LOGGING_CATEGORY(lcSocketNotifierDeprecation)
-Q_LOGGING_CATEGORY(lcSocketNotifierDeprecation, "qt.core.socketnotifier_deprecation");
-
 QT_IMPL_METATYPE_EXTERN_TAGGED(QSocketNotifier::Type, QSocketNotifier_Type)
 QT_IMPL_METATYPE_EXTERN(QSocketDescriptor)
 
@@ -173,7 +170,7 @@ QSocketNotifier::~QSocketNotifier()
 
 
 /*!
-    \fn void QSocketNotifier::activated(int socket)
+    \fn void QSocketNotifier::activated(int socket, QPrivateSignal)
     \deprecated To avoid unintended truncation of the descriptor, use
     the QSocketDescriptor overload of this function. If you need
     compatibility with versions older than 5.15 you need to change

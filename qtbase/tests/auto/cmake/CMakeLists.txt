@@ -75,7 +75,15 @@ if(UNIX AND NOT APPLE AND NOT WIN32 AND CMAKE_CROSSCOMPILING AND NOT QT_ENABLE_C
     return()
 endif()
 
-set(required_packages Core Network Xml Sql Test)
+# On coin for WoA we have hackish setup to reduce integration time where
+# host tools are deliver by mingw, build is done as cross build
+# and tests run natively on WoA, meaning tooling can not execute natively.
+if(WIN32 AND CMAKE_CROSSCOMPILING)
+    message(STATUS "Running CMake tests is disabled when cross-compiling to WoA")
+    return()
+endif()
+
+set(required_packages Core Network Xml Sql Test TestInternalsPrivate)
 set(optional_packages DBus Gui Widgets PrintSupport OpenGL Concurrent)
 
 # Setup the test when called as a completely standalone project.
@@ -108,6 +116,9 @@ if(NOT TARGET Qt::DBus)
 endif()
 if(NOT TARGET Qt::Widgets)
     set(NO_WIDGETS TRUE)
+endif()
+if(NOT TARGET Qt::OpenGL)
+    set(NO_OPENGL TRUE)
 endif()
 
 include("${_Qt6CTestMacros}")
@@ -146,6 +157,21 @@ if(QT_BUILD_MINIMAL_ANDROID_MULTI_ABI_TESTS AND NOT NO_GUI)
             "-DTEST_ESCAPING_VALUE_ARG=${escaping_value}"
             "-DTEST_SPACES_VALUE_ARG=${spaces_value}"
     )
+
+    #Run test_android_aar only if the host is Unix and zipinfo is available
+    find_program(ZIPINFO_EXECUTABLE zipinfo)
+    if(CMAKE_HOST_UNIX AND ZIPINFO_EXECUTABLE)
+        _qt_internal_test_expect_pass(test_android_aar
+            BUILD_OPTIONS
+                ${multi_abi_vars}
+                --build-target verify_aar
+        )
+    else()
+        message(WARNING
+            "Skipping test_android_aar CMake build test because \
+            the host is not Unix or zipinfo is not found")
+    endif()
+
     return()
 endif()
 
@@ -197,8 +223,11 @@ endif()
 _qt_internal_test_expect_pass(test_add_resource_prefix BINARY test_add_resource_prefix)
 _qt_internal_test_expect_build_fail(test_add_resource_options)
 _qt_internal_test_expect_build_fail(test_wrap_cpp_options)
+_qt_internal_test_expect_pass(test_wrap_cpp_moc)
+_qt_internal_test_expect_pass(test_wrap_cpp_moc_target)
 _qt_internal_test_expect_pass(test_platform_defs_include)
 _qt_internal_test_expect_pass(test_qtmainwin_library)
+_qt_internal_test_expect_pass(test_read_qt_namespace)
 
 if (CMAKE_GENERATOR STREQUAL Ninja AND UNIX AND NOT WIN32)
     _qt_internal_test_expect_pass(test_QFINDTESTDATA
@@ -265,8 +294,13 @@ endif()
 if (NOT NO_WIDGETS)
   list(APPEND qt_module_includes
     Widgets QWidget
-    OpenGL QOpenGLBuffer
     PrintSupport QPrinter
+  )
+endif()
+
+if (NOT NO_OPENGL)
+  list(APPEND qt_module_includes
+    OpenGL QOpenGLBuffer
   )
 endif()
 
@@ -281,7 +315,7 @@ _qt_internal_test_module_includes(
 )
 _qt_internal_test_expect_pass(test_concurrent_module)
 
-if(NOT NO_GUI)
+if(NOT NO_GUI AND NOT NO_OPENGL)
     _qt_internal_test_expect_pass(test_opengl_lib)
 endif()
 
@@ -371,15 +405,22 @@ endif()
 
 _qt_internal_test_expect_pass(test_qt_extract_metatypes)
 
-set(deploy_args
+set(deployment_tests
+    test_plugin_deployment
     test_widgets_app_deployment
-    BINARY "${CMAKE_CTEST_COMMAND}"
-    BINARY_ARGS "-V"
-    # Need to explicitly specify a writable install prefix.
-    BUILD_OPTIONS
-        -DCMAKE_INSTALL_PREFIX=${CMAKE_CURRENT_BINARY_DIR}/test_widgets_app_deployment_installed
-    NO_RUN_ENVIRONMENT_PLUGIN_PATH
 )
+foreach(test_name IN LISTS deployment_tests)
+    set(${test_name}_args
+        ${test_name}
+        BINARY "${CMAKE_CTEST_COMMAND}"
+        BINARY_ARGS "-V"
+        # Need to explicitly specify a writable install prefix.
+        BUILD_OPTIONS
+            -DQT_ENABLE_VERBOSE_DEPLOYMENT=ON
+            -DCMAKE_INSTALL_PREFIX=${CMAKE_CURRENT_BINARY_DIR}/${test_name}_installed
+        NO_RUN_ENVIRONMENT_PLUGIN_PATH
+    )
+endforeach()
 
 set(is_desktop_linux FALSE)
 if(UNIX AND NOT APPLE AND NOT ANDROID AND NOT CMAKE_CROSSCOMPILING)
@@ -390,14 +431,87 @@ endif()
 # and fail on other platforms, because there is no support for runtime dependency deployment on
 # those platforms.
 # With static builds the runtime dependencies are just skipped, but the test should still pass.
-if(WIN32 OR (APPLE AND NOT IOS) OR is_desktop_linux)
-    _qt_internal_test_expect_pass(${deploy_args})
-else()
-    _qt_internal_test_expect_fail(${deploy_args})
-endif()
+foreach(test_name IN LISTS deployment_tests)
+    if(WIN32 OR (APPLE AND NOT IOS) OR is_desktop_linux)
+        _qt_internal_test_expect_pass(${${test_name}_args})
+    else()
+        _qt_internal_test_expect_fail(${${test_name}_args})
+    endif()
+endforeach()
 
 _qt_internal_test_expect_pass(test_config_expressions)
 _qt_internal_test_expect_pass(test_QTP0003)
+
 if(NOT NO_GUI)
     _qt_internal_test_expect_pass(test_collecting_plugins)
 endif()
+
+_qt_internal_test_expect_pass(test_qt_manual_moc)
+
+# check if the os is opensuse. If it is, we need to skip tests due to CI problems
+set(is_opensuse FALSE)
+if(UNIX)
+    if(EXISTS "/etc/os-release")
+        file(STRINGS "/etc/os-release" os_release_content)
+        foreach(line IN LISTS os_release_content)
+            if(line MATCHES "openSUSE" OR line MATCHES "opensuse")
+                set(is_opensuse TRUE)
+                break()
+            endif()
+        endforeach()
+    endif()
+endif()
+
+if(NOT QNX AND NOT WASM AND NOT (WIN32 AND QT_BUILD_MINIMAL_STATIC_TESTS)
+    AND NOT is_opensuse)
+    # Since our CI machines are slow, ctest --build-and-test buffers the output
+    # of the configure step of a test, and the fact that we run all the test
+    # logic in the configure step, we need to divide the tests into smaller
+    # chunks to avoid CI stdout timeout errors.
+    # See https://gitlab.kitware.com/cmake/cmake/-/issues/25790
+    _qt_internal_test_expect_pass(test_qt_add_ui_common)
+    _qt_internal_test_expect_pass(test_qt_add_ui_1)
+    _qt_internal_test_expect_pass(test_qt_add_ui_2)
+    _qt_internal_test_expect_pass(test_qt_add_ui_3)
+    _qt_internal_test_expect_pass(test_qt_add_ui_4)
+    _qt_internal_test_expect_pass(test_qt_add_ui_5)
+    _qt_internal_test_expect_pass(test_qt_add_ui_6)
+    _qt_internal_test_expect_pass(test_qt_add_ui_7)
+    _qt_internal_test_expect_pass(test_qt_add_ui_8)
+    _qt_internal_test_expect_pass(test_qt_add_ui_9)
+    _qt_internal_test_expect_pass(test_qt_add_ui_10)
+    _qt_internal_test_expect_pass(test_qt_add_ui_11)
+endif()
+
+# Valid plugin names
+set(valid_plugin_class_names
+    TestPluginNameUpper
+    Test_Plugin_Name
+    _Test_plugin_name
+    testpluginnamelower
+    Test0PluginName
+)
+foreach(plugin_class_name IN LISTS valid_plugin_class_names)
+    _qt_internal_test_expect_pass(test_plugin_class_name
+        TESTNAME test_plugin_class_name_${plugin_class_name}
+        BUILD_OPTIONS
+            -DPLUGIN_CLASS_NAME=${plugin_class_name}
+    )
+endforeach()
+
+# Invalid plugin names
+set(invalid_plugin_class_names
+    0TestPluginName
+    Test-Plugin-Name
+    Test.plugin.name
+)
+foreach(plugin_class_name IN LISTS invalid_plugin_class_names)
+    _qt_internal_test_expect_fail(test_plugin_class_name
+        TESTNAME test_plugin_class_name_${plugin_class_name}
+        BUILD_OPTIONS
+            -DPLUGIN_CLASS_NAME=${plugin_class_name}
+    )
+endforeach()
+
+# Add all tests using CMake's RunCMake test module
+add_subdirectory(RunCMake)

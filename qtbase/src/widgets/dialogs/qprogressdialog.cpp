@@ -1,5 +1,6 @@
 // Copyright (C) 2016 The Qt Company Ltd.
 // SPDX-License-Identifier: LicenseRef-Qt-Commercial OR LGPL-3.0-only OR GPL-2.0-only OR GPL-3.0-only
+// Qt-Security score:significant reason:default
 
 #include "qprogressdialog.h"
 
@@ -197,10 +198,11 @@ void QProgressDialogPrivate::_q_disconnectOnClose()
 
   A modeless progress dialog is suitable for operations that take
   place in the background, where the user is able to interact with the
-  application. Such operations are typically based on QTimer (or
-  QObject::timerEvent()) or QSocketNotifier; or performed
-  in a separate thread. A QProgressBar in the status bar of your main window
-  is often an alternative to a modeless progress dialog.
+  application. Such operations are typically based on a timer class,
+  such as QChronoTimer (or the more low-level QObject::timerEvent()) or
+  QSocketNotifier; or performed in a separate thread. A QProgressBar in
+  the status bar of your main window is often an alternative to a modeless
+  progress dialog.
 
   You need to have an event loop to be running, connect the
   canceled() signal to a slot that stops the operation, and call \l
@@ -748,7 +750,7 @@ void QProgressDialog::closeEvent(QCloseEvent *e)
 
 /*!
   \property QProgressDialog::autoReset
-  \brief whether the progress dialog calls reset() as soon as value() equals maximum()
+  \brief whether the progress dialog calls reset() as soon as value() equals maximum().
 
   The default is true.
 
@@ -819,8 +821,6 @@ void QProgressDialog::forceShow()
 }
 
 /*!
-    \since 4.5
-
     Opens the dialog and connects its canceled() signal to the slot specified
     by \a receiver and \a member.
 

@@ -2,6 +2,7 @@
 // Copyright (C) 2020 Klarälvdalens Datakonsult AB, a KDAB Group company, info@kdab.com, author Giuseppe D'Angelo <giuseppe.dangelo@kdab.com>
 // Copyright (C) 2021 The Qt Company Ltd.
 // SPDX-License-Identifier: LicenseRef-Qt-Commercial OR LGPL-3.0-only OR GPL-2.0-only OR GPL-3.0-only
+// Qt-Security score:critical reason:data-parser
 
 #include "qregularexpression.h"
 
@@ -39,9 +40,11 @@ using namespace Qt::StringLiterals;
 
     \ingroup tools
     \ingroup shared
+    \ingroup string-processing
 
     \keyword regular expression
 
+    \compares equality
     Regular expressions, or \e{regexps}, are a very powerful tool to handle
     strings and texts. This is useful in many contexts, e.g.,
 
@@ -81,8 +84,6 @@ using namespace Qt::StringLiterals;
     documentation} and the \l{http://perldoc.perl.org/perlretut.html} {Perl's
     regular expression tutorial}.
     \endlist
-
-    \tableofcontents
 
     \section1 Introduction
 
@@ -445,6 +446,7 @@ using namespace Qt::StringLiterals;
 
     \ingroup tools
     \ingroup shared
+    \ingroup string-processing
 
     \keyword regular expression match
 
@@ -497,6 +499,7 @@ using namespace Qt::StringLiterals;
 
     \ingroup tools
     \ingroup shared
+    \ingroup string-processing
 
     \keyword regular expression iterator
 
@@ -721,7 +724,7 @@ struct QRegularExpressionPrivate : QSharedData
                  CheckSubjectStringOption checkSubjectStringOption = CheckSubjectString,
                  const QRegularExpressionMatchPrivate *previous = nullptr) const;
 
-    int captureIndexForName(QStringView name) const;
+    int captureIndexForName(QAnyStringView name) const;
 
     // sizeof(QSharedData) == 4, so start our members with an enum
     QRegularExpression::PatternOptions patternOptions;
@@ -797,13 +800,14 @@ struct QRegularExpressionMatchIteratorPrivate : QSharedData
     (pass it to qUtf16Printable, etc.), so we need to check for that.
 */
 Q_DECL_COLD_FUNCTION
-void qtWarnAboutInvalidRegularExpression(const QString &pattern, const char *where)
+void qtWarnAboutInvalidRegularExpression(const QString &pattern, const char *cls, const char *method)
 {
     if (pattern.isValidUtf16()) {
-        qWarning("%s(): called on an invalid QRegularExpression object "
-                 "(pattern is '%ls')", where, qUtf16Printable(pattern));
+        qWarning("%s::%s(): called on an invalid QRegularExpression object "
+                 "(pattern is '%ls')", cls, method, qUtf16Printable(pattern));
     } else {
-        qWarning("%s(): called on an invalid QRegularExpression object", where);
+        qWarning("%s::%s(): called on an invalid QRegularExpression object",
+                 cls, method);
     }
 }
 
@@ -948,7 +952,7 @@ void QRegularExpressionPrivate::getPatternInfo()
 namespace {
 struct PcreJitStackFree
 {
-    void operator()(pcre2_jit_stack_16 *stack)
+    void operator()(pcre2_jit_stack_16 *stack) const
     {
         if (stack)
             pcre2_jit_stack_free_16(stack);
@@ -979,7 +983,7 @@ static bool isJitEnabled()
 
 #ifdef QT_DEBUG
     return false;
-#elif defined(Q_OS_MACOS)
+#elif defined(Q_OS_MACOS) && !defined(QT_BOOTSTRAPPED)
     return !qt_mac_runningUnderRosetta();
 #else
     return true;
@@ -1013,7 +1017,7 @@ void QRegularExpressionPrivate::optimizePattern()
     Returns the capturing group number for the given name. Duplicated names for
     capturing groups are not supported.
 */
-int QRegularExpressionPrivate::captureIndexForName(QStringView name) const
+int QRegularExpressionPrivate::captureIndexForName(QAnyStringView name) const
 {
     Q_ASSERT(!name.isEmpty());
 
@@ -1115,7 +1119,7 @@ void QRegularExpressionPrivate::doMatch(QRegularExpressionMatchPrivate *priv,
         return;
 
     if (Q_UNLIKELY(!compiledPattern)) {
-        qtWarnAboutInvalidRegularExpression(pattern, "QRegularExpressionPrivate::doMatch");
+        qtWarnAboutInvalidRegularExpression(pattern, "QRegularExpressionPrivate", "doMatch");
         return;
     }
 
@@ -1387,9 +1391,7 @@ QRegularExpression &QRegularExpression::operator=(const QRegularExpression &re) 
 
 /*!
     \fn void QRegularExpression::swap(QRegularExpression &other)
-
-    Swaps the regular expression \a other with this regular expression. This
-    operation is very fast and never fails.
+    \memberswap{regular expression}
 */
 
 /*!
@@ -1508,7 +1510,7 @@ QStringList QRegularExpression::namedCaptureGroups() const
                 reinterpret_cast<const char16_t *>(namedCapturingTable) + namedCapturingTableEntrySize * i;
 
         const int index = *currentNamedCapturingTableRow;
-        result[index] = QString::fromUtf16(currentNamedCapturingTableRow + 1);
+        result[index] = QStringView(currentNamedCapturingTableRow + 1).toString();
     }
 
     return result;
@@ -1734,18 +1736,20 @@ void QRegularExpression::optimize() const
 }
 
 /*!
-    Returns \c true if the regular expression is equal to \a re, or false
+    \fn bool QRegularExpression::operator==(const QRegularExpression &lhs, const QRegularExpression &rhs) noexcept
+
+    Returns \c true if the \a lhs regular expression is equal to the \a rhs, or false
     otherwise. Two QRegularExpression objects are equal if they have
     the same pattern string and the same pattern options.
 
     \sa operator!=()
 */
-bool QRegularExpression::operator==(const QRegularExpression &re) const
+bool comparesEqual(const QRegularExpression &lhs,
+                   const QRegularExpression &rhs) noexcept
 {
-    return (d == re.d) ||
-           (d->pattern == re.d->pattern && d->patternOptions == re.d->patternOptions);
+    return (lhs.d == rhs.d) ||
+            (lhs.d->pattern == rhs.d->pattern && lhs.d->patternOptions == rhs.d->patternOptions);
 }
-
 /*!
     \fn QRegularExpression & QRegularExpression::operator=(QRegularExpression && re)
 
@@ -1758,9 +1762,9 @@ bool QRegularExpression::operator==(const QRegularExpression &re) const
 */
 
 /*!
-    \fn bool QRegularExpression::operator!=(const QRegularExpression &re) const
+    \fn bool QRegularExpression::operator!=(const QRegularExpression &lhs, const QRegularExpression &rhs) noexcept
 
-    Returns \c true if the regular expression is different from \a re, or
+    Returns \c true if the \a lhs regular expression is different from the \a rhs, or
     false otherwise.
 
     \sa operator==()
@@ -1941,9 +1945,7 @@ QString QRegularExpression::wildcardToRegularExpression(QStringView pattern, Wil
 
     const GlobSettings settings = [options]() {
         if (options.testFlag(NonPathWildcardConversion)) {
-            // using [\d\D] to mean "match everything";
-            // dot doesn't match newlines, unless in /s mode
-            return GlobSettings{ u'\0', u"[\\d\\D]*", u"[\\d\\D]" };
+            return GlobSettings{ u'\0', u".*", u"." };
         } else {
 #ifdef Q_OS_WIN
             return GlobSettings{ u'\\', u"[^/\\\\]*", u"[^/\\\\]" };
@@ -1953,11 +1955,18 @@ QString QRegularExpression::wildcardToRegularExpression(QStringView pattern, Wil
         }
     }();
 
+    // We want a dot to match everything (incl. newlines), so enable /s mode,
+    // limited to the pattern string we're producing.
+    rx += u"(?s:";
+
     while (i < wclen) {
         const QChar c = wc[i++];
         switch (c.unicode()) {
         case '*':
             rx += settings.starEscape;
+            // Coalesce sequences of *
+            while (i < wclen && wc[i] == u'*')
+                ++i;
             break;
         case '?':
             rx += settings.questionMarkEscape;
@@ -2023,6 +2032,9 @@ QString QRegularExpression::wildcardToRegularExpression(QStringView pattern, Wil
             break;
         }
     }
+
+    // Closes the (?s: group opened above
+    rx += u")";
 
     if (!(options & UnanchoredWildcardConversion))
         rx = anchoredPattern(rx);
@@ -2148,9 +2160,7 @@ QRegularExpressionMatch &QRegularExpressionMatch::operator=(const QRegularExpres
 
 /*!
     \fn void QRegularExpressionMatch::swap(QRegularExpressionMatch &other)
-
-    Swaps the match result \a other with this match result. This
-    operation is very fast and never fails.
+    \memberswap{match result}
 */
 
 /*!
@@ -2217,8 +2227,7 @@ int QRegularExpressionMatch::lastCapturedIndex() const
 }
 
 /*!
-    \fn bool QRegularExpressionMatch::hasCaptured(const QString &name) const
-    \fn bool QRegularExpressionMatch::hasCaptured(QStringView name) const
+    \fn bool QRegularExpressionMatch::hasCaptured(QAnyStringView name) const
     \since 6.3
 
     Returns true if the capturing group named \a name captured something
@@ -2235,9 +2244,12 @@ int QRegularExpressionMatch::lastCapturedIndex() const
     Similarly, a capturing group may capture a substring of length 0;
     this function will return \c{true} for such a capturing group.
 
+    \note In Qt versions prior to 6.8, this function took QString or
+    QStringView, not QAnyStringView.
+
     \sa captured(), hasMatch()
 */
-bool QRegularExpressionMatch::hasCaptured(QStringView name) const
+bool QRegularExpressionMatch::hasCaptured(QAnyStringView name) const
 {
     const int nth = d->regularExpression.d->captureIndexForName(name);
     return hasCaptured(nth);
@@ -2317,17 +2329,6 @@ QStringView QRegularExpressionMatch::capturedView(int nth) const
     return d->subject.mid(start, capturedLength(nth));
 }
 
-/*! \fn QString QRegularExpressionMatch::captured(const QString &name) const
-
-    Returns the substring captured by the capturing group named \a name.
-
-    If the named capturing group \a name did not capture a string, or if
-    there is no capturing group named \a name, returns a null QString.
-
-    \sa capturedView(), capturedStart(), capturedEnd(), capturedLength(),
-    QString::isNull()
-*/
-
 /*!
     \since 5.10
 
@@ -2336,10 +2337,13 @@ QStringView QRegularExpressionMatch::capturedView(int nth) const
     If the named capturing group \a name did not capture a string, or if
     there is no capturing group named \a name, returns a null QString.
 
+    \note In Qt versions prior to 6.8, this function took QString or
+    QStringView, not QAnyStringView.
+
     \sa capturedView(), capturedStart(), capturedEnd(), capturedLength(),
     QString::isNull()
 */
-QString QRegularExpressionMatch::captured(QStringView name) const
+QString QRegularExpressionMatch::captured(QAnyStringView name) const
 {
     if (name.isEmpty()) {
         qWarning("QRegularExpressionMatch::captured: empty capturing group name passed");
@@ -2358,10 +2362,13 @@ QString QRegularExpressionMatch::captured(QStringView name) const
     If the named capturing group \a name did not capture a string, or if
     there is no capturing group named \a name, returns a null QStringView.
 
+    \note In Qt versions prior to 6.8, this function took QString or
+    QStringView, not QAnyStringView.
+
     \sa captured(), capturedStart(), capturedEnd(), capturedLength(),
     QStringView::isNull()
 */
-QStringView QRegularExpressionMatch::capturedView(QStringView name) const
+QStringView QRegularExpressionMatch::capturedView(QAnyStringView name) const
 {
     if (name.isEmpty()) {
         qWarning("QRegularExpressionMatch::capturedView: empty capturing group name passed");
@@ -2433,37 +2440,6 @@ qsizetype QRegularExpressionMatch::capturedEnd(int nth) const
     return d->capturedOffsets.at(nth * 2 + 1);
 }
 
-/*! \fn qsizetype QRegularExpressionMatch::capturedStart(const QString &name) const
-
-    Returns the offset inside the subject string corresponding to the starting
-    position of the substring captured by the capturing group named \a name.
-    If the capturing group named \a name did not capture a string or doesn't
-    exist, returns -1.
-
-    \sa capturedEnd(), capturedLength(), captured()
-*/
-
-/*! \fn qsizetype QRegularExpressionMatch::capturedLength(const QString &name) const
-
-    Returns the length of the substring captured by the capturing group named
-    \a name.
-
-    \note This function returns 0 if the capturing group named \a name did not
-    capture a string or doesn't exist.
-
-    \sa capturedStart(), capturedEnd(), captured()
-*/
-
-/*! \fn qsizetype QRegularExpressionMatch::capturedEnd(const QString &name) const
-
-    Returns the offset inside the subject string immediately after the ending
-    position of the substring captured by the capturing group named \a name. If
-    the capturing group named \a name did not capture a string or doesn't
-    exist, returns -1.
-
-    \sa capturedStart(), capturedLength(), captured()
-*/
-
 /*!
     \since 5.10
 
@@ -2472,9 +2448,12 @@ qsizetype QRegularExpressionMatch::capturedEnd(int nth) const
     If the capturing group named \a name did not capture a string or doesn't
     exist, returns -1.
 
+    \note In Qt versions prior to 6.8, this function took QString or
+    QStringView, not QAnyStringView.
+
     \sa capturedEnd(), capturedLength(), captured()
 */
-qsizetype QRegularExpressionMatch::capturedStart(QStringView name) const
+qsizetype QRegularExpressionMatch::capturedStart(QAnyStringView name) const
 {
     if (name.isEmpty()) {
         qWarning("QRegularExpressionMatch::capturedStart: empty capturing group name passed");
@@ -2495,9 +2474,12 @@ qsizetype QRegularExpressionMatch::capturedStart(QStringView name) const
     \note This function returns 0 if the capturing group named \a name did not
     capture a string or doesn't exist.
 
+    \note In Qt versions prior to 6.8, this function took QString or
+    QStringView, not QAnyStringView.
+
     \sa capturedStart(), capturedEnd(), captured()
 */
-qsizetype QRegularExpressionMatch::capturedLength(QStringView name) const
+qsizetype QRegularExpressionMatch::capturedLength(QAnyStringView name) const
 {
     if (name.isEmpty()) {
         qWarning("QRegularExpressionMatch::capturedLength: empty capturing group name passed");
@@ -2517,9 +2499,12 @@ qsizetype QRegularExpressionMatch::capturedLength(QStringView name) const
     the capturing group named \a name did not capture a string or doesn't
     exist, returns -1.
 
+    \note In Qt versions prior to 6.8, this function took QString or
+    QStringView, not QAnyStringView.
+
     \sa capturedStart(), capturedLength(), captured()
 */
-qsizetype QRegularExpressionMatch::capturedEnd(QStringView name) const
+qsizetype QRegularExpressionMatch::capturedEnd(QAnyStringView name) const
 {
     if (name.isEmpty()) {
         qWarning("QRegularExpressionMatch::capturedEnd: empty capturing group name passed");
@@ -2654,9 +2639,7 @@ QRegularExpressionMatchIterator &QRegularExpressionMatchIterator::operator=(cons
 
 /*!
     \fn void QRegularExpressionMatchIterator::swap(QRegularExpressionMatchIterator &other)
-
-    Swaps the iterator \a other with this iterator object. This operation is
-    very fast and never fails.
+    \memberswap{iterator}
 */
 
 /*!

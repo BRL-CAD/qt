@@ -1,5 +1,6 @@
 // Copyright (C) 2020 Intel Corporation.
 // SPDX-License-Identifier: LicenseRef-Qt-Commercial OR LGPL-3.0-only OR GPL-2.0-only OR GPL-3.0-only
+// Qt-Security score:critical reason:data-parser
 
 #include "qcborvalue.h"
 #include "qcborvalue_p.h"
@@ -55,7 +56,7 @@ static QString encodeByteArray(const QCborContainerPrivate *d, qsizetype idx, QC
     else
         data = data.toBase64(QByteArray::Base64UrlEncoding | QByteArray::OmitTrailingEquals);
 
-    return QString::fromLatin1(data, data.size());
+    return QString::fromLatin1(data);
 }
 
 static QString makeString(const QCborContainerPrivate *d, qsizetype idx,
@@ -107,7 +108,7 @@ static QString encodeTag(const QCborContainerPrivate *d)
     return s;
 }
 
-static Q_NEVER_INLINE QString makeString(const QCborContainerPrivate *d, qsizetype idx,
+Q_NEVER_INLINE static QString makeString(const QCborContainerPrivate *d, qsizetype idx,
                                          ConversionMode mode)
 {
     const auto &e = d->elements.at(idx);
@@ -129,9 +130,8 @@ static Q_NEVER_INLINE QString makeString(const QCborContainerPrivate *d, qsizety
 
     case QCborValue::Array:
     case QCborValue::Map:
-#if defined(QT_JSON_READONLY) || defined(QT_BOOTSTRAPPED)
-        qFatal("Writing JSON is disabled.");
-        return QString();
+#if defined(QT_BOOTSTRAPPED)
+        Q_UNREACHABLE_RETURN(QString());
 #else
         return d->valueAt(idx).toDiagnosticNotation(QCborValue::Compact);
 #endif
@@ -421,11 +421,13 @@ QJsonArray QCborArray::toJsonArray() const
     return convertToJsonArray(d.data());
 }
 
+#ifndef QT_NO_VARIANT
 QJsonArray QJsonPrivate::Variant::toJsonArray(const QVariantList &list)
 {
     const auto cborArray = QCborArray::fromVariantList(list);
     return convertToJsonArray(cborArray.d.data(), ConversionMode::FromVariantToJson);
 }
+#endif // !QT_NO_VARIANT
 
 /*!
     Recursively converts every \l QCborValue value in this map to JSON using
@@ -469,6 +471,7 @@ QJsonObject QCborMap::toJsonObject() const
     return convertToJsonObject(d.data());
 }
 
+#ifndef QT_NO_VARIANT
 QJsonObject QJsonPrivate::Variant::toJsonObject(const QVariantMap &map)
 {
     const auto cborMap = QCborMap::fromVariantMap(map);
@@ -550,8 +553,10 @@ QVariant QCborValue::toVariant() const
         // ignore tags
         return taggedValue().toVariant();
 
+#if QT_CONFIG(datestring)
     case DateTime:
         return toDateTime();
+#endif
 
 #ifndef QT_BOOTSTRAPPED
     case Url:
@@ -578,6 +583,7 @@ QVariant QCborValue::toVariant() const
 
     Q_UNREACHABLE_RETURN(QVariant());
 }
+#endif // !QT_NO_VARIANT
 
 /*!
     Converts the JSON value contained in \a v into its corresponding CBOR value
@@ -631,6 +637,7 @@ QCborValue QCborValue::fromJsonValue(const QJsonValue &v)
     return QCborValue();
 }
 
+#ifndef QT_NO_VARIANT
 static void appendVariant(QCborContainerPrivate *d, const QVariant &variant)
 {
     // Handle strings and byte arrays directly, to avoid creating a temporary
@@ -712,12 +719,15 @@ QCborValue QCborValue::fromVariant(const QVariant &variant)
     case QMetaType::UShort:
     case QMetaType::Int:
     case QMetaType::LongLong:
+    case QMetaType::Long:
     case QMetaType::UInt:
         return variant.toLongLong();
+    case QMetaType::ULong:
     case QMetaType::ULongLong:
         if (variant.toULongLong() <= static_cast<uint64_t>(std::numeric_limits<qint64>::max()))
             return variant.toLongLong();
         Q_FALLTHROUGH();
+    case QMetaType::Float16:
     case QMetaType::Float:
     case QMetaType::Double:
         return variant.toDouble();
@@ -727,8 +737,10 @@ QCborValue QCborValue::fromVariant(const QVariant &variant)
         return QCborArray::fromStringList(variant.toStringList());
     case QMetaType::QByteArray:
         return variant.toByteArray();
+#if QT_CONFIG(datestring)
     case QMetaType::QDateTime:
         return QCborValue(variant.toDateTime());
+#endif
 #ifndef QT_BOOTSTRAPPED
     case QMetaType::QUrl:
         return QCborValue(variant.toUrl());
@@ -831,6 +843,7 @@ QCborArray QCborArray::fromVariantList(const QVariantList &list)
         appendVariant(a.d.data(), v);
     return a;
 }
+#endif // !QT_NO_VARIANT
 
 /*!
     Converts all JSON items found in the \a array array to CBOR using
@@ -862,6 +875,7 @@ QCborArray QCborArray::fromJsonArray(QJsonArray &&array) noexcept
 
 }
 
+#ifndef QT_NO_VARIANT
 /*!
     Converts the CBOR values to QVariant using QCborValue::toVariant() and
     "stringifies" all the CBOR keys in this map, returning the QVariantMap that
@@ -958,6 +972,7 @@ QCborMap QCborMap::fromVariantHash(const QVariantHash &hash)
     }
     return m;
 }
+#endif // !QT_NO_VARIANT
 
 /*!
     Converts all JSON items found in the \a obj object to CBOR using

@@ -39,7 +39,10 @@ public:
 
 private:
     HRESULT m_initResult = E_FAIL;
+    DWORD m_threadId{ GetCurrentThreadId() };
 };
+
+Q_CORE_EXPORT void qt_win_ensureComInitializedOnThisThread();
 
 Q_CORE_EXPORT bool qt_win_hasPackageIdentity();
 

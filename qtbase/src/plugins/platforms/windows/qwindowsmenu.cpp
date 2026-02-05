@@ -235,7 +235,9 @@ void QWindowsMenuItem::updateBitmap()
     freeBitmap();
     if (!m_icon.isNull()) {
         const int size = m_iconSize ? m_iconSize : GetSystemMetrics(SM_CYMENUCHECK);
-        m_hbitmap = qt_pixmapToWinHBITMAP(m_icon.pixmap(QSize(size, size)), 1);
+        // native Win32 menus don't support high-DPI versions of icons, so always
+        // use the pixmap for a 1.0 scale factor.
+        m_hbitmap = qt_pixmapToWinHBITMAP(m_icon.pixmap(QSize(size, size), 1.0), 1);
     }
     MENUITEMINFO itemInfo;
     menuItemInfoInit(itemInfo);
@@ -874,7 +876,7 @@ QDebug operator<<(QDebug d, const QPlatformMenuItem *i)
     if (i)
         static_cast<const QWindowsMenuItem *>(i)->formatDebug(d);
     else
-        d << '0';
+        d << "0x0";
     d << ')';
     return d;
 }
@@ -913,7 +915,7 @@ QDebug operator<<(QDebug d, const QPlatformMenu *m)
         static_cast<const QWindowsMenu *>(m)->formatDebug(d);
         d << ')';
     } else {
-        d << "QPlatformMenu(0)";
+        d << "QPlatformMenu(0x0)";
     }
     return d;
 }
@@ -927,7 +929,7 @@ QDebug operator<<(QDebug d, const QPlatformMenuBar *mb)
     if (mb)
         static_cast<const QWindowsMenuBar *>(mb)->formatDebug(d);
     else
-        d << '0';
+        d << "0x0";
     d << ')';
     return d;
 }

@@ -1,5 +1,6 @@
 // Copyright (C) 2016 The Qt Company Ltd.
 // SPDX-License-Identifier: LicenseRef-Qt-Commercial OR LGPL-3.0-only OR GPL-2.0-only OR GPL-3.0-only
+// Qt-Security score:significant reason:default
 
 #ifndef QSTYLE_H
 #define QSTYLE_H
@@ -464,11 +465,13 @@ public:
         PM_ExclusiveIndicatorWidth,
         PM_ExclusiveIndicatorHeight,
 
-        PM_DialogButtonsSeparator,
-        PM_DialogButtonsButtonWidth,
-        PM_DialogButtonsButtonHeight,
+#if QT_DEPRECATED_SINCE(6, 8)
+        PM_DialogButtonsSeparator Q_DECL_ENUMERATOR_DEPRECATED_X("Not used and no effect since Qt 4"),
+        PM_DialogButtonsButtonWidth Q_DECL_ENUMERATOR_DEPRECATED_X("Not used and no effect since Qt 4"),
+        PM_DialogButtonsButtonHeight Q_DECL_ENUMERATOR_DEPRECATED_X("Not used and no effect since Qt 4"),
+#endif
 
-        PM_MdiSubWindowFrameWidth,
+        PM_MdiSubWindowFrameWidth = 44,
         PM_MdiSubWindowMinimizedWidth,
 
         PM_HeaderMargin,
@@ -838,6 +841,7 @@ private:
     friend class QProxyStyle;
     friend class QProxyStylePrivate;
     friend class QStyleFactory;
+    friend class QStyleSheetProxySaver;
     void setProxy(QStyle *style);
 };
 

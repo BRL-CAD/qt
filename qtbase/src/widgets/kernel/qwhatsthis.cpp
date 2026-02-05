@@ -1,5 +1,6 @@
 // Copyright (C) 2016 The Qt Company Ltd.
 // SPDX-License-Identifier: LicenseRef-Qt-Commercial OR LGPL-3.0-only OR GPL-2.0-only OR GPL-3.0-only
+// Qt-Security score:significant reason:default
 
 #include "qwhatsthis.h"
 #include "qpointer.h"
@@ -10,7 +11,6 @@
 #include "qpixmap.h"
 #include "qscreen.h"
 #include "qpainter.h"
-#include "qtimer.h"
 #if QT_CONFIG(action)
 #include "qaction.h"
 #endif // QT_CONFIG(action)
@@ -73,7 +73,7 @@ QT_BEGIN_NAMESPACE
     the appropriate help text is shown. The mode is left when help is
     given or when the user presses Esc.
 
-    \image whatsthis.png
+    \image whatsthis.png {"What's This?" mode for New File button}
 
     You can enter "What's This?" mode programmatically with
     enterWhatsThisMode(), check the mode with inWhatsThisMode(), and
@@ -96,8 +96,6 @@ QT_BEGIN_NAMESPACE
 
     \sa QToolTip
 */
-
-Q_CORE_EXPORT void qDeleteInEventHandler(QObject *o);
 
 class QWhatsThat : public QWidget
 {
@@ -610,7 +608,7 @@ void QWhatsThis::showText(const QPoint &pos, const QString &text, QWidget *w)
 */
 void QWhatsThis::hideText()
 {
-    qDeleteInEventHandler(QWhatsThat::instance);
+    delete QWhatsThat::instance;
 }
 
 /*!

@@ -116,6 +116,7 @@ private slots:
     void compare_boolfuncs();
     void compare_to_nullptr();
     void compare_pointerfuncs();
+    void compare_stringLiterals();
     void compare_tostring();
     void compare_tostring_data();
     void compare_unknown();
@@ -129,7 +130,6 @@ private slots:
     void compareQListIntToArray();
     void compareQListIntToInitializerList_data();
     void compareQListIntToInitializerList();
-    void compareQListDouble();
     void compareContainerToInitializerList();
 #ifdef QT_GUI_LIB
     void compareQColor_data();
@@ -281,10 +281,32 @@ void tst_Cmptest::compareQObjects()
     object1.setObjectName(QStringLiteral("object1"));
     QObject object2;
     object2.setObjectName(QStringLiteral("object2"));
-    QCOMPARE(&object1, &object1);
-    QCOMPARE(&object1, &object2);
-    QCOMPARE(&object1, nullptr);
-    QCOMPARE(nullptr, &object2);
+    [&] { QCOMPARE(&object1, &object1); }();
+    [&] { QCOMPARE(&object1, &object2); }();
+    [&] { QCOMPARE(&object1, nullptr); }();
+    [&] { QCOMPARE(nullptr, &object2); }();
+}
+
+void tst_Cmptest::compare_stringLiterals()
+{
+    const QString lhs = QStringLiteral("abc");
+
+    // We don't want to put those into test data since we want to specifically test comparison
+    // against inline string literals.
+
+    [&]() { QCOMPARE(lhs, u""); }();
+    [&]() { QCOMPARE_EQ(lhs, u""); }();
+    [&]() { QCOMPARE(lhs, u"abc"); }();
+    [&]() { QCOMPARE_EQ(lhs, u"abc"); }();
+    [&]() { QCOMPARE(lhs, u"abcd"); }();
+    [&]() { QCOMPARE_EQ(lhs, u"abcd"); }();
+
+    [&]() { QCOMPARE(lhs, ""); }();
+    [&]() { QCOMPARE_EQ(lhs, ""); }();
+    [&]() { QCOMPARE(lhs, "abc"); }();
+    [&]() { QCOMPARE_EQ(lhs, "abc"); }();
+    [&]() { QCOMPARE(lhs, "abcd"); }();
+    [&]() { QCOMPARE_EQ(lhs, "abcd"); }();
 }
 
 struct PhonyClass
@@ -503,13 +525,6 @@ void tst_Cmptest::compareQListIntToInitializerList()
 #define ARG(...) __VA_ARGS__
     QCOMPARE(actual,  ARG({1, 2, 3}));
 #undef ARG
-}
-
-void tst_Cmptest::compareQListDouble()
-{
-    QList<double> double1; double1 << 1.5 << 2 << 3;
-    QList<double> double2; double2 << 1 << 2 << 4;
-    QCOMPARE(double1, double2);
 }
 
 void tst_Cmptest::compareContainerToInitializerList()
@@ -771,9 +786,9 @@ void tst_Cmptest::tryCompare()
     }
     {
         DeferredFlag c;
-        QTRY_COMPARE_WITH_TIMEOUT(c, DeferredFlag(), 300);
+        QTRY_COMPARE_WITH_TIMEOUT(c, DeferredFlag(), 300ms);
         QVERIFY(!c); // Instantly equal, so succeeded without delay.
-        QTRY_COMPARE_WITH_TIMEOUT(c, trueAlready, 200);
+        QTRY_COMPARE_WITH_TIMEOUT(c, trueAlready, 1s);
         qInfo("Should now time out and fail");
         QTRY_COMPARE_WITH_TIMEOUT(c, DeferredFlag(), 200);
     }
@@ -788,7 +803,7 @@ void tst_Cmptest::tryVerify()
     }
     {
         DeferredFlag c;
-        QTRY_VERIFY_WITH_TIMEOUT(!c, 300);
+        QTRY_VERIFY_WITH_TIMEOUT(!c, 300ms);
         QTRY_VERIFY_WITH_TIMEOUT(c, 200);
         qInfo("Should now time out and fail");
         QTRY_VERIFY_WITH_TIMEOUT(!c, 200);
@@ -804,7 +819,7 @@ void tst_Cmptest::tryVerify2()
     }
     {
         DeferredFlag c;
-        QTRY_VERIFY2_WITH_TIMEOUT(!c, "Failed to check before looping", 300);
+        QTRY_VERIFY2_WITH_TIMEOUT(!c, "Failed to check before looping", 300ms);
         QTRY_VERIFY2_WITH_TIMEOUT(c, "Failed to trigger single-shot", 200);
         QTRY_VERIFY2_WITH_TIMEOUT(!c, "Should time out and fail", 200);
     }

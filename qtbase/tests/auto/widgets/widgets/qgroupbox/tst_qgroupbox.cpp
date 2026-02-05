@@ -462,7 +462,6 @@ void tst_QGroupBox::propagateFocus()
     QGroupBox box;
     QLineEdit lineEdit(&box);
     box.show();
-    QApplicationPrivate::setActiveWindow(&box);
     QVERIFY(QTest::qWaitForWindowActive(&box));
     box.setFocus();
     QTRY_COMPARE(qApp->focusWidget(), static_cast<QWidget*>(&lineEdit));
@@ -603,6 +602,13 @@ void tst_QGroupBox::buttonPressKeys()
     for (int i = 0; i < buttonPressKeys.size(); ++i) {
         QTest::keyClick(&groupBox, buttonPressKeys[i]);
         QCOMPARE(clickedSpy.size(), i + 1);
+    }
+
+    groupBox.setCheckable(false);
+    QSignalSpy notClickedSpy(&groupBox, &QGroupBox::clicked);
+    for (int i = 0; i < buttonPressKeys.size(); ++i) {
+        QTest::keyClick(&groupBox, buttonPressKeys[i]);
+        QCOMPARE(notClickedSpy.size(), 0);
     }
 }
 

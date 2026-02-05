@@ -66,6 +66,7 @@ private slots:
     void sizeConstructor_QString() { sizeConstructor<QString>(); }
     void sizeConstructor_NonCopyable() { sizeConstructor<NonCopyable>(); }
     void append();
+    void preallocatedSize();
 #if QT_DEPRECATED_SINCE(6, 3)
     void prepend();
 #endif
@@ -192,6 +193,15 @@ void tst_QVarLengthArray::append()
 
     QVarLengthArray<int> v2; // rocket!
     v2.append(5);
+}
+
+void tst_QVarLengthArray::preallocatedSize()
+{
+    // The default is 256:
+    static_assert(QVarLengthArray<int>::PreallocatedSize == 256);
+    // Otherwise, whatever was given as template argument:
+    static_assert(QVarLengthArray<int, 42>::PreallocatedSize == 42);
+    static_assert(QVarLengthArray<int, 1'000'000>::PreallocatedSize == 1'000'000);
 }
 
 #if QT_DEPRECATED_SINCE(6, 3)
@@ -1161,11 +1171,11 @@ void tst_QVarLengthArray::squeeze()
     list.resize(0);
     QCOMPARE(list.capacity(), sizeOnStack);
     list.resize(sizeOnHeap);
-    QCOMPARE(list.capacity(), sizeOnHeap);
+    QCOMPARE_GE(list.capacity(), sizeOnHeap);
     list.resize(sizeOnStack);
-    QCOMPARE(list.capacity(), sizeOnHeap);
+    QCOMPARE_GE(list.capacity(), sizeOnHeap);
     list.resize(0);
-    QCOMPARE(list.capacity(), sizeOnHeap);
+    QCOMPARE_GE(list.capacity(), sizeOnHeap);
     list.squeeze();
     QCOMPARE(list.capacity(), sizeOnStack);
     list.resize(sizeOnStack);
@@ -1173,7 +1183,7 @@ void tst_QVarLengthArray::squeeze()
     QCOMPARE(list.capacity(), sizeOnStack);
     list.resize(sizeOnHeap);
     list.squeeze();
-    QCOMPARE(list.capacity(), sizeOnHeap);
+    QCOMPARE_GE(list.capacity(), sizeOnHeap);
 }
 
 void tst_QVarLengthArray::operators()
@@ -1535,14 +1545,14 @@ void tst_QVarLengthArray::reserve()
 
     arr.reserve(150);
     // Allocate memory on heap, as we reserve more than pre-allocated
-    QCOMPARE(arr.capacity(), 150);
+    QCOMPARE_GE(arr.capacity(), 150);
     QCOMPARE(arr.size(), 0);
     const auto *heapPtr = arr.constData();
     QVERIFY(heapPtr != stackPtr);
 
     arr.reserve(50);
     // Nothing changed
-    QCOMPARE(arr.capacity(), 150);
+    QCOMPARE_GE(arr.capacity(), 150);
     QCOMPARE(arr.constData(), heapPtr);
 
     arr.squeeze();

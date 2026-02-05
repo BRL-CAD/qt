@@ -10,7 +10,10 @@
 #include <QtCore/qcoreapplication.h>
 #include <QtCore/qdebug.h>
 #include <QtCore/qdir.h>
-#include <QtCore/qdiriterator.h>
+#include <QtCore/qdirlisting.h>
+#if QT_CONFIG(future)
+#include <QtCore/qexception.h>
+#endif
 #include <QtCore/qfile.h>
 #include <QtCore/qfileinfo.h>
 #include <QtCore/qfloat16.h>
@@ -37,8 +40,9 @@
 #if QT_CONFIG(batch_test_support)
 #include <QtTest/private/qtestregistry_p.h>
 #endif  // QT_CONFIG(batch_test_support)
-#include <QtTest/private/cycle_p.h>
+#include <QtTest/private/cycle_include_p.h>
 #include <QtTest/private/qtestblacklist_p.h>
+#include <QtTest/private/qtestcrashhandler_p.h>
 #if defined(HAVE_XCTEST)
 #include <QtTest/private/qxctestlogger_p.h>
 #endif
@@ -60,6 +64,7 @@
 #endif
 #include <chrono>
 #include <cmath>
+#include <cstdio>
 #include <limits>
 #include <memory>
 #include <mutex>
@@ -67,7 +72,6 @@
 #include <optional>
 
 #include <stdarg.h>
-#include <stdio.h>
 #include <stdlib.h>
 
 #if defined(Q_OS_LINUX)
@@ -89,7 +93,6 @@
 #if __has_include(<paths.h>)
 # include <paths.h>
 #endif
-#include <signal.h>
 #include <time.h>
 #include <sys/mman.h>
 #include <sys/uio.h>
@@ -97,15 +100,6 @@
 #include <unistd.h>
 # if !defined(Q_OS_INTEGRITY)
 #  include <sys/resource.h>
-# endif
-# ifndef _PATH_DEFPATH
-#  define _PATH_DEFPATH     "/usr/bin:/bin"
-# endif
-# ifndef SIGSTKSZ
-#  define SIGSTKSZ          0       /* we have code to set the minimum */
-# endif
-# ifndef SA_RESETHAND
-#  define SA_RESETHAND      0
 # endif
 #endif
 
@@ -120,6 +114,10 @@
 #include <emscripten.h>
 #endif
 
+#ifdef Q_OS_ANDROID
+#include <QtCore/QStandardPaths>
+#endif
+
 #include <vector>
 
 QT_BEGIN_NAMESPACE
@@ -128,298 +126,6 @@ using namespace Qt::StringLiterals;
 
 using QtMiscUtils::toHexUpper;
 using QtMiscUtils::fromHex;
-
-namespace {
-enum DebuggerProgram { None, Gdb, Lldb };
-
-#if defined(Q_OS_UNIX) && (!defined(Q_OS_WASM) || QT_CONFIG(thread))
-static struct iovec IoVec(struct iovec vec)
-{
-    return vec;
-}
-static struct iovec IoVec(const char *str)
-{
-    struct iovec r = {};
-    r.iov_base = const_cast<char *>(str);
-    r.iov_len = strlen(str);
-    return r;
-}
-
-template <typename... Args> static ssize_t writeToStderr(Args &&... args)
-{
-    struct iovec vec[] = { IoVec(std::forward<Args>(args))... };
-    return ::writev(STDERR_FILENO, vec, std::size(vec));
-}
-
-// async-signal-safe conversion from int to string
-struct AsyncSafeIntBuffer
-{
-    // digits10 + 1 for all possible digits
-    // +1 for the sign
-    // +1 for the terminating null
-    static constexpr int Digits10 = std::numeric_limits<int>::digits10 + 3;
-    std::array<char, Digits10> array;
-    constexpr AsyncSafeIntBuffer() : array{} {}     // initializes array
-    AsyncSafeIntBuffer(Qt::Initialization) {}       // leaves array uninitialized
-};
-
-static struct iovec asyncSafeToString(int n, AsyncSafeIntBuffer &&result = Qt::Uninitialized)
-{
-    char *ptr = result.array.data();
-    if (false) {
-#ifdef __cpp_lib_to_chars
-    } else if (auto r = std::to_chars(ptr, ptr + result.array.size(), n, 10); r.ec == std::errc{}) {
-        ptr = r.ptr;
-#endif
-    } else {
-        // handle the sign
-        if (n < 0) {
-            *ptr++ = '-';
-            n = -n;
-        }
-
-        // find the highest power of the base that is less than this number
-        static constexpr int StartingDivider = ([]() {
-            int divider = 1;
-            for (int i = 0; i < std::numeric_limits<int>::digits10; ++i)
-                divider *= 10;
-            return divider;
-        }());
-        int divider = StartingDivider;
-        while (divider && n < divider)
-            divider /= 10;
-
-        // now convert to string
-        while (divider > 1) {
-            int quot = n / divider;
-            n = n % divider;
-            divider /= 10;
-            *ptr++ = quot + '0';
-        }
-        *ptr++ = n + '0';
-    }
-
-#ifndef QT_NO_DEBUG
-    // this isn't necessary, it just helps in the debugger
-    *ptr = '\0';
-#endif
-    struct iovec r;
-    r.iov_base = result.array.data();
-    r.iov_len = ptr - result.array.data();
-    return r;
-};
-#elif defined(Q_OS_WIN)
-// Windows doesn't need to be async-safe
-template <typename... Args> static void writeToStderr(Args &&... args)
-{
-    (std::cerr << ... << args);
-}
-
-static std::string asyncSafeToString(int n)
-{
-    return std::to_string(n);
-}
-#endif // defined(Q_OS_UNIX)
-} // unnamed namespace
-
-[[maybe_unused]] static void blockUnixSignals();
-
-static bool alreadyDebugging()
-{
-#if defined(Q_OS_LINUX)
-    int fd = open("/proc/self/status", O_RDONLY);
-    if (fd == -1)
-        return false;
-    char buffer[2048];
-    ssize_t size = read(fd, buffer, sizeof(buffer) - 1);
-    if (size == -1) {
-        close(fd);
-        return false;
-    }
-    buffer[size] = 0;
-    const char tracerPidToken[] = "\nTracerPid:";
-    char *tracerPid = strstr(buffer, tracerPidToken);
-    if (!tracerPid) {
-        close(fd);
-        return false;
-    }
-    tracerPid += sizeof(tracerPidToken);
-    long int pid = strtol(tracerPid, &tracerPid, 10);
-    close(fd);
-    return pid != 0;
-#elif defined(Q_OS_WIN)
-    return IsDebuggerPresent();
-#elif defined(Q_OS_MACOS)
-    // Check if there is an exception handler for the process:
-    mach_msg_type_number_t portCount = 0;
-    exception_mask_t masks[EXC_TYPES_COUNT];
-    mach_port_t ports[EXC_TYPES_COUNT];
-    exception_behavior_t behaviors[EXC_TYPES_COUNT];
-    thread_state_flavor_t flavors[EXC_TYPES_COUNT];
-    exception_mask_t mask = EXC_MASK_ALL & ~(EXC_MASK_RESOURCE | EXC_MASK_GUARD);
-    kern_return_t result = task_get_exception_ports(mach_task_self(), mask, masks, &portCount,
-                                                    ports, behaviors, flavors);
-    if (result == KERN_SUCCESS) {
-        for (mach_msg_type_number_t portIndex = 0; portIndex < portCount; ++portIndex) {
-            if (MACH_PORT_VALID(ports[portIndex])) {
-                return true;
-            }
-        }
-    }
-    return false;
-#else
-    // TODO
-    return false;
-#endif
-}
-
-static bool hasSystemCrashReporter()
-{
-#if defined(Q_OS_MACOS)
-    return QTestPrivate::macCrashReporterWillShowDialog();
-#else
-    return false;
-#endif
-}
-
-static void maybeDisableCoreDump()
-{
-#ifdef RLIMIT_CORE
-    bool ok = false;
-    const int disableCoreDump = qEnvironmentVariableIntValue("QTEST_DISABLE_CORE_DUMP", &ok);
-    if (ok && disableCoreDump) {
-        struct rlimit limit;
-        limit.rlim_cur = 0;
-        limit.rlim_max = 0;
-        if (setrlimit(RLIMIT_CORE, &limit) != 0)
-            qWarning("Failed to disable core dumps: %d", errno);
-    }
-#endif
-}
-
-static DebuggerProgram debugger = None;
-static void prepareStackTrace()
-{
-
-    bool ok = false;
-    const int disableStackDump = qEnvironmentVariableIntValue("QTEST_DISABLE_STACK_DUMP", &ok);
-    if (ok && disableStackDump)
-        return;
-
-    if (hasSystemCrashReporter())
-        return;
-
-#if defined(Q_OS_MACOS)
-    #define CSR_ALLOW_UNRESTRICTED_FS (1 << 1)
-    std::optional<uint32_t> sipConfiguration = qt_mac_sipConfiguration();
-    if (!sipConfiguration || !(*sipConfiguration & CSR_ALLOW_UNRESTRICTED_FS))
-        return; // LLDB will fail to provide a valid stack trace
-#endif
-
-#ifdef Q_OS_UNIX
-    // like QStandardPaths::findExecutable(), but simpler
-    auto hasExecutable = [](const char *execname) {
-        std::string candidate;
-        std::string path;
-        if (const char *p = getenv("PATH"); p && *p)
-            path = p;
-        else
-            path = _PATH_DEFPATH;
-        for (const char *p = std::strtok(&path[0], ":'"); p; p = std::strtok(nullptr, ":")) {
-            candidate = p;
-            candidate += '/';
-            candidate += execname;
-            if (QT_ACCESS(candidate.data(), X_OK) == 0)
-                return true;
-        }
-        return false;
-    };
-
-    static constexpr DebuggerProgram debuggerSearchOrder[] = {
-#  if defined(Q_OS_QNX) || (defined(Q_OS_LINUX) && !defined(Q_OS_ANDROID))
-        Gdb, Lldb
-#  else
-        Lldb, Gdb
-#  endif
-    };
-    for (DebuggerProgram candidate : debuggerSearchOrder) {
-        switch (candidate) {
-        case None:
-            Q_UNREACHABLE();
-            break;
-        case Gdb:
-            if (hasExecutable("gdb")) {
-                debugger = Gdb;
-                return;
-            }
-            break;
-        case Lldb:
-            if (hasExecutable("lldb")) {
-                debugger = Lldb;
-                return;
-            }
-            break;
-        }
-    }
-#endif // Q_OS_UNIX
-}
-
-#if !defined(Q_OS_WASM) || QT_CONFIG(thread)
-static void printTestRunTime()
-{
-    const int msecsFunctionTime = qRound(QTestLog::msecsFunctionTime());
-    const int msecsTotalTime = qRound(QTestLog::msecsTotalTime());
-    const char *const name = QTest::currentTestFunction();
-    writeToStderr("\n         ", name ? name : "[Non-test]",
-                  " function time: ", asyncSafeToString(msecsFunctionTime),
-                  "ms, total time: ", asyncSafeToString(msecsTotalTime), "ms\n");
-}
-
-static void generateStackTrace()
-{
-    if (debugger == None || alreadyDebugging())
-        return;
-
-#  if defined(Q_OS_UNIX) && !defined(Q_OS_WASM) && !defined(Q_OS_INTEGRITY) && !defined(Q_OS_VXWORKS)
-    writeToStderr("\n=== Stack trace ===\n");
-
-    // execlp() requires null-termination, so call the default constructor
-    AsyncSafeIntBuffer pidbuffer;
-    asyncSafeToString(getpid(), std::move(pidbuffer));
-
-    // Note: POSIX.1-2001 still has fork() in the list of async-safe functions,
-    // but in a future edition, it might be removed. It would be safer to wake
-    // up a babysitter thread to launch the debugger.
-    pid_t pid = fork();
-    if (pid == 0) {
-        // child process
-        (void) dup2(STDERR_FILENO, STDOUT_FILENO); // redirect stdout to stderr
-
-        switch (debugger) {
-        case None:
-            Q_UNREACHABLE();
-            break;
-        case Gdb:
-            execlp("gdb", "gdb", "--nx", "--batch", "-ex", "thread apply all bt",
-                   "--pid", pidbuffer.array.data(), nullptr);
-            break;
-        case Lldb:
-            execlp("lldb", "lldb", "--no-lldbinit", "--batch", "-o", "bt all",
-                   "--attach-pid", pidbuffer.array.data(), nullptr);
-            break;
-        }
-        _exit(1);
-    } else if (pid < 0) {
-        writeToStderr("Failed to start debugger.\n");
-    } else {
-        int ret;
-        QT_EINTR_LOOP(ret, waitpid(pid, nullptr, 0));
-    }
-
-    writeToStderr("=== End of stack trace ===\n");
-#  endif // Q_OS_UNIX && !Q_OS_WASM && !Q_OS_INTEGRITY && !Q_OS_VXWORKS
-}
-#endif  // !defined(Q_OS_WASM) || QT_CONFIG(thread)
 
 static bool installCoverageTool(const char * appname, const char * testname)
 {
@@ -458,15 +164,224 @@ namespace QTestPrivate
     Q_TESTLIB_EXPORT Qt::MouseButtons qtestMouseButtons = Qt::NoButton;
 }
 
+namespace {
+
+#if !QT_CONFIG(future)
+using QException = std::exception;
+#endif
+
+class TestFailedException : public QException // clazy:exclude=copyable-polymorphic
+{
+public:
+    TestFailedException() = default;
+    ~TestFailedException() override = default;
+
+    const char *what() const noexcept override { return "QtTest: test failed"; }
+
+#if QT_CONFIG(future)
+    TestFailedException *clone() const override { return new TestFailedException(); }
+    void raise() const override { throw TestFailedException(); }
+#endif
+};
+
+class TestSkippedException : public QException // clazy:exclude=copyable-polymorphic
+{
+public:
+    TestSkippedException() = default;
+    ~TestSkippedException() override = default;
+
+    const char *what() const noexcept override { return "QtTest: test was skipped"; }
+
+#if QT_CONFIG(future)
+    TestSkippedException *clone() const override { return new TestSkippedException(); }
+    void raise() const override { throw TestSkippedException(); }
+#endif
+};
+
+} // unnamed namespace
+
 namespace QTest
 {
 
-QString Internal::formatTryTimeoutDebugMessage(q_no_char8_t::QUtf8StringView expr, int timeout, int actual)
+void Internal::throwOnFail() { throw TestFailedException(); }
+void Internal::throwOnSkip() { throw TestSkippedException(); }
+
+Q_CONSTINIT static QBasicAtomicInt g_throwOnFail = Q_BASIC_ATOMIC_INITIALIZER(0);
+Q_CONSTINIT static QBasicAtomicInt g_throwOnSkip = Q_BASIC_ATOMIC_INITIALIZER(0);
+
+void Internal::maybeThrowOnFail()
+{
+    if (g_throwOnFail.loadRelaxed() > 0)
+        Internal::throwOnFail();
+}
+
+void Internal::maybeThrowOnSkip()
+{
+    if (g_throwOnSkip.loadRelaxed() > 0)
+        Internal::throwOnSkip();
+}
+
+/*
+//! [return-void]
+    Defining this macro is useful if you wish to use \1 in functions that have
+    a non-\c{void} return type. Without this macro defined, \2, for example,
+    expands to a statement including \c{return;}, so it cannot be used in
+    functions (or lambdas) that return something else than \c{void}, e.g.
+    \l{QString}. This includes the case where throwing exceptions is enabled
+    only at runtime (using \3). With this macro defined, \2 instead expands to
+    a statement without a \c{return;}, which is usable from any function.
+//! [return-void]
+*/
+
+/*!
+    \since 6.8
+    \macro QTEST_THROW_ON_FAIL
+    \relates QTest
+
+    When defined, QCOMPARE()/QVERIFY() etc always throw on failure.
+    QTest::setThrowOnFail() then no longer has any effect.
+
+    \include qtestcase.cpp {return-void} {QCOMPARE() or QVERIFY()} {QCOMPARE()} {QTest::setThrowOnFail(true)}
+*/
+
+/*!
+    \since 6.8
+    \macro QTEST_THROW_ON_SKIP
+    \relates QTest
+
+    When defined, QSKIP() always throws. QTest::setThrowOnSkip() then no longer
+    has any effect.
+
+    \include qtestcase.cpp {return-void} {QSKIP()} {QSKIP()} {QTest::setThrowOnSkip(true)}
+*/
+
+/*!
+    \since 6.8
+    \class QTest::ThrowOnFailEnabler
+    \inmodule QtTestLib
+
+    RAII class around setThrowOnFail().
+*/
+/*!
+    \fn QTest::ThrowOnFailEnabler::ThrowOnFailEnabler()
+
+    Constructor. Calls \c{setThrowOnFail(true)}.
+*/
+/*!
+    \fn QTest::ThrowOnFailEnabler::~ThrowOnFailEnabler()
+
+    Destructor. Calls \c{setThrowOnFail(false)}.
+*/
+
+/*!
+    \since 6.8
+    \class QTest::ThrowOnFailDisabler
+    \inmodule QtTestLib
+
+    RAII class around setThrowOnFail().
+*/
+/*!
+    \fn QTest::ThrowOnFailDisabler::ThrowOnFailDisabler()
+
+    Constructor. Calls \c{setThrowOnFail(false)}.
+*/
+/*!
+    \fn QTest::ThrowOnFailDisabler::~ThrowOnFailDisabler()
+
+    Destructor. Calls \c{setThrowOnFail(true)}.
+*/
+
+/*!
+    \since 6.8
+    \class QTest::ThrowOnSkipEnabler
+    \inmodule QtTestLib
+
+    RAII class around setThrowOnSkip().
+*/
+/*!
+    \fn QTest::ThrowOnSkipEnabler::ThrowOnSkipEnabler()
+
+    Constructor. Calls \c{setThrowOnSkip(true)}.
+*/
+/*!
+    \fn QTest::ThrowOnSkipEnabler::~ThrowOnSkipEnabler()
+
+    Destructor. Calls \c{setThrowOnSkip(false)}.
+*/
+
+/*!
+    \since 6.8
+    \class QTest::ThrowOnSkipDisabler
+    \inmodule QtTestLib
+
+    RAII class around setThrowOnSkip().
+*/
+/*!
+    \fn QTest::ThrowOnSkipDisabler::ThrowOnSkipDisabler()
+
+    Constructor. Calls \c{setThrowOnSkip(false)}.
+*/
+/*!
+    \fn QTest::ThrowOnSkipDisabler::~ThrowOnSkipDisabler()
+
+    Destructor. Calls \c{setThrowOnSkip(true)}.
+*/
+
+/*!
+    \since 6.8
+
+    Enables (\a enable = \c true) or disables (\ enable = \c false) throwing on
+    QCOMPARE()/QVERIFY() failures (as opposed to just returning from the
+    immediately-surrounding function context).
+
+    The feature is reference-counted: If you call this function \e{N} times
+    with \c{true}, you need to call it \e{N} times with \c{false} to get back
+    to where you started.
+
+    This call has no effect when the \l{QTEST_THROW_ON_FAIL} C++ macro is
+    defined.
+
+    \note You must compile your tests with exceptions enabled to use this
+    feature.
+
+    \sa setThrowOnSkip(), ThrowOnFailEnabler, ThrowOnFailDisabler, QTEST_THROW_ON_FAIL
+*/
+void setThrowOnFail(bool enable) noexcept
+{
+    g_throwOnFail.fetchAndAddRelaxed(enable ? 1 : -1);
+}
+
+/*!
+    \since 6.8
+
+    Enables (\a enable = \c true) or disables (\ enable = \c false) throwing on
+    QSKIP() (as opposed to just returning from the immediately-surrounding
+    function context).
+
+    The feature is reference-counted: If you call this function \e{N} times
+    with \c{true}, you need to call it \e{N} times with \c{false} to get back
+    to where you started.
+
+    This call has no effect when the \l{QTEST_THROW_ON_SKIP} C++ macro is
+    defined.
+
+    \note You must compile your tests with exceptions enabled to use this
+    feature.
+
+    \sa setThrowOnFail(), ThrowOnSkipEnabler, ThrowOnSkipDisabler, QTEST_THROW_ON_SKIP
+*/
+void setThrowOnSkip(bool enable) noexcept
+{
+    g_throwOnSkip.fetchAndAddRelaxed(enable ? 1 : -1);
+}
+
+QString Internal::formatTryTimeoutDebugMessage(q_no_char8_t::QUtf8StringView expr,
+                                               std::chrono::milliseconds timeout,
+                                               std::chrono::milliseconds actual)
 {
     return "QTestLib: This test case check (\"%1\") failed because the requested timeout (%2 ms) "
            "was too short, %3 ms would have been sufficient this time."_L1
-            // ### Qt 7: remove the toString() (or earlier, when arg() can handle QUtf8StringView), passing the view directly
-            .arg(expr.toString(), QString::number(timeout), QString::number(actual));
+            .arg(expr, QString::number(timeout.count()), QString::number(actual.count()));
 }
 
 extern Q_TESTLIB_EXPORT int lastMouseTimestamp;
@@ -478,6 +393,7 @@ static QString mainSourcePath;
 static bool inTestFunction = false;
 
 #if defined(Q_OS_MACOS)
+static std::optional<QTestPrivate::AppNapDisabler> appNapDisabler;
 static IOPMAssertionID macPowerSavingDisabled = 0;
 #endif
 
@@ -539,14 +455,23 @@ static int eventDelay = -1;
 #if QT_CONFIG(thread)
 static int timeout = -1;
 #endif
-static bool noCrashHandler = false;
 static int repetitions = 1;
-static bool repeatForever = false;
 static bool skipBlacklisted = false;
+
+namespace Internal {
+bool noCrashHandler = false;
+}
 
 static bool invokeTestMethodIfValid(QMetaMethod m, QObject *obj = QTest::currentTestObject)
 {
-    return m.isValid() && m.invoke(obj, Qt::DirectConnection);
+    if (!m.isValid())
+        return false;
+    bool ok = true;
+    try { ok = m.invoke(obj, Qt ::DirectConnection); }
+    catch (const TestFailedException &) {}  // ignore (used for control flow)
+    catch (const TestSkippedException &) {} // ditto
+    // every other exception is someone else's problem
+    return ok;
 }
 
 static void invokeTestMethodIfExists(const char *methodName, QObject *obj = QTest::currentTestObject)
@@ -622,7 +547,7 @@ static bool qPrintTestSlots(FILE *stream, const char *filter = nullptr, const ch
         if (isValidSlot(sl)) {
             const QByteArray signature = sl.methodSignature();
             if (matches(signature)) {
-                fprintf(stream, "%s%s\n", preamble, signature.constData());
+                std::fprintf(stream, "%s%s\n", preamble, signature.constData());
                 preamble = "";
                 matched = true;
             }
@@ -652,11 +577,8 @@ static void qPrintDataTags(FILE *stream)
             // Retrieve local tags:
             QStringList localTags;
             QTestTable table;
-            char *slot = qstrdup(tf.methodSignature().constData());
-            slot[strlen(slot) - 2] = '\0';
-            QByteArray member;
-            member.resize(qstrlen(slot) + qstrlen("_data()") + 1);
-            qsnprintf(member.data(), member.size(), "%s_data()", slot);
+            const QByteArray slot = tf.methodSignature().chopped(2);
+            const QByteArray member = slot + "_data()";
             invokeTestMethodIfExists(member.constData());
             const int dataCount = table.dataCount();
             localTags.reserve(dataCount);
@@ -667,33 +589,35 @@ static void qPrintDataTags(FILE *stream)
             if (gTable->dataCount() == 0) {
                 if (localTags.size() == 0) {
                     // No tags at all, so just print the test function:
-                    fprintf(stream, "%s %s\n", currTestMetaObj->className(), slot);
+                    std::fprintf(stream, "%s %s\n", currTestMetaObj->className(), slot.data());
                 } else {
                     // Only local tags, so print each of them:
                     for (int k = 0; k < localTags.size(); ++k)
-                        fprintf(
-                            stream, "%s %s %s\n",
-                            currTestMetaObj->className(), slot, localTags.at(k).toLatin1().data());
+                        std::fprintf(stream, "%s %s %s\n",
+                                     currTestMetaObj->className(),
+                                     slot.data(),
+                                     localTags.at(k).toLatin1().data());
                 }
             } else {
                 for (int j = 0; j < gTable->dataCount(); ++j) {
                     if (localTags.size() == 0) {
                         // Only global tags, so print the current one:
-                        fprintf(
-                            stream, "%s %s __global__ %s\n",
-                            currTestMetaObj->className(), slot, gTable->testData(j)->dataTag());
+                        std::fprintf(stream, "%s %s __global__ %s\n",
+                                     currTestMetaObj->className(),
+                                     slot.data(),
+                                     gTable->testData(j)->dataTag());
                     } else {
                         // Local and global tags, so print each of the local ones and
                         // the current global one:
                         for (int k = 0; k < localTags.size(); ++k)
-                            fprintf(
-                                stream, "%s %s %s __global__ %s\n", currTestMetaObj->className(), slot,
-                                localTags.at(k).toLatin1().data(), gTable->testData(j)->dataTag());
+                            std::fprintf(stream, "%s %s %s __global__ %s\n",
+                                         currTestMetaObj->className(),
+                                         slot.data(),
+                                         localTags.at(k).toLatin1().data(),
+                                         gTable->testData(j)->dataTag());
                     }
                 }
             }
-
-            delete[] slot;
         }
     }
 }
@@ -703,7 +627,7 @@ static int qToInt(const char *str)
     char *pEnd;
     int l = static_cast<int>(strtol(str, &pEnd, 10));
     if (*pEnd != 0) {
-        fprintf(stderr, "Invalid numeric parameter: '%s'\n", str);
+        std::fprintf(stderr, "Invalid numeric parameter: '%s'\n", str);
         exit(1);
     }
     return l;
@@ -715,7 +639,6 @@ Q_TESTLIB_EXPORT void qtest_qParseArgs(int argc, const char *const argv[], bool 
     const char *logFilename = nullptr;
 
     repetitions = 1;
-    repeatForever = false;
 
     QTest::testFunctions.clear();
     QTest::testTags.clear();
@@ -799,23 +722,22 @@ Q_TESTLIB_EXPORT void qtest_qParseArgs(int argc, const char *const argv[], bool 
     for (int i = 1; i < argc; ++i) {
         if (strcmp(argv[i], "-help") == 0 || strcmp(argv[i], "--help") == 0
             || strcmp(argv[i], "/?") == 0) {
-            printf(" Usage: %s [options] [testfunction[:testdata]]...\n"
-                   "    By default, all testfunctions will be run.\n\n"
-                   "%s", argv[0], testOptions);
+            std::printf(" Usage: %s [options] [testfunction[:testdata]]...\n"
+                        "    By default, all testfunctions will be run.\n\n"
+                        "%s", argv[0], testOptions);
 
             if (qml) {
-                printf("\n"
-                       " QmlTest options:\n"
-                       " -import dir         : Specify an import directory.\n"
-                       " -plugins dir        : Specify a directory where to search for plugins.\n"
-                       " -input dir/file     : Specify the root directory for test cases or a single test case file.\n"
-                       " -translation file   : Specify the translation file.\n"
-                       " -file-selector dir  : Specify a file selector for the QML engine.\n"
-                       );
+                std::printf("\n"
+                            " QmlTest options:\n"
+                            " -import dir         : Specify an import directory.\n"
+                            " -plugins dir        : Specify a directory where to search for plugins.\n"
+                            " -input dir/file     : Specify the root directory for test cases or a single test case file.\n"
+                            " -translation file   : Specify the translation file.\n"
+                            " -file-selector dir  : Specify a file selector for the QML engine.\n");
             }
 
-            printf("\n"
-                   " -help               : This help\n");
+            std::printf("\n"
+                        " -help               : This help\n");
             exit(0);
         } else if (strcmp(argv[i], "-functions") == 0) {
             if (qml) {
@@ -836,7 +758,7 @@ Q_TESTLIB_EXPORT void qtest_qParseArgs(int argc, const char *const argv[], bool 
         } else if (strcmp(argv[i], "-junitxml") == 0)  {
             logFormat = QTestLog::JUnitXML;
         } else if (strcmp(argv[i], "-xunitxml") == 0)  {
-            fprintf(stderr, "WARNING: xunitxml is deprecated. Please use junitxml.\n");
+            std::fprintf(stderr, "WARNING: xunitxml is deprecated. Please use junitxml.\n");
             logFormat = QTestLog::JUnitXML;
         } else if (strcmp(argv[i], "-xml") == 0) {
             logFormat = QTestLog::XML;
@@ -856,14 +778,14 @@ Q_TESTLIB_EXPORT void qtest_qParseArgs(int argc, const char *const argv[], bool 
             QSignalDumper::setEnabled(true);
         } else if (strcmp(argv[i], "-o") == 0) {
             if (i + 1 >= argc) {
-                fprintf(stderr, "-o needs an extra parameter specifying the filename and optional format\n");
+                std::fprintf(stderr, "-o needs an extra parameter specifying the filename and optional format\n");
                 exit(1);
             }
             ++i;
             // Do we have the old or new style -o option?
             char *filename = new char[strlen(argv[i])+1];
             char *format = new char[strlen(argv[i])+1];
-            if (sscanf(argv[i], "%[^,],%s", filename, format) == 1) {
+            if (std::sscanf(argv[i], "%[^,],%s", filename, format) == 1) {
                 // Old-style
                 logFilename = argv[i];
             } else {
@@ -879,18 +801,18 @@ Q_TESTLIB_EXPORT void qtest_qParseArgs(int argc, const char *const argv[], bool 
                 else if (strcmp(format, "junitxml") == 0)
                     logFormat = QTestLog::JUnitXML;
                 else if (strcmp(format, "xunitxml") == 0) {
-                    fprintf(stderr, "WARNING: xunitxml is deprecated. Please use junitxml.\n");
+                    std::fprintf(stderr, "WARNING: xunitxml is deprecated. Please use junitxml.\n");
                     logFormat = QTestLog::JUnitXML;
                 } else if (strcmp(format, "teamcity") == 0)
                     logFormat = QTestLog::TeamCity;
                 else if (strcmp(format, "tap") == 0)
                     logFormat = QTestLog::TAP;
                 else {
-                    fprintf(stderr, "output format must be one of txt, csv, lightxml, xml, tap, teamcity or junitxml\n");
+                    std::fprintf(stderr, "output format must be one of txt, csv, lightxml, xml, tap, teamcity or junitxml\n");
                     exit(1);
                 }
                 if (strcmp(filename, "-") == 0 && QTestLog::loggerUsingStdout()) {
-                    fprintf(stderr, "only one logger can log to stdout\n");
+                    std::fprintf(stderr, "only one logger can log to stdout\n");
                     exit(1);
                 }
                 QTestLog::addLogger(QTestLog::LogMode(logFormat), filename);
@@ -899,58 +821,57 @@ Q_TESTLIB_EXPORT void qtest_qParseArgs(int argc, const char *const argv[], bool 
             delete [] format;
         } else if (strcmp(argv[i], "-eventdelay") == 0) {
             if (i + 1 >= argc) {
-                fprintf(stderr, "-eventdelay needs an extra parameter to indicate the delay(ms)\n");
+                std::fprintf(stderr, "-eventdelay needs an extra parameter to indicate the delay(ms)\n");
                 exit(1);
             } else {
                 QTest::eventDelay = qToInt(argv[++i]);
             }
         } else if (strcmp(argv[i], "-keydelay") == 0) {
             if (i + 1 >= argc) {
-                fprintf(stderr, "-keydelay needs an extra parameter to indicate the delay(ms)\n");
+                std::fprintf(stderr, "-keydelay needs an extra parameter to indicate the delay(ms)\n");
                 exit(1);
             } else {
                 QTest::keyDelay = qToInt(argv[++i]);
             }
         } else if (strcmp(argv[i], "-mousedelay") == 0) {
             if (i + 1 >= argc) {
-                fprintf(stderr, "-mousedelay needs an extra parameter to indicate the delay(ms)\n");
+                std::fprintf(stderr, "-mousedelay needs an extra parameter to indicate the delay(ms)\n");
                 exit(1);
             } else {
                 QTest::mouseDelay = qToInt(argv[++i]);
             }
         } else if (strcmp(argv[i], "-maxwarnings") == 0) {
             if (i + 1 >= argc) {
-                fprintf(stderr, "-maxwarnings needs an extra parameter with the amount of warnings\n");
+                std::fprintf(stderr, "-maxwarnings needs an extra parameter with the amount of warnings\n");
                 exit(1);
             } else {
                 QTestLog::setMaxWarnings(qToInt(argv[++i]));
             }
         } else if (strcmp(argv[i], "-repeat") == 0) {
             if (i + 1 >= argc) {
-                fprintf(stderr, "-repeat needs an extra parameter for the number of repetitions\n");
+                std::fprintf(stderr, "-repeat needs an extra parameter for the number of repetitions\n");
                 exit(1);
             } else {
                 repetitions = qToInt(argv[++i]);
-                repeatForever = repetitions < 0;
             }
         } else if (strcmp(argv[i], "-nocrashhandler") == 0) {
-            QTest::noCrashHandler = true;
+            QTest::Internal::noCrashHandler = true;
         } else if (strcmp(argv[i], "-skipblacklisted") == 0) {
             QTest::skipBlacklisted = true;
 #if QT_CONFIG(valgrind)
         } else if (strcmp(argv[i], "-callgrind") == 0) {
             if (!QBenchmarkValgrindUtils::haveValgrind()) {
-                fprintf(stderr,
-                        "WARNING: Valgrind not found or too old. "
-                        "Make sure it is installed and in your path. "
-                        "Using the walltime measurer.\n");
+                std::fprintf(stderr,
+                             "WARNING: Valgrind not found or too old. "
+                             "Make sure it is installed and in your path. "
+                             "Using the walltime measurer.\n");
             } else if (QFileInfo(QDir::currentPath()).isWritable()) {
                 QBenchmarkGlobalData::current->setMode(
                     QBenchmarkGlobalData::CallgrindParentProcess);
             } else {
-                fprintf(stderr,
-                        "WARNING: Current directory not writable. "
-                        "Using the walltime measurer.\n");
+                std::fprintf(stderr,
+                             "WARNING: Current directory not writable. "
+                             "Using the walltime measurer.\n");
             }
         } else if (strcmp(argv[i], "-callgrindchild") == 0) { // "private" option
             QBenchmarkGlobalData::current->setMode(QBenchmarkGlobalData::CallgrindChildProcess);
@@ -963,11 +884,11 @@ Q_TESTLIB_EXPORT void qtest_qParseArgs(int argc, const char *const argv[], bool 
                 // perf available
                 QBenchmarkGlobalData::current->setMode(QBenchmarkGlobalData::PerfCounter);
             } else {
-                fprintf(stderr, "WARNING: Linux perf events not available. Using the walltime measurer.\n");
+                std::fprintf(stderr, "WARNING: Linux perf events not available. Using the walltime measurer.\n");
             }
         } else if (strcmp(argv[i], "-perfcounter") == 0) {
             if (i + 1 >= argc) {
-                fprintf(stderr, "-perfcounter needs an extra parameter with the name of the counter\n");
+                std::fprintf(stderr, "-perfcounter needs an extra parameter with the name of the counter\n");
                 exit(1);
             } else {
                 QBenchmarkPerfEventsMeasurer::setCounter(argv[++i]);
@@ -984,28 +905,28 @@ Q_TESTLIB_EXPORT void qtest_qParseArgs(int argc, const char *const argv[], bool 
             QBenchmarkGlobalData::current->setMode(QBenchmarkGlobalData::EventCounter);
         } else if (strcmp(argv[i], "-minimumvalue") == 0) {
             if (i + 1 >= argc) {
-                fprintf(stderr, "-minimumvalue needs an extra parameter to indicate the minimum time(ms)\n");
+                std::fprintf(stderr, "-minimumvalue needs an extra parameter to indicate the minimum time(ms)\n");
                 exit(1);
             } else {
                 QBenchmarkGlobalData::current->walltimeMinimum = qToInt(argv[++i]);
             }
         } else if (strcmp(argv[i], "-minimumtotal") == 0) {
             if (i + 1 >= argc) {
-                fprintf(stderr, "-minimumtotal needs an extra parameter to indicate the minimum total measurement\n");
+                std::fprintf(stderr, "-minimumtotal needs an extra parameter to indicate the minimum total measurement\n");
                 exit(1);
             } else {
                 QBenchmarkGlobalData::current->minimumTotal = qToInt(argv[++i]);
             }
         } else if (strcmp(argv[i], "-iterations") == 0) {
             if (i + 1 >= argc) {
-                fprintf(stderr, "-iterations needs an extra parameter to indicate the number of iterations\n");
+                std::fprintf(stderr, "-iterations needs an extra parameter to indicate the number of iterations\n");
                 exit(1);
             } else {
                 QBenchmarkGlobalData::current->iterationCount = qToInt(argv[++i]);
             }
         } else if (strcmp(argv[i], "-median") == 0) {
             if (i + 1 >= argc) {
-                fprintf(stderr, "-median needs an extra parameter to indicate the number of median iterations\n");
+                std::fprintf(stderr, "-median needs an extra parameter to indicate the number of median iterations\n");
                 exit(1);
             } else {
                 QBenchmarkGlobalData::current->medianIterationCount = qToInt(argv[++i]);
@@ -1024,17 +945,16 @@ Q_TESTLIB_EXPORT void qtest_qParseArgs(int argc, const char *const argv[], bool 
 # endif
 #endif
         } else if (argv[i][0] == '-') {
-            fprintf(stderr, "Unknown option: '%s'\n\n%s", argv[i], testOptions);
+            std::fprintf(stderr, "Unknown option: '%s'\n\n%s", argv[i], testOptions);
             if (qml) {
-                fprintf(stderr, "\nqmltest related options:\n"
-                                " -import    : Specify an import directory.\n"
-                                " -plugins   : Specify a directory where to search for plugins.\n"
-                                " -input     : Specify the root directory for test cases.\n"
-                       );
+                std::fprintf(stderr, "\nqmltest related options:\n"
+                                     " -import    : Specify an import directory.\n"
+                                     " -plugins   : Specify a directory where to search for plugins.\n"
+                                     " -input     : Specify the root directory for test cases.\n");
             }
 
-            fprintf(stderr, "\n"
-                            " -help      : This help\n");
+            std::fprintf(stderr, "\n"
+                                 " -help      : This help\n");
             exit(1);
         } else {
             // We can't check the availability of test functions until
@@ -1090,7 +1010,7 @@ Q_TESTLIB_EXPORT void qtest_qParseArgs(int argc, const char *const argv[], bool 
         QTestLog::addLogger(QTestLog::Plain, logFilename);
 
     if (repetitions != 1 && !QTestLog::isRepeatSupported()) {
-        fprintf(stderr, "-repeat is only supported with plain text logger\n");
+        std::fprintf(stderr, "-repeat is only supported with plain text logger\n");
         exit(1);
     }
 }
@@ -1292,10 +1212,10 @@ class WatchDog : public QThread
 
 public:
     WatchDog()
+        : expecting{ThreadStart}
     {
         setObjectName("QtTest Watchdog"_L1);
         auto locker = qt_unique_lock(mutex);
-        expecting.store(ThreadStart, std::memory_order_relaxed);
         start();
         waitFor(locker, ThreadStart);
     }
@@ -1318,7 +1238,7 @@ public:
 
     void run() override
     {
-        blockUnixSignals();
+        CrashHandler::blockUnixSignals();
         auto locker = qt_unique_lock(mutex);
         expecting.store(TestFunctionStart, std::memory_order_release);
         waitCondition.notify_all();
@@ -1332,9 +1252,9 @@ public:
             case TestFunctionStart:
             case TestFunctionEnd:
                 if (Q_UNLIKELY(!waitFor(locker, e))) {
-                    fflush(stderr);
-                    printTestRunTime();
-                    generateStackTrace();
+                    std::fflush(stderr);
+                    CrashHandler::printTestRunTime();
+                    CrashHandler::generateStackTrace();
                     qFatal("Test function timed out");
                 }
             }
@@ -1358,25 +1278,36 @@ public:
 
 #endif  // QT_CONFIG(thread)
 
+template <typename Functor>
+void runWithWatchdog(std::optional<WatchDog> &watchDog, Functor &&f)
+{
+    if (watchDog)
+        watchDog->beginTest();
+
+    f();
+
+    if (watchDog)
+        watchDog->testFinished();
+}
 
 static void printUnknownDataTagError(QLatin1StringView name, QLatin1StringView tag,
                                      const QTestTable &lTable, const QTestTable &gTable)
 {
-    fprintf(stderr, "Unknown testdata for function %s(): '%s'\n", name.constData(), tag.data());
+    std::fprintf(stderr, "Unknown testdata for function %s(): '%s'\n", name.constData(), tag.data());
     const int localDataCount = lTable.dataCount();
     if (localDataCount) {
-        fputs("Available test-specific data tags:\n", stderr);
+        std::fputs("Available test-specific data tags:\n", stderr);
         for (int i = 0; i < localDataCount; ++i)
-            fprintf(stderr, "\t%s\n", lTable.testData(i)->dataTag());
+            std::fprintf(stderr, "\t%s\n", lTable.testData(i)->dataTag());
     }
     const int globalDataCount = gTable.dataCount();
     if (globalDataCount) {
-        fputs("Available global data tags:\n", stderr);
+        std::fputs("Available global data tags:\n", stderr);
         for (int i = 0; i < globalDataCount; ++i)
-            fprintf(stderr, "\t%s\n", gTable.testData(i)->dataTag());
+            std::fprintf(stderr, "\t%s\n", gTable.testData(i)->dataTag());
     }
     if (localDataCount == 0 && globalDataCount == 0)
-        fputs("Function has no data tags\n", stderr);
+        std::fputs("Function has no data tags\n", stderr);
 }
 
 /*!
@@ -1428,8 +1359,10 @@ bool TestMethods::invokeTest(int index, QLatin1StringView tag, std::optional<Wat
             QTestResult::setCurrentGlobalTestData(gTable->testData(curGlobalDataIndex));
 
         if (curGlobalDataIndex == 0) {
-            qsnprintf(member, 512, "%s_data()", name.constData());
-            invokeTestMethodIfExists(member);
+            std::snprintf(member, 512, "%s_data()", name.constData());
+            runWithWatchdog(watchDog, [&member] {
+                invokeTestMethodIfExists(member);
+            });
             if (QTestResult::skipCurrentTest())
                 break;
         }
@@ -1462,12 +1395,14 @@ bool TestMethods::invokeTest(int index, QLatin1StringView tag, std::optional<Wat
                         curDataIndex >= dataCount ? nullptr : table.testData(curDataIndex));
 
                     QTestPrivate::qtestMouseButtons = Qt::NoButton;
-                    if (watchDog)
-                        watchDog->beginTest();
-                    QTest::lastMouseTimestamp += 500;   // Maintain at least 500ms mouse event timestamps between each test function call
-                    invokeTestOnData(index);
-                    if (watchDog)
-                        watchDog->testFinished();
+
+                    // Maintain at least 500ms mouse event timestamps between each test function
+                    // call
+                    QTest::lastMouseTimestamp += 500;
+
+                    runWithWatchdog(watchDog, [this, index] {
+                        invokeTestOnData(index);
+                    });
                 }
 
                 if (!tag.isEmpty() && !globalDataCount)
@@ -1774,11 +1709,9 @@ void TestMethods::invokeTests(QObject *testObject) const
 {
     const QMetaObject *metaObject = testObject->metaObject();
     QTEST_ASSERT(metaObject);
-    QTestResult::setCurrentTestFunction("initTestCase");
-    invokeTestMethodIfValid(m_initTestCaseDataMethod, testObject);
 
     std::optional<WatchDog> watchDog = std::nullopt;
-    if (!alreadyDebugging()
+    if (!CrashHandler::alreadyDebugging()
 #if QT_CONFIG(valgrind)
         && QBenchmarkGlobalData::current->mode() != QBenchmarkGlobalData::CallgrindChildProcess
 #endif
@@ -1786,10 +1719,18 @@ void TestMethods::invokeTests(QObject *testObject) const
         watchDog.emplace();
     }
 
+    QTestResult::setCurrentTestFunction("initTestCase");
+    runWithWatchdog(watchDog, [this, testObject] {
+        invokeTestMethodIfValid(m_initTestCaseDataMethod, testObject);
+    });
+
     QSignalDumper::startDump();
 
     if (!QTestResult::skipCurrentTest() && !QTestResult::currentTestFailed()) {
-        invokeTestMethodIfValid(m_initTestCaseMethod, testObject);
+
+        runWithWatchdog(watchDog, [this, testObject] {
+            invokeTestMethodIfValid(m_initTestCaseMethod, testObject);
+        });
 
         // finishedCurrentTestDataCleanup() resets QTestResult::currentTestFailed(), so use a local copy.
         const bool previousFailed = QTestResult::currentTestFailed();
@@ -1813,7 +1754,10 @@ void TestMethods::invokeTests(QObject *testObject) const
         QTestResult::setSkipCurrentTest(false);
         QTestResult::setBlacklistCurrentTest(false);
         QTestResult::setCurrentTestFunction("cleanupTestCase");
-        invokeTestMethodIfValid(m_cleanupTestCaseMethod, testObject);
+        runWithWatchdog(watchDog, [this, testObject] {
+            invokeTestMethodIfValid(m_cleanupTestCaseMethod, testObject);
+        });
+
         QTestResult::finishedCurrentTestData();
         // Restore skip state as it affects decision on whether we passed:
         QTestResult::setSkipCurrentTest(wasSkipped || QTestResult::skipCurrentTest());
@@ -1825,456 +1769,47 @@ void TestMethods::invokeTests(QObject *testObject) const
     QSignalDumper::endDump();
 }
 
+#if QT_DEPRECATED_SINCE(6, 8)
+static const char *functionRefFormatter(const void *f)
+{
+    auto formatter = static_cast<const qxp::function_ref<const char *()> *>(f);
+    return (*formatter)();
+};
+
 bool reportResult(bool success, qxp::function_ref<const char *()> lhs,
                   qxp::function_ref<const char *()> rhs,
                   const char *lhsExpr, const char *rhsExpr,
                   ComparisonOperation op, const char *file, int line)
 {
-    return QTestResult::reportResult(success, lhs, rhs, lhsExpr, rhsExpr, op, file, line);
+    return QTestResult::reportResult(success, &lhs, &rhs,
+                                     functionRefFormatter, functionRefFormatter,
+                                     lhsExpr, rhsExpr, op, file, line);
 }
+#endif // QT_DEPRECATED_SINCE(6, 8)
 
+bool reportResult(bool success, const void *lhs, const void *rhs,
+                  const char *(*lhsFormatter)(const void*),
+                  const char *(*rhsFormatter)(const void*),
+                  const char *lhsExpr, const char *rhsExpr,
+                  ComparisonOperation op, const char *file, int line)
+{
+    return QTestResult::reportResult(success, lhs, rhs, lhsFormatter, rhsFormatter,
+                                     lhsExpr, rhsExpr, op, file, line);
+}
 } // namespace QTest
-
-#if defined(Q_OS_WIN)
-namespace {
-// Helper class for resolving symbol names by dynamically loading "dbghelp.dll".
-class DebugSymbolResolver
-{
-    Q_DISABLE_COPY_MOVE(DebugSymbolResolver)
-public:
-    struct Symbol {
-        Symbol() : name(nullptr), address(0) {}
-
-        const char *name; // Must be freed by caller.
-        DWORD64 address;
-    };
-
-    explicit DebugSymbolResolver(HANDLE process);
-    ~DebugSymbolResolver() { cleanup(); }
-
-    bool isValid() const { return m_symFromAddr; }
-
-    Symbol resolveSymbol(DWORD64 address) const;
-
-private:
-    // typedefs from DbgHelp.h/.dll
-    struct DBGHELP_SYMBOL_INFO { // SYMBOL_INFO
-        ULONG       SizeOfStruct;
-        ULONG       TypeIndex;        // Type Index of symbol
-        ULONG64     Reserved[2];
-        ULONG       Index;
-        ULONG       Size;
-        ULONG64     ModBase;          // Base Address of module comtaining this symbol
-        ULONG       Flags;
-        ULONG64     Value;            // Value of symbol, ValuePresent should be 1
-        ULONG64     Address;          // Address of symbol including base address of module
-        ULONG       Register;         // register holding value or pointer to value
-        ULONG       Scope;            // scope of the symbol
-        ULONG       Tag;              // pdb classification
-        ULONG       NameLen;          // Actual length of name
-        ULONG       MaxNameLen;
-        CHAR        Name[1];          // Name of symbol
-    };
-
-    typedef BOOL (__stdcall *SymInitializeType)(HANDLE, PCSTR, BOOL);
-    typedef BOOL (__stdcall *SymFromAddrType)(HANDLE, DWORD64, PDWORD64, DBGHELP_SYMBOL_INFO *);
-
-    void cleanup();
-
-    const HANDLE m_process;
-    HMODULE m_dbgHelpLib;
-    SymFromAddrType m_symFromAddr;
-};
-
-void DebugSymbolResolver::cleanup()
-{
-    if (m_dbgHelpLib)
-        FreeLibrary(m_dbgHelpLib);
-    m_dbgHelpLib = 0;
-    m_symFromAddr = nullptr;
-}
-
-DebugSymbolResolver::DebugSymbolResolver(HANDLE process)
-    : m_process(process), m_dbgHelpLib(0), m_symFromAddr(nullptr)
-{
-    bool success = false;
-    m_dbgHelpLib = LoadLibraryW(L"dbghelp.dll");
-    if (m_dbgHelpLib) {
-        SymInitializeType symInitialize = reinterpret_cast<SymInitializeType>(
-            reinterpret_cast<QFunctionPointer>(GetProcAddress(m_dbgHelpLib, "SymInitialize")));
-        m_symFromAddr = reinterpret_cast<SymFromAddrType>(
-            reinterpret_cast<QFunctionPointer>(GetProcAddress(m_dbgHelpLib, "SymFromAddr")));
-        success = symInitialize && m_symFromAddr && symInitialize(process, NULL, TRUE);
-    }
-    if (!success)
-        cleanup();
-}
-
-DebugSymbolResolver::Symbol DebugSymbolResolver::resolveSymbol(DWORD64 address) const
-{
-    // reserve additional buffer where SymFromAddr() will store the name
-    struct NamedSymbolInfo : public DBGHELP_SYMBOL_INFO {
-        enum { symbolNameLength = 255 };
-
-        char name[symbolNameLength + 1];
-    };
-
-    Symbol result;
-    if (!isValid())
-        return result;
-    NamedSymbolInfo symbolBuffer;
-    memset(&symbolBuffer, 0, sizeof(NamedSymbolInfo));
-    symbolBuffer.MaxNameLen = NamedSymbolInfo::symbolNameLength;
-    symbolBuffer.SizeOfStruct = sizeof(DBGHELP_SYMBOL_INFO);
-    if (!m_symFromAddr(m_process, address, 0, &symbolBuffer))
-        return result;
-    result.name = qstrdup(symbolBuffer.Name);
-    result.address = symbolBuffer.Address;
-    return result;
-}
-
-class WindowsFaultHandler
-{
-public:
-    WindowsFaultHandler()
-    {
-#  if !defined(Q_CC_MINGW)
-        _CrtSetReportMode(_CRT_ERROR, _CRTDBG_MODE_DEBUG);
-#  endif
-        SetErrorMode(SetErrorMode(0) | SEM_NOGPFAULTERRORBOX);
-        SetUnhandledExceptionFilter(windowsFaultHandler);
-    }
-
-private:
-    static LONG WINAPI windowsFaultHandler(struct _EXCEPTION_POINTERS *exInfo)
-    {
-        enum { maxStackFrames = 100 };
-        char appName[MAX_PATH];
-        if (!GetModuleFileNameA(NULL, appName, MAX_PATH))
-            appName[0] = 0;
-        const int msecsFunctionTime = qRound(QTestLog::msecsFunctionTime());
-        const int msecsTotalTime = qRound(QTestLog::msecsTotalTime());
-        const void *exceptionAddress = exInfo->ExceptionRecord->ExceptionAddress;
-        fprintf(stderr, "A crash occurred in %s.\n", appName);
-        if (const char *name = QTest::currentTestFunction())
-            fprintf(stderr, "While testing %s\n", name);
-        fprintf(stderr, "Function time: %dms Total time: %dms\n\n"
-                        "Exception address: 0x%p\n"
-                        "Exception code   : 0x%lx\n",
-                msecsFunctionTime, msecsTotalTime, exceptionAddress,
-                exInfo->ExceptionRecord->ExceptionCode);
-
-        DebugSymbolResolver resolver(GetCurrentProcess());
-        if (resolver.isValid()) {
-            DebugSymbolResolver::Symbol exceptionSymbol = resolver.resolveSymbol(DWORD64(exceptionAddress));
-            if (exceptionSymbol.name) {
-                fprintf(stderr, "Nearby symbol    : %s\n", exceptionSymbol.name);
-                delete [] exceptionSymbol.name;
-            }
-            void *stack[maxStackFrames];
-            fputs("\nStack:\n", stderr);
-            const unsigned frameCount = CaptureStackBackTrace(0, DWORD(maxStackFrames), stack, NULL);
-            for (unsigned f = 0; f < frameCount; ++f)     {
-                DebugSymbolResolver::Symbol symbol = resolver.resolveSymbol(DWORD64(stack[f]));
-                if (symbol.name) {
-                    fprintf(stderr, "#%3u: %s() - 0x%p\n", f + 1, symbol.name, (const void *)symbol.address);
-                    delete [] symbol.name;
-                } else {
-                    fprintf(stderr, "#%3u: Unable to obtain symbol\n", f + 1);
-                }
-            }
-        }
-
-        fputc('\n', stderr);
-
-        return EXCEPTION_EXECUTE_HANDLER;
-    }
-};
-} // unnamed namespace
-using FatalSignalHandler = WindowsFaultHandler;
-
-inline void blockUnixSignals()
-{
-    // Windows does have C signals, but doesn't use them for the purposes we're
-    // talking about here
-}
-
-#elif defined(Q_OS_UNIX) && !defined(Q_OS_WASM)
-namespace {
-class FatalSignalHandler
-{
-public:
-#  define OUR_SIGNALS(F)    \
-        F(HUP)              \
-        F(INT)              \
-        F(QUIT)             \
-        F(ABRT)             \
-        F(ILL)              \
-        F(BUS)              \
-        F(FPE)              \
-        F(SEGV)             \
-        F(PIPE)             \
-        F(TERM)             \
-        /**/
-#  define CASE_LABEL(S)             case SIG ## S:  return QT_STRINGIFY(S);
-#  define ENUMERATE_SIGNALS(S)      SIG ## S,
-    static const char *signalName(int signum) noexcept
-    {
-        switch (signum) {
-        OUR_SIGNALS(CASE_LABEL)
-        }
-
-#  if defined(__GLIBC_MINOR__) && (__GLIBC_MINOR__ >= 32 || __GLIBC__ > 2)
-        // get the other signal names from glibc 2.32
-        // (accessing the sys_sigabbrev variable causes linker warnings)
-        if (const char *p = sigabbrev_np(signum))
-            return p;
-#  endif
-        return "???";
-    }
-    static constexpr std::array fatalSignals = {
-        OUR_SIGNALS(ENUMERATE_SIGNALS)
-    };
-#  undef CASE_LABEL
-#  undef ENUMERATE_SIGNALS
-
-    static constexpr std::array crashingSignals = {
-        // Crash signals are special, because if we return from the handler
-        // without adjusting the machine state, the same instruction that
-        // originally caused the crash will get re-executed and will thus cause
-        // the same crash again. This is useful if our parent process logs the
-        // exit result or if core dumps are enabled: the core file will point
-        // to the actual instruction that crashed.
-        SIGILL, SIGBUS, SIGFPE, SIGSEGV
-    };
-    using OldActionsArray = std::array<struct sigaction, fatalSignals.size()>;
-
-    FatalSignalHandler()
-    {
-        pauseOnCrash = qEnvironmentVariableIsSet("QTEST_PAUSE_ON_CRASH");
-        struct sigaction act;
-        memset(&act, 0, sizeof(act));
-        act.sa_handler = SIG_DFL;
-        oldActions().fill(act);
-
-        // Remove the handler after it is invoked.
-        act.sa_flags = SA_RESETHAND | setupAlternateStack();
-
-#  ifdef SA_SIGINFO
-        act.sa_flags |= SA_SIGINFO;
-        act.sa_sigaction = FatalSignalHandler::actionHandler;
-#  else
-        act.sa_handler = FatalSignalHandler::regularHandler;
-#  endif
-
-        // Block all fatal signals in our signal handler so we don't try to close
-        // the testlog twice.
-        sigemptyset(&act.sa_mask);
-        for (int signal : fatalSignals)
-            sigaddset(&act.sa_mask, signal);
-
-        for (size_t i = 0; i < fatalSignals.size(); ++i)
-            sigaction(fatalSignals[i], &act, &oldActions()[i]);
-    }
-
-    ~FatalSignalHandler()
-    {
-        // Restore the default signal handlers in place of ours.
-        // If ours has been replaced, leave the replacement alone.
-        auto isOurs = [](const struct sigaction &old) {
-#  ifdef SA_SIGINFO
-            return (old.sa_flags & SA_SIGINFO) && old.sa_sigaction == FatalSignalHandler::actionHandler;
-#  else
-            return old.sa_handler == FatalSignalHandler::regularHandler;
-#  endif
-        };
-        struct sigaction action;
-
-        for (size_t i = 0; i < fatalSignals.size(); ++i) {
-            struct sigaction &act = oldActions()[i];
-            if (act.sa_flags == 0 && act.sa_handler == SIG_DFL)
-                continue; // Already the default
-            if (sigaction(fatalSignals[i], nullptr, &action))
-                continue; // Failed to query present handler
-            if (isOurs(action))
-                sigaction(fatalSignals[i], &act, nullptr);
-        }
-
-        freeAlternateStack();
-    }
-
-private:
-    Q_DISABLE_COPY_MOVE(FatalSignalHandler)
-
-    static OldActionsArray &oldActions()
-    {
-        Q_CONSTINIT static OldActionsArray oldActions {};
-        return oldActions;
-    }
-
-    auto alternateStackSize()
-    {
-        struct R { size_t size, pageSize; };
-        static constexpr size_t MinStackSize = 32 * 1024;
-        size_t pageSize = sysconf(_SC_PAGESIZE);
-        size_t size = SIGSTKSZ;
-        if (size < MinStackSize) {
-            size = MinStackSize;
-        } else {
-            // round up to a page
-            size = (size + pageSize - 1) & -pageSize;
-        }
-
-        return R{ size + pageSize, pageSize };
-    }
-
-    int setupAlternateStack()
-    {
-        // tvOS/watchOS both define SA_ONSTACK (in sys/signal.h) but mark sigaltstack() as
-        // unavailable (__WATCHOS_PROHIBITED __TVOS_PROHIBITED in signal.h)
-#  if defined(SA_ONSTACK) && !defined(Q_OS_TVOS) && !defined(Q_OS_WATCHOS)
-        // Let the signal handlers use an alternate stack
-        // This is necessary if SIGSEGV is to catch a stack overflow
-        auto r = alternateStackSize();
-        int flags = MAP_PRIVATE | MAP_ANONYMOUS;
-#    ifdef MAP_STACK
-        flags |= MAP_STACK;
-#    endif
-        alternateStackBase = mmap(nullptr, r.size, PROT_READ | PROT_WRITE, flags, -1, 0);
-        if (alternateStackBase == MAP_FAILED)
-            return 0;
-
-        // mark the bottom page inaccessible, to catch a handler stack overflow
-        (void) mprotect(alternateStackBase, r.pageSize, PROT_NONE);
-
-        stack_t stack;
-        stack.ss_flags = 0;
-        stack.ss_size = r.size - r.pageSize;
-        stack.ss_sp = static_cast<char *>(alternateStackBase) + r.pageSize;
-        sigaltstack(&stack, nullptr);
-        return SA_ONSTACK;
-#  else
-        return 0;
-#  endif
-    }
-
-    void freeAlternateStack()
-    {
-#  if defined(SA_ONSTACK) && !defined(Q_OS_TVOS) && !defined(Q_OS_WATCHOS)
-        if (alternateStackBase != MAP_FAILED) {
-            stack_t stack = {};
-            stack.ss_flags = SS_DISABLE;
-            sigaltstack(&stack, nullptr);
-            munmap(alternateStackBase, alternateStackSize().size);
-        }
-#  endif
-    }
-
-    template <typename T> static
-    std::enable_if_t<sizeof(std::declval<T>().si_pid) + sizeof(std::declval<T>().si_uid) >= 1>
-    printSentSignalInfo(T *info)
-    {
-        writeToStderr(" sent by PID ", asyncSafeToString(info->si_pid),
-                      " UID ", asyncSafeToString(info->si_uid));
-    }
-    static void printSentSignalInfo(...) {}
-
-    template <typename T> static
-    std::enable_if_t<sizeof(std::declval<T>().si_addr) >= 1> printCrashingSignalInfo(T *info)
-    {
-        using HexString = std::array<char, sizeof(quintptr) * 2>;
-        auto toHexString = [](quintptr u, HexString &&r = {}) {
-            int shift = sizeof(quintptr) * 8 - 4;
-            for (size_t i = 0; i < sizeof(quintptr) * 2; ++i, shift -= 4)
-                r[i] = QtMiscUtils::toHexLower(u >> shift);
-            struct iovec vec;
-            vec.iov_base = r.data();
-            vec.iov_len = r.size();
-            return vec;
-        };
-        writeToStderr(", code ", asyncSafeToString(info->si_code),
-                      ", for address 0x", toHexString(quintptr(info->si_addr)));
-    }
-    static void printCrashingSignalInfo(...) {}
-
-    static void actionHandler(int signum, siginfo_t *info, void * /* ucontext */)
-    {
-        writeToStderr("Received signal ", asyncSafeToString(signum),
-                      " (SIG", signalName(signum), ")");
-
-        bool isCrashingSignal =
-                std::find(crashingSignals.begin(), crashingSignals.end(), signum) != crashingSignals.end();
-        if (isCrashingSignal && (!info || info->si_code <= 0))
-            isCrashingSignal = false;       // wasn't sent by the kernel, so it's not really a crash
-        if (isCrashingSignal)
-            printCrashingSignalInfo(info);
-        else if (info && (info->si_code == SI_USER || info->si_code == SI_QUEUE))
-            printSentSignalInfo(info);
-
-        printTestRunTime();
-        if (signum != SIGINT) {
-            generateStackTrace();
-            if (pauseOnCrash) {
-                writeToStderr("Pausing process ", asyncSafeToString(getpid()),
-                       " for debugging\n");
-                raise(SIGSTOP);
-            }
-        }
-
-        // chain back to the previous handler, if any
-        for (size_t i = 0; i < fatalSignals.size(); ++i) {
-            struct sigaction &act = oldActions()[i];
-            if (signum != fatalSignals[i])
-                continue;
-
-            // restore the handler (if SA_RESETHAND hasn't done the job for us)
-            if (SA_RESETHAND == 0 || act.sa_handler != SIG_DFL || act.sa_flags)
-                (void) sigaction(signum, &act, nullptr);
-
-            if (!isCrashingSignal)
-                raise(signum);
-
-            // signal is blocked, so it'll be delivered when we return
-            return;
-        }
-
-        // we shouldn't reach here!
-        std::abort();
-    }
-
-    [[maybe_unused]] static void regularHandler(int signum)
-    {
-        actionHandler(signum, nullptr, nullptr);
-    }
-
-    void *alternateStackBase = MAP_FAILED;
-    static bool pauseOnCrash;
-};
-bool FatalSignalHandler::pauseOnCrash = false;
-} // unnamed namespace
-
-inline void blockUnixSignals()
-{
-    // Block most Unix signals so the WatchDog thread won't be called when
-    // external signals are delivered, thus avoiding interfering with the test
-    sigset_t set;
-    sigfillset(&set);
-
-    // we allow the crashing signals, in case we have bugs
-    for (int signo : FatalSignalHandler::fatalSignals)
-        sigdelset(&set, signo);
-
-    pthread_sigmask(SIG_BLOCK, &set, nullptr);
-}
-#else // Q_OS_WASM or weird systems
-class FatalSignalHandler {};
-inline void blockUnixSignals() {}
-#endif // Q_OS_* choice
 
 static void initEnvironment()
 {
     qputenv("QT_QTESTLIB_RUNNING", "1");
 }
+
+#ifdef Q_OS_ANDROID
+static QFile androidExitCodeFile()
+{
+    const QString testHome = QStandardPaths::writableLocation(QStandardPaths::HomeLocation);
+    return QFile(testHome + "/qtest_last_exit_code"_L1);
+}
+#endif
 
 /*!
     Executes tests declared in \a testObject. In addition, the private slots
@@ -2339,7 +1874,7 @@ int QTest::qExec(QObject *testObject, int argc, char **argv)
 void QTest::qInit(QObject *testObject, int argc, char **argv)
 {
     initEnvironment();
-    maybeDisableCoreDump();
+    CrashHandler::maybeDisableCoreDump();
     QBenchmarkGlobalData::current = new QBenchmarkGlobalData;
 
 #if defined(Q_OS_MACOS)
@@ -2347,7 +1882,8 @@ void QTest::qInit(QObject *testObject, int argc, char **argv)
     QTestPrivate::disableWindowRestore();
 
     // Disable App Nap which may cause tests to stall
-    QTestPrivate::AppNapDisabler appNapDisabler;
+    if (!appNapDisabler)
+        appNapDisabler.emplace();
 
     if (qApp && (qstrcmp(qApp->metaObject()->className(), "QApplication") == 0)) {
         IOPMAssertionCreateWithName(kIOPMAssertionTypeNoDisplaySleep,
@@ -2376,6 +1912,10 @@ void QTest::qInit(QObject *testObject, int argc, char **argv)
     if (QBenchmarkGlobalData::current->mode() != QBenchmarkGlobalData::CallgrindParentProcess)
 #endif
         QTestLog::startLogging();
+
+#ifdef Q_OS_ANDROID
+    androidExitCodeFile().remove();
+#endif
 }
 
 /*! \internal
@@ -2406,9 +1946,9 @@ int QTest::qRun()
     } else
 #endif
     {
-        std::optional<FatalSignalHandler> handler;
-        prepareStackTrace();
-        if (!noCrashHandler)
+        std::optional<CrashHandler::FatalSignalHandler> handler;
+        CrashHandler::prepareStackTrace();
+        if (!Internal::noCrashHandler)
             handler.emplace();
 
         bool seenBad = false;
@@ -2421,9 +1961,9 @@ int QTest::qRun()
             if (m.isValid() && isValidSlot(m)) {
                 commandLineMethods.push_back(m);
             } else {
-                fprintf(stderr, "Unknown test function: '%s'.", tfB.constData());
+                std::fprintf(stderr, "Unknown test function: '%s'.", tfB.constData());
                 if (!qPrintTestSlots(stderr, tfB.constData(), " Possible matches:\n"))
-                    fputc('\n', stderr);
+                    std::fputc('\n', stderr);
                 QTestResult::setCurrentTestFunction(tfB.constData());
                 QTestResult::addFailure(qPrintable("Function not found: %1"_L1.arg(tf)));
                 QTestResult::finishedCurrentTestFunction();
@@ -2434,14 +1974,16 @@ int QTest::qRun()
         }
         if (seenBad) {
             // Provide relevant help to do better next time:
-            fprintf(stderr, "\n%s -functions\nlists all available test functions.\n\n",
-                    QTestResult::currentAppName());
+            std::fprintf(stderr, "\n%s -functions\nlists all available test functions.\n\n",
+                                 QTestResult::currentAppName());
             if (commandLineMethods.empty()) // All requested functions missing.
                 return 1;
         }
         TestMethods test(currentTestObject, std::move(commandLineMethods));
 
-        while (QTestLog::failCount() == 0 && (repeatForever || repetitions-- > 0)) {
+        int remainingRepetitions = repetitions;
+        const bool repeatForever = repetitions < 0;
+        while (QTestLog::failCount() == 0 && (repeatForever || remainingRepetitions-- > 0)) {
             QTestTable::globalTestTable();
             test.invokeTests(currentTestObject);
             QTestTable::clearGlobalTestTable();
@@ -2470,7 +2012,19 @@ int QTest::qRun()
 #endif
     // make sure our exit code is never going above 127
     // since that could wrap and indicate 0 test fails
-    return qMin(QTestLog::failCount(), 127);
+    const int exitCode = qMin(QTestLog::failCount(), 127);
+
+#ifdef Q_OS_ANDROID
+    QFile exitCodeFile = androidExitCodeFile();
+    if (exitCodeFile.open(QIODevice::WriteOnly)) {
+        exitCodeFile.write(qPrintable(QString::number(exitCode)));
+    } else {
+        qWarning("Failed to open %s for writing test exit code: %s",
+                 qPrintable(exitCodeFile.fileName()), qPrintable(exitCodeFile.errorString()));
+    }
+#endif
+
+    return exitCode;
 }
 
 /*! \internal
@@ -2489,6 +2043,7 @@ void QTest::qCleanup()
 
 #if defined(Q_OS_MACOS)
     IOPMAssertionRelease(macPowerSavingDisabled);
+    appNapDisabler = std::nullopt;
 #endif
 }
 
@@ -2623,11 +2178,11 @@ void QTest::qCaught(const char *expected, const char *what, const char *file, in
 
     If the exception inherits std::exception, its what() message is logged and
     this function returns normally. The caller of this function must then
-    execute a \c{return} to exit from the test function.
+    execute a \c{QTEST_FAIL_ACTION} to exit from the test function.
 
     Otherwise, a message saying an unknown exception was caught is logged and
-    this function rethrows the exception, skipping the \c{return} that follows
-    this function call in the caller.
+    this function rethrows the exception, skipping the \c{QTEST_FAIL_ACTION}
+    that follows this function call in the caller.
 */
 void QTest::qCaught(const char *expected, const char *file, int line)
 {
@@ -2640,7 +2195,7 @@ void QTest::qCaught(const char *expected, const char *file, int line)
         qCaught(expected, nullptr, file, line);
         throw;
     }
-    // caller shall invoke `return` if control reached here
+    // caller shall invoke `QTEST_FAIL_ACTION` if control reached here
 }
 
 
@@ -2670,6 +2225,8 @@ void QTest::qWarn(const char *message, const char *file, int line)
 
     The example above tests that QDir::mkdir() outputs the right warning when invoked
     with an invalid file name.
+
+    \note \a message will be interpreted as UTF-8.
 */
 void QTest::ignoreMessage(QtMsgType type, const char *message)
 {
@@ -2697,6 +2254,19 @@ void QTest::ignoreMessage(QtMsgType type, const QRegularExpression &messagePatte
     QTestLog::ignoreMessage(type, messagePattern);
 }
 #endif // QT_CONFIG(regularexpression)
+
+/*!
+    \since 6.8
+    \overload failOnWarning()
+
+    Appends a test failure to the test log if any warning is output.
+
+    \sa failOnWarning(const char *)
+*/
+void QTest::failOnWarning()
+{
+    return QTestLog::failOnWarning();
+}
 
 /*!
     \since 6.3
@@ -2744,7 +2314,17 @@ void QTest::failOnWarning(const char *message)
     \code
     void FileTest::init()
     {
-        QTest::failOnWarning(QRegularExpression(".?"));
+        QTest::failOnWarning(
+            QRegularExpression("QFile::.*: File(.*) already open"));
+    }
+    \endcode
+
+    For the common case of failing on \e any warning pass no parameter:
+
+    \code
+    void FileTest::init()
+    {
+        QTest::failOnWarning();
     }
     \endcode
 
@@ -2802,22 +2382,18 @@ QSharedPointer<QTemporaryDir> QTest::qExtractTestData(const QString &dirName)
           return result;
       }
 
-      QDirIterator it(resourcePath, QDirIterator::Subdirectories);
-      if (!it.hasNext()) {
-          qWarning("Resource directory '%s' is empty.", qPrintable(resourcePath));
-          return result;
-      }
-
-      while (it.hasNext()) {
-          QFileInfo fileInfo = it.nextFileInfo();
-
-          if (!fileInfo.isDir()) {
-              const QString destination = dataPath + u'/' + QStringView{fileInfo.filePath()}.mid(resourcePath.size());
+      bool isResourceDirEmpty = true;
+      for (const auto &dirEntry : QDirListing(resourcePath, QDirListing::IteratorFlag::Recursive)) {
+          isResourceDirEmpty = false;
+          if (!dirEntry.isDir()) {
+              const QString &filePath = dirEntry.filePath();
+              const QString destination =
+                  dataPath + u'/' + QStringView{filePath}.sliced(resourcePath.size());
               QFileInfo destinationFileInfo(destination);
               QDir().mkpath(destinationFileInfo.path());
-              QFile file(fileInfo.filePath());
+              QFile file(filePath);
               if (!file.copy(destination)) {
-                  qWarning("Failed to copy '%ls': %ls.", qUtf16Printable(fileInfo.filePath()),
+                  qWarning("Failed to copy '%ls': %ls.", qUtf16Printable(filePath),
                            qUtf16Printable(file.errorString()));
                   return result;
               }
@@ -2829,6 +2405,11 @@ QSharedPointer<QTemporaryDir> QTest::qExtractTestData(const QString &dirName)
                   return result;
               }
           }
+      }
+
+      if (isResourceDirEmpty) {
+          qWarning("Resource directory '%s' is empty.", qPrintable(resourcePath));
+          return result;
       }
 
       result = std::move(tempDir);
@@ -3059,9 +2640,10 @@ QTestData &QTest::newRow(const char *dataTag)
 
     Appends a new row to the current test data.
 
-    The function's arguments are passed to qsnprintf() for formatting according
-    to \a format. See the qvsnprintf() documentation for caveats and
-    limitations.
+    The function's arguments are passed to std::snprintf() for
+    formatting according to \a format. See the
+    \l{https://en.cppreference.com/w/cpp/io/c/fprintf}{std::snprintf()
+    documentation} for caveats and limitations.
 
     The test output will identify the test run with this test data using the
     name that results from this formatting.
@@ -3094,8 +2676,7 @@ QTestData &QTest::addRow(const char *format, ...)
     va_start(va, format);
     // we don't care about failures, we accept truncation, as well as trailing garbage.
     // Names with more than 1K characters are nonsense, anyway.
-    (void)qvsnprintf(buf, sizeof buf, format, va);
-    buf[sizeof buf - 1] = '\0';
+    std::vsnprintf(buf, sizeof buf, format, va);
     va_end(va);
 
     return *tbl->newData(buf);
@@ -3112,9 +2693,6 @@ QTestData &QTest::addRow(const char *format, ...)
 
     Example:
     \snippet code/src_qtestlib_qtestcase.cpp 21
-
-    To add custom types to the testdata, the type must be registered with
-    QMetaType via \l Q_DECLARE_METATYPE().
 
     \note This function can only be used called as part of a test's data
     function that is invoked by the test framework.
@@ -3232,7 +2810,7 @@ void QTest::setMainSourcePath(const char *file, const char *builddir)
 
     If the caller creates a custom failure message showing the compared values,
     or if those values cannot be stringified, use the overload of the function
-    that takes no \a actualVal and \a expecetedVal parameters.
+    that takes no \a actualVal and \a expectedVal parameters.
 */
 bool QTest::compare_helper(bool success, const char *failureMsg,
                            char *actualVal, char *expectedVal,
@@ -3244,6 +2822,7 @@ bool QTest::compare_helper(bool success, const char *failureMsg,
 }
 #endif // QT_DEPRECATED_SINCE(6, 4)
 
+#if QT_DEPRECATED_SINCE(6, 8)
 /*! \internal
     \since 6.4
     This function is called by various specializations of QTest::qCompare
@@ -3263,9 +2842,86 @@ bool QTest::compare_helper(bool success, const char *failureMsg,
                            const char *actual, const char *expected,
                            const char *file, int line)
 {
-    return QTestResult::reportResult(success, actualVal, expectedVal, actual, expected,
+    return QTestResult::reportResult(success, &actualVal, &expectedVal,
+                                     QTest::functionRefFormatter,
+                                     QTest::functionRefFormatter, actual, expected,
                                      QTest::ComparisonOperation::CustomCompare,
                                      file, line, failureMsg);
+}
+#endif // QT_DEPRECATED_SINCE(6, 8)
+
+/*! \internal
+    \since 6.8
+    This function is called by various specializations of QTest::qCompare
+    to decide whether to report a failure and to produce verbose test output.
+
+    The \a failureMsg parameter can be \c {nullptr}, in which case a default
+    message will be output if the compare fails. If the comparison succeeds,
+    \a failureMsg will not be output.
+*/
+
+bool QTest::compare_helper(bool success, const char *failureMsg,
+                           const void *actualPtr, const void *expectedPtr,
+                           const char *(*actualFormatter)(const void *),
+                           const char *(*expectedFormatter)(const void *),
+                           const char *actual, const char *expected,
+                           const char *file, int line)
+{
+    return QTestResult::reportResult(success, actualPtr, expectedPtr,
+                                     actualFormatter, expectedFormatter,
+                                     actual, expected,
+                                     QTest::ComparisonOperation::CustomCompare,
+                                     file, line, failureMsg);
+}
+
+
+/*! \internal
+    \since 6.9
+    This function reports the result of a three-way comparison, when needed.
+
+    Aside from logging every check if in verbose mode and reporting an
+    unexpected pass when failure was expected, if \a success is \c true
+    this produces no output. Otherwise, a failure is reported. The output
+    on failure reports the expressions compared, their values, the actual
+    result of the comparison and the expected result of comparison, along
+    with the supplied failure message \a failureMsg and the \a file and
+    \a line number at which the error arose.
+
+    The expressions compared are supplied as \a lhsExpression and
+    \a rhsExpression.
+    These are combined, with \c{"<=>"}, to obtain the actual comparison
+    expression. Their actual values are pointed to by \a lhsPtr and
+    \a rhsPtr, which are formatted by \a lhsFormatter and \a rhsFormatter
+    as, respectively, \c lhsFormatter(lhsPtr) and \c rhsFormatter(rhsPtr).
+    The actual comparison expression is contrasted,
+    in the output, with the expected comparison expression
+    \a expectedExpression. Their respective values are supplied by
+    \a actualOrderPtr and \a expectedOrderPtr pointers, which are
+    formatted by \a actualOrderFormatter and \a expectedOrderFormatter.
+
+    If \a failureMsg is \nullptr a default is used. If a formatter
+    function returns \a nullptr, the text \c{"<null>"} is used.
+*/
+bool QTest::compare_3way_helper(bool success, const char *failureMsg,
+                                const void *lhsPtr, const void *rhsPtr,
+                                const char *(*lhsFormatter)(const void*),
+                                const char *(*rhsFormatter)(const void*),
+                                const char *lhsExpression, const char *rhsExpression,
+                                const char *(*actualOrderFormatter)(const void *),
+                                const char *(*expectedOrderFormatter)(const void *),
+                                const void *actualOrderPtr, const void *expectedOrderPtr,
+                                const char *expectedExpression,
+                                const char *file, int line)
+{
+    return QTestResult::report3WayResult(success, failureMsg,
+                                         lhsPtr, rhsPtr,
+                                         lhsFormatter, rhsFormatter,
+                                         lhsExpression, rhsExpression,
+                                         actualOrderFormatter,
+                                         expectedOrderFormatter,
+                                         actualOrderPtr, expectedOrderPtr,
+                                         expectedExpression,
+                                         file, line);
 }
 
 /*! \internal
@@ -3309,9 +2965,10 @@ static bool floatingCompare(const T &actual, const T &expected)
 bool QTest::qCompare(qfloat16 const &t1, qfloat16 const &t2, const char *actual, const char *expected,
                      const char *file, int line)
 {
+    auto formatter = Internal::genericToString<qfloat16>;
     return compare_helper(floatingCompare(t1, t2),
                           "Compared qfloat16s are not the same (fuzzy compare)",
-                          [&t1] { return toString(t1); }, [&t2] { return toString(t2); },
+                          &t1, &t2, formatter, formatter,
                           actual, expected, file, line);
 }
 
@@ -3439,7 +3096,7 @@ bool QTest::qCompare(const QLatin1StringView &t1, QStringView t2, const char *ac
 template <> Q_TESTLIB_EXPORT char *QTest::toString<TYPE>(const TYPE &t) \
 { \
     char *msg = new char[128]; \
-    qsnprintf(msg, 128, #FORMAT, t); \
+    std::snprintf(msg, 128, #FORMAT, t); \
     return msg; \
 }
 
@@ -3449,68 +3106,40 @@ TO_STRING_IMPL(int, %d)
 TO_STRING_IMPL(uint, %u)
 TO_STRING_IMPL(long, %ld)
 TO_STRING_IMPL(ulong, %lu)
-#if defined(Q_OS_WIN)
-TO_STRING_IMPL(qint64, %I64d)
-TO_STRING_IMPL(quint64, %I64u)
-#else
 TO_STRING_IMPL(qint64, %lld)
 TO_STRING_IMPL(quint64, %llu)
-#endif
 TO_STRING_IMPL(bool, %d)
 TO_STRING_IMPL(signed char, %hhd)
 TO_STRING_IMPL(unsigned char, %hhu)
 
-/*!
-  \internal
-
-  Be consistent about leading 0 in exponent.
-
-  POSIX specifies that %e (hence %g when using it) uses at least two digits in
-  the exponent, requiring a leading 0 on single-digit exponents; (at least)
-  MinGW includes a leading zero also on an already-two-digit exponent,
-  e.g. 9e-040, which differs from more usual platforms.  So massage that away.
-*/
-static void massageExponent(char *text)
-{
-    char *p = strchr(text, 'e');
-    if (!p)
-        return;
-    const char *const end = p + strlen(p); // *end is '\0'
-    p += (p[1] == '-' || p[1] == '+') ? 2 : 1;
-    if (p[0] != '0' || end - 2 <= p)
-        return;
-    // We have a leading 0 on an exponent of at least two more digits
-    const char *n = p + 1;
-    while (end - 2 > n && n[0] == '0')
-        ++n;
-    memmove(p, n, end + 1 - n);
-}
-
 // Be consistent about display of infinities and NaNs (snprintf()'s varies,
 // notably on MinGW, despite POSIX documenting "[-]inf" or "[-]infinity" for %f,
 // %e and %g, uppercasing for their capital versions; similar for "nan"):
-#define TO_STRING_FLOAT(TYPE, FORMAT) \
-template <> Q_TESTLIB_EXPORT char *QTest::toString<TYPE>(const TYPE &t) \
-{ \
-    char *msg = new char[128]; \
-    switch (qFpClassify(t)) { \
-    case FP_INFINITE: \
-        qstrncpy(msg, (t < 0 ? "-inf" : "inf"), 128); \
-        break; \
-    case FP_NAN: \
-        qstrncpy(msg, "nan", 128); \
-        break; \
-    default: \
-        qsnprintf(msg, 128, #FORMAT, double(t));    \
-        massageExponent(msg); \
-        break; \
-    } \
-    return msg; \
+static char *toStringFp(double t, int digits10)
+{
+    char *msg = new char[128];
+    switch (qFpClassify(t)) {
+    case FP_INFINITE:
+        qstrncpy(msg, (t < 0 ? "-inf" : "inf"), 128);
+        break;
+    case FP_NAN:
+        qstrncpy(msg, "nan", 128);
+        break;
+    default:
+        std::snprintf(msg, 128, "%.*g (%a)", digits10, t, t);
+        break;
+    }
+    return msg;
 }
 
-TO_STRING_FLOAT(qfloat16, %.3g)
-TO_STRING_FLOAT(float, %g)
-TO_STRING_FLOAT(double, %.12g)
+#define TO_STRING_FLOAT(TYPE) \
+template <> Q_TESTLIB_EXPORT char *QTest::toString<TYPE>(const TYPE &t) \
+{ \
+    return toStringFp(t, std::numeric_limits<TYPE>::digits10 + 1); \
+}
+TO_STRING_FLOAT(qfloat16)
+TO_STRING_FLOAT(float)
+TO_STRING_FLOAT(double)
 
 template <> Q_TESTLIB_EXPORT char *QTest::toString<char>(const char &t)
 {
@@ -3552,9 +3181,9 @@ template <> Q_TESTLIB_EXPORT char *QTest::toString<char>(const char &t)
         break;
     default:
         if (c < 0x20 || c >= 0x7F)
-            qsnprintf(msg, 16, "'\\x%02x'", c);
+            std::snprintf(msg, 16, "'\\x%02x'", c);
         else
-            qsnprintf(msg, 16, "'%c'" , c);
+            std::snprintf(msg, 16, "'%c'" , c);
     }
     return msg;
 }
@@ -3576,13 +3205,8 @@ char *QTest::toString(const char *str)
 */
 char *QTest::toString(const volatile void *p) // Use volatile to match compare_ptr_helper()
 {
-    return QTest::toString(const_cast<const void *>(p));
-}
-
-char *QTest::toString(const void *p)
-{
     char *msg = new char[128];
-    qsnprintf(msg, 128, "%p", p);
+    std::snprintf(msg, 128, "%p", p);
     return msg;
 }
 
@@ -3593,16 +3217,26 @@ char *QTest::toString(const volatile QObject *vo)
     if (vo == nullptr)
         return qstrdup("<null>");
 
-    auto *o = const_cast<const QObject*>(vo);
+    return QTest::toString(const_cast<const QObject*>(vo));
+}
+
+/*! \internal
+*/
+char *QTest::toString(const QObject *o)
+{
+    if (o == nullptr)
+        return qstrdup("<null>");
+
     const QString &name = o->objectName();
     const char *className = o->metaObject()->className();
     char *msg = new char[256];
     if (name.isEmpty())
-        qsnprintf(msg, 256, "%s/%p", className, o);
+        std::snprintf(msg, 256, "%s/%p", className, o);
     else
-        qsnprintf(msg, 256, "%s/\"%s\"", className, qPrintable(name));
+        std::snprintf(msg, 256, "%s/\"%s\"", className, qPrintable(name));
     return msg;
 }
+
 
 /*! \fn char *QTest::toString(const QColor &color)
     \internal
@@ -3633,8 +3267,9 @@ char *QTest::toString(const volatile QObject *vo)
 bool QTest::compare_string_helper(const char *t1, const char *t2, const char *actual,
                                   const char *expected, const char *file, int line)
 {
+    auto formatter = Internal::genericToString<const char *>;
     return compare_helper(qstrcmp(t1, t2) == 0, "Compared strings are not the same",
-                          [t1] { return toString(t1); }, [t2] { return toString(t2); },
+                          &t1, &t2, formatter, formatter,
                           actual, expected, file, line);
 }
 

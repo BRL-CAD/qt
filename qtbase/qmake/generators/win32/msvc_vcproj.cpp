@@ -8,7 +8,7 @@
 #include <ioutils.h>
 
 #include <qdir.h>
-#include <qdiriterator.h>
+#include <qdirlisting.h>
 #include <qcryptographichash.h>
 #include <qhash.h>
 #include <quuid.h>
@@ -56,6 +56,8 @@ const char _slnHeader142[]      = "Microsoft Visual Studio Solution File, Format
                                   "\n# Visual Studio Version 16";
 const char _slnHeader143[]      = "Microsoft Visual Studio Solution File, Format Version 12.00"
                                   "\n# Visual Studio Version 17";
+const char _slnHeader145[]      = "Microsoft Visual Studio Solution File, Format Version 12.00"
+                                  "\n# Visual Studio Version 18";
                                   // The following UUID _may_ change for later servicepacks...
                                   // If so we need to search through the registry at
                                   // HKEY_LOCAL_MACHINE\SOFTWARE\Microsoft\VisualStudio\7.0\Projects
@@ -502,6 +504,9 @@ void VcprojGenerator::writeSubDirs(QTextStream &t)
     }
 
     switch (vcProject.Configuration.CompilerVersion) {
+    case NET2026:
+        t << _slnHeader145;
+        break;
     case NET2022:
         t << _slnHeader143;
         break;
@@ -882,6 +887,9 @@ void VcprojGenerator::initProject()
     // Own elements -----------------------------
     vcProject.Name = project->first("QMAKE_ORIG_TARGET").toQString();
     switch (vcProject.Configuration.CompilerVersion) {
+    case NET2026:
+        vcProject.Version = "18.00";
+        break;
     case NET2022:
         vcProject.Version = "17.00";
         break;
@@ -1293,18 +1301,15 @@ void VcprojGenerator::initDeploymentTool()
             }
 
             int pathSize = searchPath.size();
-            QDirIterator iterator(searchPath, QStringList() << nameFilter
-                                  , QDir::Files | QDir::NoDotAndDotDot | QDir::NoSymLinks
-                                  , QDirIterator::Subdirectories);
+            using F = QDirListing::IteratorFlag;
+            QDirListing dirList(searchPath, QStringList{nameFilter}, F::FilesOnly | F::ResolveSymlinks | F::Recursive);
             // foreach dirIterator-entry in d
-            while(iterator.hasNext()) {
-                iterator.next();
-
-                QString absoluteItemPath = Option::fixPathToTargetOS(QFileInfo(iterator.filePath()).absolutePath());
+            for (const auto &dirEntry : dirList) {
+                const QString absoluteItemPath = Option::fixPathToTargetOS(dirEntry.absolutePath());
                 // Identify if it is just another subdir
                 int diffSize = absoluteItemPath.size() - pathSize;
                 // write out rules
-                conf.deployment.AdditionalFiles += iterator.fileName()
+                conf.deployment.AdditionalFiles += dirEntry.fileName()
                         + "|" + absoluteItemPath
                         + "|" + itemDevicePath + (diffSize ? (absoluteItemPath.right(diffSize)) : QLatin1String(""))
                         + "|0;";

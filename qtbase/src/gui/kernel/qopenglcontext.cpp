@@ -138,6 +138,22 @@ QOpenGLContext *qt_gl_global_share_context()
     application is portable between different platforms. However, if you use
     QOpenGLFunctions::glBindFramebuffer(), this is done automatically for you.
 
+    \warning WebAssembly
+
+    We recommend that only one QOpenGLContext is made current with a QSurface,
+    for the entire lifetime of the QSurface. Should more than once context be used,
+    it is important to understand that multiple QOpenGLContext instances may be
+    backed by the same native context underneath with the WebAssembly platform.
+    Therefore, calling makeCurrent() with the same QSurface on two QOpenGLContext
+    objects may not switch to a different native context in the second call. As
+    a result, any OpenGL state changes done after the second makeCurrent() may
+    alter the state of the first QOpenGLContext as well, as they are all backed
+    by the same native context.
+
+    \note This means that when targeting WebAssembly with existing OpenGL-based
+    Qt code, some porting may be required to cater to these limitations.
+
+
     \sa QOpenGLFunctions, QOpenGLBuffer, QOpenGLShaderProgram, QOpenGLFramebufferObject
 */
 
@@ -727,13 +743,13 @@ bool QOpenGLContext::makeCurrent(QSurface *surface)
 void QOpenGLContext::doneCurrent()
 {
     Q_D(QOpenGLContext);
-    if (!isValid())
-        return;
 
-    if (QOpenGLContext::currentContext() == this)
-        d->shareGroup->d_func()->deletePendingResources(this);
+    if (isValid()) {
+        if (QOpenGLContext::currentContext() == this)
+            d->shareGroup->d_func()->deletePendingResources(this);
+        d->platformGLContext->doneCurrent();
+    }
 
-    d->platformGLContext->doneCurrent();
     QOpenGLContextPrivate::setCurrentContext(nullptr);
 
     d->surface = nullptr;
@@ -943,10 +959,6 @@ bool QOpenGLContext::supportsThreadedOpenGL()
     This is useful if you need to upload OpenGL objects (buffers, textures,
     etc.) before creating or showing a QOpenGLWidget or QQuickWidget.
 
-    \note You must set the Qt::AA_ShareOpenGLContexts flag on QGuiApplication
-    before creating the QGuiApplication object, otherwise Qt may not create a
-    global shared context.
-
     \warning Do not attempt to make the context returned by this function
     current on any surface. Instead, you can create a new context which shares
     with the global one, and then make the new context current.
@@ -956,6 +968,19 @@ bool QOpenGLContext::supportsThreadedOpenGL()
 QOpenGLContext *QOpenGLContext::globalShareContext()
 {
     Q_ASSERT(qGuiApp);
+
+    static QMutex mutex;
+    QMutexLocker locker(&mutex);
+
+    // Lazily create a global share context when enabled unless there is already one
+    if (!qt_gl_global_share_context() && qGuiApp->testAttribute(Qt::AA_ShareOpenGLContexts)) {
+        QOpenGLContext *ctx = new QOpenGLContext;
+        ctx->setFormat(QSurfaceFormat::defaultFormat());
+        ctx->create();
+        ctx->moveToThread(qGuiApp->thread());
+        qt_gl_set_global_share_context(ctx);
+        QGuiApplicationPrivate::instance()->ownGlobalShareContext = true;
+    }
     return qt_gl_global_share_context();
 }
 
@@ -1294,7 +1319,7 @@ QDebug operator<<(QDebug debug, const QOpenGLContext *ctx)
             debug << ", invalid";
         }
     } else {
-        debug << '0';
+        debug << "0x0";
     }
     debug << ')';
     return debug;
@@ -1308,7 +1333,7 @@ QDebug operator<<(QDebug debug, const QOpenGLContextGroup *cg)
     if (cg)
         debug << cg->shares();
     else
-        debug << '0';
+        debug << "0x0";
     debug << ')';
     return debug;
 }

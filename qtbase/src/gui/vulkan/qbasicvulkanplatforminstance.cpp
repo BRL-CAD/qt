@@ -9,7 +9,7 @@
 
 QT_BEGIN_NAMESPACE
 
-Q_LOGGING_CATEGORY(lcPlatVk, "qt.vulkan")
+Q_STATIC_LOGGING_CATEGORY(lcPlatVk, "qt.vulkan")
 
 /*!
     \class QBasicPlatformVulkanInstance
@@ -51,7 +51,7 @@ void QBasicPlatformVulkanInstance::loadVulkanLibrary(const QString &defaultLibra
     // embedded systems without a Vulkan loader and possibly with custom vendor
     // library names.
     if (qEnvironmentVariableIsSet("QT_VULKAN_LIB"))
-        loadList.append({ QString::fromUtf8(qgetenv("QT_VULKAN_LIB")), -1 });
+        loadList.append({ qEnvironmentVariable("QT_VULKAN_LIB"), -1 });
 
     // Then what the platform specified. On Linux the version is likely 1, thus
     // preferring libvulkan.so.1 over libvulkan.so.
@@ -173,7 +173,7 @@ void QBasicPlatformVulkanInstance::init(QLibrary *lib)
             m_supportedExtensions.append(ext);
         }
     }
-    qDebug(lcPlatVk) << "Supported Vulkan instance extensions:" << m_supportedExtensions;
+    qCDebug(lcPlatVk) << "Supported Vulkan instance extensions:" << m_supportedExtensions;
 }
 
 QVulkanInfoVector<QVulkanLayer> QBasicPlatformVulkanInstance::supportedLayers() const
@@ -248,13 +248,13 @@ void QBasicPlatformVulkanInstance::initInstance(QVulkanInstance *instance, const
             if (!m_supportedLayers.contains(layerName))
                 m_enabledLayers.removeAt(i--);
         }
-        qDebug(lcPlatVk) << "Enabling Vulkan instance layers:" << m_enabledLayers;
+        qCDebug(lcPlatVk) << "Enabling Vulkan instance layers:" << m_enabledLayers;
         for (int i = 0; i < m_enabledExtensions.size(); ++i) {
             const QByteArray &extName(m_enabledExtensions[i]);
             if (!m_supportedExtensions.contains(extName))
                 m_enabledExtensions.removeAt(i--);
         }
-        qDebug(lcPlatVk) << "Enabling Vulkan instance extensions:" << m_enabledExtensions;
+        qCDebug(lcPlatVk) << "Enabling Vulkan instance extensions:" << m_enabledExtensions;
 
         VkInstanceCreateInfo instInfo = {};
         instInfo.sType = VK_STRUCTURE_TYPE_INSTANCE_CREATE_INFO;

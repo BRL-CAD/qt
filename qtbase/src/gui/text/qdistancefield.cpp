@@ -3,6 +3,7 @@
 
 #include "qdistancefield_p.h"
 #include <qmath.h>
+#include <QtCore/qalloc.h>
 #include <private/qdatabuffer_p.h>
 #include <private/qimage_p.h>
 #include <private/qpathsimplifier_p.h>
@@ -11,7 +12,7 @@ QT_BEGIN_NAMESPACE
 
 using namespace Qt::StringLiterals;
 
-Q_LOGGING_CATEGORY(lcDistanceField, "qt.distanceField");
+Q_STATIC_LOGGING_CATEGORY(lcDistanceField, "qt.distanceField");
 
 namespace
 {
@@ -474,6 +475,11 @@ static void makeDistanceField(QDistanceFieldData *data, const QPainterPath &path
     QDataBuffer<quint32> pathIndices(0);
     QDataBuffer<QPoint> pathVertices(0);
     qSimplifyPath(path, pathVertices, pathIndices, transform);
+    if (pathVertices.isEmpty()) {
+        qCWarning(lcDistanceField) << "Unexpected glyph path structure, bailing out";
+        memset(data->data, 0, data->nbytes);
+        return;
+    }
 
     const qint32 interiorColor = -0x7f80; // 8:8 signed format, -127.5
     const qint32 exteriorColor = 0x7f80; // 8:8 signed format, 127.5
@@ -489,7 +495,8 @@ static void makeDistanceField(QDistanceFieldData *data, const QPainterPath &path
     const quint32 *indices = pathIndices.data();
     QVarLengthArray<QPoint> normals;
     QVarLengthArray<QPoint> vertices;
-    QVarLengthArray<bool> isConvex;
+
+    QVarLengthArray<int> crossProducts;
     QVarLengthArray<bool> needsClipping;
 
     drawPolygons(bits.data(), imgWidth, imgHeight, pathVertices.data(),
@@ -530,10 +537,10 @@ static void makeDistanceField(QDistanceFieldData *data, const QPainterPath &path
                                  || (to.y() < offs << 8) || (to.y() >= (imgHeight - offs) << 8));
         }
 
-        isConvex.resize(normals.size());
+        crossProducts.resize(normals.size());
         for (int next = 0, prev = normals.size() - 1; next < normals.size(); prev = next++) {
-            isConvex[prev] = normals.at(prev).x() * normals.at(next).y()
-                           - normals.at(prev).y() * normals.at(next).x() < 0;
+            crossProducts[prev] = normals.at(prev).x() * normals.at(next).y()
+                                - normals.at(prev).y() * normals.at(next).x();
         }
 
         // Draw quads.
@@ -565,7 +572,8 @@ static void makeDistanceField(QDistanceFieldData *data, const QPainterPath &path
                                       exteriorColor);
             }
 
-            if (isConvex.at(prev)) {
+            const int crossProduct = crossProducts.at(prev);
+            if (crossProduct < 0) {
                 QPoint p = extPrev;
                 if (needsClipping[prev]) {
                     for (;;) {
@@ -606,7 +614,7 @@ static void makeDistanceField(QDistanceFieldData *data, const QPainterPath &path
                         extPrev = p;
                     }
                 }
-            } else {
+            } else if (crossProduct > 0) {
                 QPoint p = intPrev;
                 if (needsClipping[prev]) {
                     for (;;) {
@@ -727,7 +735,7 @@ static void initialDistanceFieldFactor()
     }
     if (qEnvironmentVariableIsSet("QT_DISTANCEFIELD_DEFAULT_RADIUS")) {
         QT_DISTANCEFIELD_DEFAULT_RADIUS = qEnvironmentVariableIntValue("QT_DISTANCEFIELD_DEFAULT_RADIUS");
-        qDebug(lcDistanceField) << "set the QT_DISTANCEFIELD_DEFAULT_RADIUS:" << QT_DISTANCEFIELD_DEFAULT_RADIUS;
+        qCDebug(lcDistanceField) << "set the QT_DISTANCEFIELD_DEFAULT_RADIUS:" << QT_DISTANCEFIELD_DEFAULT_RADIUS;
     }
     if (qEnvironmentVariableIsSet("QT_DISTANCEFIELD_DEFAULT_HIGHGLYPHCOUNT")) {
         QT_DISTANCEFIELD_DEFAULT_HIGHGLYPHCOUNT = qEnvironmentVariableIntValue("QT_DISTANCEFIELD_DEFAULT_HIGHGLYPHCOUNT");
@@ -821,7 +829,7 @@ QDistanceFieldData::QDistanceFieldData(const QDistanceFieldData &other)
 
 QDistanceFieldData::~QDistanceFieldData()
 {
-    free(data);
+    QtPrivate::sizedFree(data, nbytes);
 }
 
 QDistanceFieldData *QDistanceFieldData::create(const QSize &size)
@@ -839,19 +847,24 @@ QDistanceFieldData *QDistanceFieldData::create(const QSize &size)
     return data;
 }
 
+QDistanceFieldData *QDistanceFieldData::create(QSize size, const QPainterPath &path, bool doubleResolution)
+{
+    QDistanceFieldData *data = create(size);
+    makeDistanceField(data,
+                      path,
+                      QT_DISTANCEFIELD_SCALE(doubleResolution),
+                      QT_DISTANCEFIELD_RADIUS(doubleResolution) / QT_DISTANCEFIELD_SCALE(doubleResolution));
+    return data;
+}
+
+
 QDistanceFieldData *QDistanceFieldData::create(const QPainterPath &path, bool doubleResolution)
 {
     int dfMargin = QT_DISTANCEFIELD_RADIUS(doubleResolution) / QT_DISTANCEFIELD_SCALE(doubleResolution);
     int glyphWidth = qCeil(path.boundingRect().width() / QT_DISTANCEFIELD_SCALE(doubleResolution)) + dfMargin * 2;
     int glyphHeight = qCeil(path.boundingRect().height() / QT_DISTANCEFIELD_SCALE(doubleResolution)) + dfMargin * 2;
 
-    QDistanceFieldData *data = create(QSize(glyphWidth, glyphHeight));
-
-    makeDistanceField(data,
-                      path,
-                      QT_DISTANCEFIELD_SCALE(doubleResolution),
-                      QT_DISTANCEFIELD_RADIUS(doubleResolution) / QT_DISTANCEFIELD_SCALE(doubleResolution));
-    return data;
+    return create(QSize(glyphWidth, glyphHeight), path, doubleResolution);
 }
 
 
@@ -873,6 +886,16 @@ QDistanceField::QDistanceField(const QRawFont &font, glyph_t glyph, bool doubleR
 QDistanceField::QDistanceField(QFontEngine *fontEngine, glyph_t glyph, bool doubleResolution)
 {
     setGlyph(fontEngine, glyph, doubleResolution);
+}
+
+QDistanceField::QDistanceField(QSize size, const QPainterPath &path, glyph_t glyph, bool doubleResolution)
+{
+    QPainterPath dfPath = path;
+    dfPath.translate(-dfPath.boundingRect().topLeft());
+    dfPath.setFillRule(Qt::WindingFill);
+
+    d = QDistanceFieldData::create(size, dfPath, doubleResolution);
+    d->glyph = glyph;
 }
 
 QDistanceField::QDistanceField(const QPainterPath &path, glyph_t glyph, bool doubleResolution)

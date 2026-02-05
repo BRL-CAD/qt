@@ -1,5 +1,6 @@
 // Copyright (C) 2020 The Qt Company Ltd.
 // SPDX-License-Identifier: LicenseRef-Qt-Commercial OR LGPL-3.0-only OR GPL-2.0-only OR GPL-3.0-only
+// Qt-Security score:significant reason:default
 
 #include <QtGui/private/qtguiglobal_p.h>
 
@@ -230,6 +231,21 @@ QT_DEFINE_PRIVATE_NATIVE_INTERFACE(QWebOSScreen);
 QT_DEFINE_PRIVATE_NATIVE_INTERFACE(QEvdevKeyMapper);
 
 #endif // QT_CONFIG(evdev)
+
+#if QT_CONFIG(vxworksevdev)
+
+/*!
+    \class QNativeInterface::Private::QVxKeyMapper
+    \since 6.8
+    \internal
+    \brief Native interface to QKeyMapper.
+    \inmodule QtGui
+    \ingroup native-interfaces
+*/
+
+QT_DEFINE_PRIVATE_NATIVE_INTERFACE(QVxKeyMapper);
+
+#endif // QT_CONFIG(vxworksevdev)
 
 #if QT_CONFIG(wayland)
 

@@ -4,60 +4,34 @@
 
 package org.qtproject.qt.android;
 
-import android.annotation.SuppressLint;
 import android.app.Activity;
-import android.app.AlertDialog;
-import android.app.Dialog;
+import android.content.Context;
 import android.content.ContextWrapper;
 import android.content.Intent;
 import android.content.pm.ApplicationInfo;
-import android.content.pm.PackageManager;
-import android.content.res.Resources;
 import android.os.Bundle;
-import android.system.Os;
 import android.util.Base64;
 import android.util.DisplayMetrics;
 import android.util.Log;
 
-import java.lang.reflect.InvocationTargetException;
-import java.lang.reflect.Method;
+import java.lang.IllegalArgumentException;
 import java.nio.charset.StandardCharsets;
 
-public class QtActivityLoader extends QtLoader {
+class QtActivityLoader extends QtLoader {
     private final Activity m_activity;
 
-    public QtActivityLoader(Activity activity)
+    private QtActivityLoader(Activity activity) throws IllegalArgumentException
     {
         super(new ContextWrapper(activity));
         m_activity = activity;
 
-        extractContextMetaData();
+        extractContextMetaData(m_activity);
     }
 
-    private void showErrorDialog() {
-        if (m_activity == null) {
-            Log.w(QtTAG, "cannot show the error dialog from a null activity object");
-            return;
-        }
-        Resources resources = m_activity.getResources();
-        String packageName = m_activity.getPackageName();
-        AlertDialog errorDialog = new AlertDialog.Builder(m_activity).create();
-        @SuppressLint("DiscouragedApi") int id = resources.getIdentifier(
-                "fatal_error_msg", "string", packageName);
-        errorDialog.setMessage(resources.getString(id));
-        errorDialog.setButton(Dialog.BUTTON_POSITIVE, resources.getString(android.R.string.ok),
-                (dialog, which) -> finish());
-        errorDialog.show();
-    }
-
-    @Override
-    protected void finish() {
-        if (m_activity == null) {
-            Log.w(QtTAG, "finish() called when activity object is null");
-            return;
-        }
-        showErrorDialog();
-        m_activity.finish();
+    static QtActivityLoader getActivityLoader(Activity activity) throws IllegalArgumentException {
+        if (m_instance == null)
+            m_instance = new QtActivityLoader(activity);
+        return (QtActivityLoader) m_instance;
     }
 
     private String getDecodedUtfString(String str)
@@ -71,7 +45,7 @@ public class QtActivityLoader extends QtLoader {
         int size = m_activity.getResources().getDimensionPixelSize(android.R.dimen.app_icon_size);
         if (size < 36 || size > 512) { // check size sanity
             DisplayMetrics metrics = new DisplayMetrics();
-            m_activity.getWindowManager().getDefaultDisplay().getMetrics(metrics);
+            QtDisplayManager.getDisplay(m_activity).getMetrics(metrics);
             size = metrics.densityDpi / 10 * 3;
             if (size < 36)
                 size = 36;
@@ -97,9 +71,9 @@ public class QtActivityLoader extends QtLoader {
     }
 
     @Override
-    protected void extractContextMetaData()
+    protected void extractContextMetaData(Context context)
     {
-        super.extractContextMetaData();
+        super.extractContextMetaData(context);
 
         setEnvironmentVariable("QT_USE_ANDROID_NATIVE_DIALOGS", String.valueOf(1));
         setEnvironmentVariable("QT_ANDROID_APP_ICON_SIZE", String.valueOf(getAppIconSize()));
@@ -111,10 +85,6 @@ public class QtActivityLoader extends QtLoader {
             Log.w(QtTAG, "Null Intent from the current Activity.");
             return;
         }
-
-        String intentArgs = intent.getStringExtra("applicationArguments");
-        if (intentArgs != null)
-            appendApplicationParameters(intentArgs);
 
         Bundle extras = intent.getExtras();
         if (extras == null) {
@@ -134,14 +104,6 @@ public class QtActivityLoader extends QtLoader {
             if (extras.containsKey("extraappparams")) {
                 String extraAppParams = extras.getString("extraappparams");
                 appendApplicationParameters(getDecodedUtfString(extraAppParams));
-            }
-
-            m_debuggerSleepMs = 3000;
-            if (Os.getenv("QT_ANDROID_DEBUGGER_MAIN_THREAD_SLEEP_MS") != null) {
-                try {
-                   m_debuggerSleepMs = Integer.parseInt(Os.getenv("QT_ANDROID_DEBUGGER_MAIN_THREAD_SLEEP_MS"));
-                } catch (NumberFormatException ignored) {
-                }
             }
         } else {
             Log.d(QtNative.QtTAG, "Not in debug mode! It is not allowed to use extra arguments " +

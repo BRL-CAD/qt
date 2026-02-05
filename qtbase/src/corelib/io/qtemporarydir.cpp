@@ -1,13 +1,13 @@
 // Copyright (C) 2017 The Qt Company Ltd.
 // Copyright (C) 2017 Intel Corporation.
 // SPDX-License-Identifier: LicenseRef-Qt-Commercial OR LGPL-3.0-only OR GPL-2.0-only OR GPL-3.0-only
+// Qt-Security score:significant reason:default
 
 #include "qtemporarydir.h"
 
-#ifndef QT_NO_TEMPORARYFILE
+#if QT_CONFIG(temporaryfile)
 
 #include "qdebug.h"
-#include "qdiriterator.h"
 #include "qplatformdefs.h"
 #include "qrandom.h"
 #include "private/qtemporaryfile_p.h"
@@ -68,12 +68,11 @@ static QString defaultTemplateName()
 void QTemporaryDirPrivate::create(const QString &templateName)
 {
     QTemporaryFileName tfn(templateName);
+    constexpr auto perms = QFile::ReadOwner | QFile::WriteOwner | QFile::ExeOwner;
     for (int i = 0; i < 256; ++i) {
         tfn.generateNext();
         QFileSystemEntry fileSystemEntry(tfn.path, QFileSystemEntry::FromNativePath());
-        if (QFileSystemEngine::createDirectory(fileSystemEntry, false,
-                                               QFile::ReadOwner | QFile::WriteOwner
-                                                       | QFile::ExeOwner)) {
+        if (QFileSystemEngine::mkdir(fileSystemEntry, perms)) {
             success = true;
             pathOrError = fileSystemEntry.filePath();
             return;
@@ -193,10 +192,7 @@ QTemporaryDir::QTemporaryDir(const QString &templatePath)
 
 /*!
     \fn void QTemporaryDir::swap(QTemporaryDir &other)
-
-    Swaps temporary-dir \a other with this temporary-dir. This operation is
-    very fast and never fails.
-
+    \memberswap{temporary-dir}
     \since 6.4
 */
 
@@ -240,6 +236,14 @@ QString QTemporaryDir::errorString() const
 /*!
    Returns the path to the temporary directory.
    Empty if the QTemporaryDir could not be created.
+
+//! [relative-or-absolute-path]
+   The returned path will be relative or absolulte depending on whether
+   QTemporaryDir was constructed with a relative or absolute path,
+   respectively.
+//! [relative-or-absolute-path]
+
+
 */
 QString QTemporaryDir::path() const
 {
@@ -254,6 +258,8 @@ QString QTemporaryDir::path() const
     Redundant multiple separators or "." and ".." directories in
     \a fileName are not removed (see QDir::cleanPath()). Absolute
     paths are not allowed.
+
+    \include qtemporarydir.cpp relative-or-absolute-path
 */
 QString QTemporaryDir::filePath(const QString &fileName) const
 {
@@ -325,4 +331,4 @@ bool QTemporaryDir::remove()
 
 QT_END_NAMESPACE
 
-#endif // QT_NO_TEMPORARYFILE
+#endif // QT_CONFIG(temporaryfile)

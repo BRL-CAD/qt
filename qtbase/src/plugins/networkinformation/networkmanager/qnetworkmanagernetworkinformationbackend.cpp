@@ -1,5 +1,6 @@
 // Copyright (C) 2021 The Qt Company Ltd.
 // SPDX-License-Identifier: LicenseRef-Qt-Commercial OR LGPL-3.0-only OR GPL-2.0-only OR GPL-3.0-only
+// Qt-Security score:significant reason:default
 
 #include "qnetworkmanagernetworkinformationbackend.h"
 
@@ -98,8 +99,8 @@ bool isMeteredFromNMMetered(QNetworkManagerInterface::NMMetered metered)
 
 static QString backendName()
 {
-    return QString::fromUtf16(QNetworkInformationBackend::PluginNames
-                                      [QNetworkInformationBackend::PluginNamesLinuxIndex]);
+    return QStringView(QNetworkInformationBackend::PluginNames
+                       [QNetworkInformationBackend::PluginNamesLinuxIndex]).toString();
 }
 
 QString QNetworkManagerNetworkInformationBackend::name() const
@@ -178,3 +179,4 @@ void QNetworkManagerNetworkInformationBackend::onMeteredChanged(
 QT_END_NAMESPACE
 
 #include "qnetworkmanagernetworkinformationbackend.moc"
+#include "moc_qnetworkmanagernetworkinformationbackend.cpp"

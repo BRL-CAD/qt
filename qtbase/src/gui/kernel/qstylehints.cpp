@@ -1,6 +1,7 @@
 // Copyright (C) 2016 The Qt Company Ltd.
 // SPDX-License-Identifier: LicenseRef-Qt-Commercial OR LGPL-3.0-only OR GPL-2.0-only OR GPL-3.0-only
 
+#include "qaccessibilityhints_p.h"
 #include <qstylehints.h>
 #include "qstylehints_p.h"
 #include <qpa/qplatformintegration.h>
@@ -123,14 +124,75 @@ int QStyleHints::touchDoubleTapDistance() const
 
 /*!
     \property QStyleHints::colorScheme
-    \brief the color scheme of the platform theme.
-    \sa Qt::ColorScheme
+    \brief the color scheme used by the application.
+
+    By default, this follows the system's default color scheme (also known as appearance),
+    and changes when the system color scheme changes (e.g. during dusk or dawn).
+    Setting the color scheme to an explicit value will override the system setting and
+    ignore any changes to the system's color scheme. However, doing so is a hint to the
+    system, and overriding the color scheme is not supported on all platforms.
+
+    Resetting this property, or setting it to \l{Qt::ColorScheme::Unknown}, will remove
+    the override and make the application follow the system default again. The property
+    value will change to the color scheme the system currently has.
+
+    When this property changes, Qt will read the system palette and update the default
+    palette, but won't overwrite palette entries that have been explicitly set by the
+    application. When the colorSchemeChange() signal gets emitted, the old palette is
+    still in effect.
+
+    Application-specific colors should be selected to work well with the effective
+    palette, taking the current color scheme into account. To update application-
+    specific colors when the effective palette changes, handle
+    \l{QEvent::}{PaletteChange} or \l{QEvent::}{ApplicationPaletteChange} events.
+
+    \sa Qt::ColorScheme, QGuiApplication::palette(), QEvent::PaletteChange
     \since 6.5
 */
 Qt::ColorScheme QStyleHints::colorScheme() const
 {
     Q_D(const QStyleHints);
     return d->colorScheme();
+}
+
+/*!
+    \since 6.8
+
+    Sets the color scheme used by the application to an explicit \a scheme, or
+    revert to the system's current color scheme if \a scheme is Qt::ColorScheme::Unknown.
+*/
+void QStyleHints::setColorScheme(Qt::ColorScheme scheme)
+{
+    if (!QCoreApplication::instance()) {
+        qWarning("Must construct a QGuiApplication before accessing a platform theme hint.");
+        return;
+    }
+    if (QPlatformTheme *theme = QGuiApplicationPrivate::platformTheme())
+        theme->requestColorScheme(scheme);
+}
+
+/*!
+    \fn void QStyleHints::unsetColorScheme()
+    \since 6.8
+
+    Restores the color scheme to the system's current color scheme.
+*/
+
+
+/*!
+    \property QStyleHints::accessibility
+    \brief The application's accessibility hints.
+
+    The accessibility hints encapsulates platform dependent accessibility settings
+    such as whether the user wishes the application to be in high contrast or not.
+
+    \sa QAccessibilityHints
+    \since 6.10
+*/
+const QAccessibilityHints *QStyleHints::accessibility() const
+{
+    Q_D(const QStyleHints);
+    return d->accessibilityHints();
 }
 
 /*!
@@ -398,6 +460,54 @@ void QStyleHints::setShowShortcutsInContextMenus(bool s)
 }
 
 /*!
+    \property QStyleHints::contextMenuTrigger
+    \since 6.8
+    \brief mouse event used to trigger a context menu event.
+
+    The default on UNIX systems is to show context menu on mouse button press event, while on
+    Windows it is the mouse button release event. This property can be used to override the default
+    platform behavior.
+
+    \note Developers must use this property with great care, as it changes the default interaction
+    mode that their users will expect on the platform that they are running on.
+
+    \sa Qt::ContextMenuTrigger
+*/
+Qt::ContextMenuTrigger QStyleHints::contextMenuTrigger() const
+{
+    Q_D(const QStyleHints);
+    if (d->m_contextMenuTrigger == -1) {
+        return themeableHint(QPlatformTheme::ContextMenuOnMouseRelease).toBool()
+                   ? Qt::ContextMenuTrigger::Release
+                   : Qt::ContextMenuTrigger::Press;
+    }
+    return Qt::ContextMenuTrigger(d->m_contextMenuTrigger);
+}
+
+void QStyleHints::setContextMenuTrigger(Qt::ContextMenuTrigger contextMenuTrigger)
+{
+    Q_D(QStyleHints);
+    const Qt::ContextMenuTrigger currentTrigger = this->contextMenuTrigger();
+    d->m_contextMenuTrigger = int(contextMenuTrigger);
+    if (currentTrigger != contextMenuTrigger)
+        emit contextMenuTriggerChanged(contextMenuTrigger);
+}
+
+/*!
+    \property QStyleHints::menuSelectionWraps
+    \since 6.10
+    \brief menu selection wraps around.
+
+    Returns \c true if menu selection wraps. That is, whether key navigation moves
+    the selection to the first menu item again after the last menu item has been
+    reached, and vice versa.
+*/
+bool QStyleHints::menuSelectionWraps() const
+{
+    return themeableHint(QPlatformTheme::MenuSelectionWraps).toBool();
+}
+
+/*!
     \property QStyleHints::passwordMaskDelay
     \brief the time, in milliseconds, a typed letter is displayed unshrouded
     in a text input field in password mode.
@@ -595,17 +705,41 @@ int QStyleHints::mouseQuickSelectionThreshold() const
 
 /*!
    \internal
-   QStyleHintsPrivate::setColorScheme - set a new color scheme.
+   QStyleHintsPrivate::updateColorScheme - set a new color scheme.
+
+   This function is called by the QPA plugin when the system theme changes. This in
+   turn might be the result of an explicit request of a color scheme via setColorScheme.
+
    Set \a colorScheme as the new color scheme of the QStyleHints.
    The colorSchemeChanged signal will be emitted if present and new color scheme differ.
  */
-void QStyleHintsPrivate::setColorScheme(Qt::ColorScheme colorScheme)
+void QStyleHintsPrivate::updateColorScheme(Qt::ColorScheme colorScheme)
 {
     if (m_colorScheme == colorScheme)
         return;
     m_colorScheme = colorScheme;
     Q_Q(QStyleHints);
     emit q->colorSchemeChanged(colorScheme);
+}
+
+/*!
+    \internal
+
+    Helper function that updates the style hints when the theme changes
+*/
+void QStyleHintsPrivate::update(const QPlatformTheme *theme)
+{
+    Q_ASSERT(theme);
+    updateColorScheme(theme->colorScheme());
+    QAccessibilityHintsPrivate::get(accessibilityHints())->updateContrastPreference(theme->contrastPreference());
+}
+
+QAccessibilityHints *QStyleHintsPrivate::accessibilityHints() const
+{
+    Q_Q(const QStyleHints);
+    if (!m_accessibilityHints)
+        const_cast<QStyleHintsPrivate *>(this)->m_accessibilityHints = new QAccessibilityHints(const_cast<QStyleHints*>(q));
+    return m_accessibilityHints;
 }
 
 QStyleHintsPrivate *QStyleHintsPrivate::get(QStyleHints *q)

@@ -3,6 +3,8 @@
 // SPDX-License-Identifier: LicenseRef-Qt-Commercial OR GPL-3.0-only
 
 #include <QTest>
+
+#include <QtCore/qmap.h>
 #include <QVarLengthArray>
 
 #include <qhash.h>
@@ -21,7 +23,7 @@ public:
     // random values
     static constexpr quint64 ZeroSeed = 0;
     static constexpr quint64 RandomSeed32 = 1045982819;
-    static constexpr quint64 RandomSeed64 = QtPrivate::QHashCombine{}(RandomSeed32, RandomSeed32);
+    static constexpr quint64 RandomSeed64 = qHashMulti(0, RandomSeed32, RandomSeed32);
     size_t seed;
 
     template <typename T1, typename T2> void stdPair_template(const T1 &t1, const T2 &t2);
@@ -31,10 +33,12 @@ public slots:
     void init();
 
 private Q_SLOTS:
+    void boolIntegerConsistency();
     void unsignedIntegerConsistency_data();
     void unsignedIntegerConsistency();
     void signedIntegerConsistency_data();
     void signedIntegerConsistency();
+    void extendedIntegerConsistency();
     void floatingPointConsistency_data();
     void floatingPointConsistency();
     void stringConsistency_data();
@@ -43,6 +47,7 @@ private Q_SLOTS:
     void qhash_of_empty_and_null_qstring();
     void qhash_of_empty_and_null_qbytearray();
     void qhash_of_zero_floating_points();
+    void qmap();
     void qthash_data();
     void qthash();
     void range();
@@ -88,6 +93,19 @@ void tst_QHashFunctions::init()
 {
     QFETCH_GLOBAL(quint64, seedValue);
     seed = size_t(seedValue);
+}
+
+void tst_QHashFunctions::boolIntegerConsistency()
+{
+    QT6_ONLY(if (seed) QEXPECT_FAIL("", "QTBUG-126674", Continue));
+    QCOMPARE(qHash(0, seed), qHash(false, seed));
+    QT6_ONLY(if (seed) QEXPECT_FAIL("", "QTBUG-126674", Continue));
+    QCOMPARE(qHash(1, seed), qHash(true, seed));
+#if QT_VERSION < QT_VERSION_CHECK(7, 0, 0)
+    // check consistency with pre-6.9 incidental implementation:
+    QCOMPARE(qHash(true,  seed), qHash(int(true)) ^ seed);
+    QCOMPARE(qHash(false, seed), qHash(int(false)) ^ seed);
+#endif
 }
 
 template <typename T> static void addPositiveCommonRows()
@@ -151,6 +169,11 @@ static void unsignedIntegerConsistency(quint64 value, size_t seed)
     if (v32 == value)
         QCOMPARE(hu64, hu32);
 
+#ifdef QT_SUPPORTS_INT128
+    const auto hu128 = qHash(quint128(value), seed);
+    QCOMPARE(hu128, hu64);
+#endif
+
     // there are a few more unsigned types:
 #ifdef __cpp_char8_t
      const auto hc8 = qHash(char8_t(value), seed);
@@ -189,9 +212,14 @@ void tst_QHashFunctions::signedIntegerConsistency()
     if (v32 == value) {
         // because of QTBUG-116080, this may not match, but we can't guarantee
         // it mismatches 100% of the time either
-        if constexpr (sizeof(size_t) > sizeof(int))
+        if constexpr (sizeof(size_t) > sizeof(int) || QT_VERSION_MAJOR > 6)
             QCOMPARE(hs64, hs32);
     }
+
+#ifdef QT_SUPPORTS_INT128
+    const auto hs128 = qHash(qint128(value), seed);
+    QCOMPARE(hs128, hs64);
+#endif
 
     if (value > 0) {
         quint64 u64 = quint64(value);
@@ -200,6 +228,20 @@ void tst_QHashFunctions::signedIntegerConsistency()
         ::unsignedIntegerConsistency(u64, seed);
         // by A == B && B == C -> A == C, we've shown hsXX == huXX for all XX
     }
+}
+
+void tst_QHashFunctions::extendedIntegerConsistency()
+{
+#ifdef QT_SUPPORTS_INT128
+    // We only need to check qint128 and quint128 consistency here.
+    qint128 v65bit = Q_INT128_C(0x1'abea'06b7'dcf5'106a);
+    qint128 v127bit = Q_INT128_C(0x387c'ac7a'22a0'5242'9ee9'bcaa'6a53'13af);
+
+    QCOMPARE(qHash(quint128(v65bit), seed), qHash(v65bit, seed));
+    QCOMPARE(qHash(quint128(v127bit), seed), qHash(v127bit, seed));
+#else
+    QSKIP("This platform does not support extended integer types.");
+#endif
 }
 
 void tst_QHashFunctions::floatingPointConsistency_data()
@@ -264,10 +306,12 @@ void tst_QHashFunctions::stringConsistency_data()
     QTest::newRow("null") << QString();
     QTest::newRow("empty") << "";
     QTest::newRow("withnull") << QStringLiteral("A\0z");
-    QTest::newRow("short-ascii") << "Hello";
+    QTest::newRow("short-ascii") << "Hello";            // 10 bytes
+    QTest::newRow("medium-ascii") << "Hello, World";    // 24 bytes
     QTest::newRow("long-ascii") << QStringLiteral("abcdefghijklmnopqrstuvxyz").repeated(16);
 
     QTest::newRow("short-latin1") << "Bokmål";
+    QTest::newRow("medium-latin1") << "Det går bra!";   // 24 bytes
     QTest::newRow("long-latin1")
             << R"(Alle mennesker er født frie og med samme menneskeverd og menneskerettigheter.
  De er utstyrt med fornuft og samvittighet og bør handle mot hverandre i brorskapets ånd.)";
@@ -296,6 +340,17 @@ void tst_QHashFunctions::stringConsistency()
 
     QCOMPARE(qHash(sv, seed), qHash(value, seed));
     QCOMPARE(qHash(u8bav, seed), qHash(u8ba, seed));
+
+    if (seed == 0 || QHashHeterogeneousSearch<QString, QLatin1StringView>::value) {
+        QByteArray l1ba = value.toLatin1();
+        QLatin1StringView l1sv(l1ba.data(), l1ba.size());
+#ifdef Q_PROCESSOR_ARM
+        // zero-extending aeshash not implemented on ARM
+#else
+        if (value == l1sv)
+            QCOMPARE(qHash(l1sv, seed), qHash(value, seed));
+#endif
+    }
 }
 
 void tst_QHashFunctions::qhash()
@@ -346,15 +401,15 @@ void tst_QHashFunctions::qhash()
     }
 
     {
-        QPair<int, int> p12(1, 2);
-        QPair<int, int> p21(2, 1);
+        std::pair<int, int> p12(1, 2);
+        std::pair<int, int> p21(2, 1);
 
         QVERIFY(qHash(p12, seed) == qHash(p12, seed));
         QVERIFY(qHash(p21, seed) == qHash(p21, seed));
         QVERIFY(qHash(p12, seed) != qHash(p21, seed));  // not guaranteed
 
-        QPair<int, int> pA(0x12345678, 0x12345678);
-        QPair<int, int> pB(0x12345675, 0x12345675);
+        std::pair<int, int> pA(0x12345678, 0x12345678);
+        std::pair<int, int> pB(0x12345675, 0x12345675);
 
         QVERIFY(qHash(pA, seed) != qHash(pB, seed));    // not guaranteed
     }
@@ -399,6 +454,14 @@ void tst_QHashFunctions::qhash_of_zero_floating_points()
     QCOMPARE(qHash(-0.0f, seed), qHash(0.0f, seed));
     QCOMPARE(qHash(-0.0 , seed), qHash(0.0 , seed));
     QCOMPARE(qHash(-0.0L, seed), qHash(0.0L, seed));
+}
+
+void tst_QHashFunctions::qmap()
+{
+    // QTBUG-126659
+    QMap<int, int> map;
+    size_t s = seed;
+    QCOMPARE(qHash(map, s), seed);
 }
 
 void tst_QHashFunctions::qthash_data()

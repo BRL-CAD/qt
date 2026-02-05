@@ -64,6 +64,10 @@ static QChar macSymbolForQtKey(int key)
 
 #endif
 
+QT_BEGIN_NAMESPACE
+extern void qt_set_sequence_auto_mnemonic(bool);
+QT_END_NAMESPACE
+
 class tst_QKeySequence : public QObject
 {
     Q_OBJECT
@@ -348,17 +352,18 @@ void tst_QKeySequence::keyBindings()
           QKeySequence::keyBindings(QKeySequence::Copy);
 
     QList<QKeySequence> expected;
+    const QKeySequence copy = QKeySequence(QStringLiteral("Copy"));
     const QKeySequence ctrlC = QKeySequence(QStringLiteral("CTRL+C"));
     const QKeySequence ctrlInsert = QKeySequence(QStringLiteral("CTRL+INSERT"));
     switch (m_keyboardScheme) {
     case QPlatformTheme::MacKeyboardScheme:
-        expected  << ctrlC;
+        expected  << ctrlC << copy;
         break;
     case QPlatformTheme::WindowsKeyboardScheme:
-        expected  << ctrlC << ctrlInsert;
+        expected  << ctrlC << ctrlInsert << copy;
         break;
     default: // X11
-        expected  << ctrlC << ctrlInsert << QKeySequence(QStringLiteral("F16"));
+        expected  << ctrlC << ctrlInsert << QKeySequence(QStringLiteral("F16")) << copy;
         break;
     }
     QCOMPARE(bindings, expected);
@@ -366,9 +371,6 @@ void tst_QKeySequence::keyBindings()
 
 void tst_QKeySequence::mnemonic_data()
 {
-#ifdef Q_OS_MAC
-    QSKIP("Test not applicable to OS X");
-#endif
     QTest::addColumn<QString>("string");
     QTest::addColumn<QString>("key");
     QTest::addColumn<bool>("warning");
@@ -388,10 +390,20 @@ void tst_QKeySequence::mnemonic_data()
 
 void tst_QKeySequence::mnemonic()
 {
+    const auto resetAutoMnemonic = qScopeGuard([] {
 #ifndef Q_OS_MAC
+        qt_set_sequence_auto_mnemonic(true);
+#else
+        qt_set_sequence_auto_mnemonic(false);
+#endif
+    });
+
     QFETCH(QString, string);
     QFETCH(QString, key);
     QFETCH(bool, warning);
+
+    qt_set_sequence_auto_mnemonic(false);
+    QCOMPARE(QKeySequence::mnemonic(string), QKeySequence());
 
 #ifdef QT_NO_DEBUG
     Q_UNUSED(warning);
@@ -402,11 +414,9 @@ void tst_QKeySequence::mnemonic()
     //    qWarning(qPrintable(str));
     }
 #endif
-    QKeySequence seq = QKeySequence::mnemonic(string);
-    QKeySequence res = QKeySequence(key);
 
-    QCOMPARE(seq, res);
-#endif
+    qt_set_sequence_auto_mnemonic(true);
+    QCOMPARE(QKeySequence::mnemonic(string), QKeySequence(key));
 }
 
 void tst_QKeySequence::toString_data()
@@ -533,6 +543,20 @@ void tst_QKeySequence::parseString_data()
     QTest::newRow("Meta+A") << "Meta+a" <<  QKeySequence(Qt::META | Qt::Key_A);
     QTest::newRow("mEtA+A") << "mEtA+a" <<  QKeySequence(Qt::META | Qt::Key_A);
     QTest::newRow("Ctrl++") << "Ctrl++" << QKeySequence(Qt::CTRL | Qt::Key_Plus);
+    QTest::newRow("+") << "+" << QKeySequence(Qt::Key_Plus);
+
+    // Tolerance for spaces
+    QTest::newRow("Ctrl_+_Del") << "Ctrl + Del" << QKeySequence(Qt::CTRL | Qt::Key_Delete);
+    QTest::newRow("Ctrl+Del_") << "Ctrl+Del " << QKeySequence(Qt::CTRL | Qt::Key_Delete);
+    QTest::newRow("Ctrl_+_Del_") << "Ctrl + Del " << QKeySequence(Qt::CTRL | Qt::Key_Delete);
+    QTest::newRow("space") << " " << QKeySequence(Qt::Key_Space);
+    QTest::newRow("Ctrl+space") << "Ctrl+ " << QKeySequence(Qt::CTRL | Qt::Key_Space);
+    QTest::newRow("Ctrl_++") << "Ctrl ++" << QKeySequence(Qt::CTRL | Qt::Key_Plus);
+    QTest::newRow("Ctrl_+_+") << "Ctrl + +" << QKeySequence(Qt::CTRL | Qt::Key_Plus);
+    QTest::newRow("Ctrl_+_+_") << "Ctrl + + " << QKeySequence(Qt::CTRL | Qt::Key_Plus);
+    QTest::newRow("+_") << "+ " << QKeySequence(Qt::Key_Plus);
+    QTest::newRow("_+") << " +" << QKeySequence(Qt::Key_Plus);
+    QTest::newRow("_+_") << " + " << QKeySequence(Qt::Key_Plus);
 
     // Invalid modifiers
     QTest::newRow("Win+A") << "Win+a" <<  QKeySequence(Qt::Key_unknown);
@@ -547,7 +571,9 @@ void tst_QKeySequence::parseString_data()
     QTest::newRow("4+3=2") << "4+3=2" <<  QKeySequence(Qt::Key_unknown);
     QTest::newRow("Alabama") << "Alabama" << QKeySequence(Qt::Key_unknown);
     QTest::newRow("Simon+G") << "Simon+G" << QKeySequence(Qt::Key_unknown);
-    QTest::newRow("Shift+++2") << "Shift+++2" <<  QKeySequence(Qt::Key_unknown);
+    QTest::newRow("Shift+++2") << "Shift+++2" << QKeySequence(Qt::Key_unknown);
+    QTest::newRow("Ctrl+D_el") << "Ctrl+D el" << QKeySequence(Qt::Key_unknown);
+    QTest::newRow("Ct_rl+D_el") << "Ct rl+D el" << QKeySequence(Qt::Key_unknown);
 
     // Wrong order
     QTest::newRow("A+Meta") << "a+Meta" <<  QKeySequence(Qt::Key_unknown);
@@ -560,6 +586,7 @@ void tst_QKeySequence::parseString_data()
     //QTest::newRow("Shift") << "Shift" << QKeySequence(Qt::SHIFT);
 
     // Incomplete
+    QTest::newRow("Ctrl+") << "Ctrl+" << QKeySequence(Qt::Key_unknown);
     QTest::newRow("Meta+Shift+") << "Meta+Shift+" << QKeySequence(Qt::Key_unknown);
 }
 

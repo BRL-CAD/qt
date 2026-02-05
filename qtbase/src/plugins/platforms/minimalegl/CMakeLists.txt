@@ -1,7 +1,7 @@
 # Copyright (C) 2022 The Qt Company Ltd.
 # SPDX-License-Identifier: BSD-3-Clause
 
-qt_find_package(EGL)
+qt_find_package(EGL MODULE)
 
 #####################################################################
 ## QMinimalEglIntegrationPlugin Plugin:
@@ -10,7 +10,7 @@ qt_find_package(EGL)
 qt_internal_add_plugin(QMinimalEglIntegrationPlugin
     OUTPUT_NAME qminimalegl
     PLUGIN_TYPE platforms
-    DEFAULT_IF ${QT_QPA_DEFAULT_PLATFORM} MATCHES minimalegl
+    DEFAULT_IF "minimalegl" IN_LIST QT_QPA_PLATFORMS
     SOURCES
         main.cpp
         qminimaleglintegration.cpp qminimaleglintegration.h

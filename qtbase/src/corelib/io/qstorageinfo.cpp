@@ -1,6 +1,7 @@
 // Copyright (C) 2022 The Qt Company Ltd.
 // Copyright (C) 2015 Ivan Komissarov <ABBAPOH@gmail.com>
 // SPDX-License-Identifier: LicenseRef-Qt-Commercial OR LGPL-3.0-only OR GPL-2.0-only OR GPL-3.0-only
+// Qt-Security score:significant reason:default
 
 #include "qstorageinfo.h"
 #include "qstorageinfo_p.h"
@@ -9,7 +10,10 @@
 
 QT_BEGIN_NAMESPACE
 
+Q_LOGGING_CATEGORY(lcStorageInfo, "qt.core.qstorageinfo", QtWarningMsg)
+
 QT_IMPL_METATYPE_EXTERN(QStorageInfo)
+QT_DEFINE_QESDP_SPECIALIZATION_DTOR(QStorageInfoPrivate)
 
 /*!
     \class QStorageInfo
@@ -19,6 +23,8 @@ QT_IMPL_METATYPE_EXTERN(QStorageInfo)
 
     \ingroup io
     \ingroup shared
+
+    \compares equality
 
     Allows retrieving information about the volume's space, its mount point,
     label, and filesystem name.
@@ -71,7 +77,7 @@ QStorageInfo::QStorageInfo()
     \sa setPath()
 */
 QStorageInfo::QStorageInfo(const QString &path)
-    : d(new QStorageInfoPrivate)
+    : QStorageInfo()
 {
     setPath(path);
 }
@@ -81,46 +87,50 @@ QStorageInfo::QStorageInfo(const QString &path)
     containing the \a dir folder.
 */
 QStorageInfo::QStorageInfo(const QDir &dir)
-    : d(new QStorageInfoPrivate)
+    : QStorageInfo(dir.absolutePath())
 {
-    setPath(dir.absolutePath());
 }
 
 /*!
     Constructs a new QStorageInfo object that is a copy of the \a other QStorageInfo object.
 */
 QStorageInfo::QStorageInfo(const QStorageInfo &other)
-    : d(other.d)
-{
-}
+    = default;
+
+/*!
+    \since 6.10
+    \fn QStorageInfo::QStorageInfo(QStorageInfo &&other)
+
+    Move-constructs a new QStorageInfo from \a other.
+
+    The moved-from object \a other is placed in a partially-formed state, in
+    which the only valid operations are destruction and assignment of a new
+    value.
+*/
 
 /*!
     Destroys the QStorageInfo object and frees its resources.
 */
 QStorageInfo::~QStorageInfo()
-{
-}
+    = default;
 
 /*!
     Makes a copy of the QStorageInfo object \a other and assigns it to this QStorageInfo object.
 */
 QStorageInfo &QStorageInfo::operator=(const QStorageInfo &other)
-{
-    d = other.d;
-    return *this;
-}
+    = default;
 
 /*!
     \fn QStorageInfo &QStorageInfo::operator=(QStorageInfo &&other)
 
-    Assigns \a other to this QStorageInfo instance.
+    Move-assigns \a other to this QStorageInfo instance.
+
+    The moved-from object \a other is placed in a valid, but unspecified state.
 */
 
 /*!
     \fn void QStorageInfo::swap(QStorageInfo &other)
-
-    Swaps this volume info with \a other. This function is very fast and
-    never fails.
+    \memberswap{volume info}
 */
 
 /*!
@@ -386,21 +396,28 @@ QStorageInfo QStorageInfo::root()
 }
 
 /*!
-    \fn bool QStorageInfo::operator==(const QStorageInfo &first, const QStorageInfo &second)
+    \fn bool QStorageInfo::operator==(const QStorageInfo &lhs, const QStorageInfo &rhs)
 
-    Returns true if the \a first QStorageInfo object refers to the same drive or volume
-    as the \a second; otherwise it returns false.
+    Returns \c true if the QStorageInfo object \a lhs refers to the same drive or
+    volume as the QStorageInfo object \a rhs; otherwise it returns \c false.
 
     Note that the result of comparing two invalid QStorageInfo objects is always
     positive.
 */
 
 /*!
-    \fn bool QStorageInfo::operator!=(const QStorageInfo &first, const QStorageInfo &second)
+    \fn bool QStorageInfo::operator!=(const QStorageInfo &lhs, const QStorageInfo &rhs)
 
-    Returns true if the \a first QStorageInfo object refers to a different drive or
-    volume than the \a second; otherwise returns false.
+    Returns \c true if the QStorageInfo object \a lhs refers to a different drive or
+    volume than the QStorageInfo object \a rhs; otherwise returns \c false.
 */
+
+bool comparesEqual(const QStorageInfo &lhs, const QStorageInfo &rhs) noexcept
+{
+    if (lhs.d == rhs.d)
+        return true;
+    return lhs.d->device == rhs.d->device && lhs.d->rootPath == rhs.d->rootPath;
+}
 
 #ifndef QT_NO_DEBUG_STREAM
 QDebug operator<<(QDebug debug, const QStorageInfo &s)

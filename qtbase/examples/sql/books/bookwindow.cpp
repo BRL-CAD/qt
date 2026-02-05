@@ -5,16 +5,27 @@
 #include "bookdelegate.h"
 #include "initdb.h"
 
-#include <QtSql>
+#include <QApplication>
+#include <QComboBox>
+#include <QDataWidgetMapper>
+#include <QGridLayout>
+#include <QHeaderView>
+#include <QLabel>
+#include <QLineEdit>
+#include <QMenu>
+#include <QMenuBar>
+#include <QMessageBox>
+#include <QPainter>
+#include <QScrollBar>
+#include <QSpinBox>
+#include <QSqlDatabase>
+#include <QTableView>
 
 BookWindow::BookWindow()
 {
     if (!QSqlDatabase::drivers().contains("QSQLITE"))
-        QMessageBox::critical(
-                    this,
-                    "Unable to load database",
-                    "This demo needs the SQLITE driver"
-                    );
+        QMessageBox::critical(this, tr("Unable to load database"),
+                              tr("This demo needs the SQLITE driver"));
 
     // Initialize the database:
     QSqlError err = initDb();
@@ -50,8 +61,8 @@ BookWindow::BookWindow()
 
 void BookWindow::showError(const QSqlError &err)
 {
-    QMessageBox::critical(this, "Unable to initialize Database",
-                "Error initializing database: " + err.text());
+    QMessageBox::critical(this, tr("Unable to initialize Database"),
+                          tr("Error initializing database: %1").arg(err.text()));
 }
 
 void BookWindow::createLayout()
@@ -116,7 +127,7 @@ void BookWindow::createModel()
 void BookWindow::configureWidgets()
 {
     tableView->setModel(model);
-    tableView->setItemDelegate(new BookDelegate(tableView));
+    tableView->setItemDelegate(new BookDelegate(model->fieldIndex("rating"), tableView));
     tableView->setColumnHidden(model->fieldIndex("id"), true);
     tableView->verticalHeader()->setVisible(false);
     tableView->setSelectionMode(QAbstractItemView::ExtendedSelection);
@@ -141,41 +152,18 @@ void BookWindow::configureWidgets()
 
     yearSpinBox->setMaximum(9999);
 
-    const int width = 16;
-    const int height = width;
-    const int y = 2;
-    const int padding = 2;
+    ratingComboBox->setItemDelegate(new BookDelegate(0, this));
+    ratingComboBox->setLabelDrawingMode(QComboBox::LabelDrawingMode::UseDelegate);
+    ratingComboBox->addItems({"0", "1", "2", "3", "4", "5"});
 
-    QSize iconSize = QSize(width * 5 + padding * 2, width + padding * 2);
-    QIcon starIcon(QStringLiteral(":images/star.svg"));
-    QIcon starFilledIcon(QStringLiteral(":images/star-filled.svg"));
-
-    for (int row = 0; row < 6; ++row) {
-        QPixmap icon(iconSize);
-        icon.fill(Qt::transparent);
-        QPainter painter(&icon);
-        int x = 2;
-
-        for (int col = 0; col < 5; ++col) {
-            if (col < row) {
-                starFilledIcon.paint(&painter, QRect(x, y, width, height));
-            } else {
-                starIcon.paint(&painter, QRect(x, y, width, height));
-            }
-            x += width;
-        }
-        ratingComboBox->addItem(icon, "");
-        ratingComboBox->setItemData(row, QString::number(row + 1));
-    }
-
-    ratingComboBox->setIconSize(iconSize);
+    ratingComboBox->setIconSize(iconSize());
 }
 
 void BookWindow::createMappings()
 {
     QDataWidgetMapper *mapper = new QDataWidgetMapper(this);
     mapper->setModel(model);
-    mapper->setItemDelegate(new BookDelegate(this));
+    mapper->setItemDelegate(new BookDelegate(model->fieldIndex("rating"), this));
     mapper->addMapping(titleLineEdit, model->fieldIndex("title"));
     mapper->addMapping(yearSpinBox, model->fieldIndex("year"));
     mapper->addMapping(authorComboBox, authorIdx);

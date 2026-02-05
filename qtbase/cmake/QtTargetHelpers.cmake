@@ -6,6 +6,10 @@
 # One-value Arguments:
 #   PRECOMPILED_HEADER
 #     Name of the precompiled header that is used for the target.
+#   EXTRA_ELF_LINKER_SCRIPT_CONTENT
+#     Extra content that should be appended to a target linker script. Applicable for ld only.
+#   ELF_LINKER_DYNAMIC_LIST
+#     Pass --dynamic-list to the linker.
 # Multi-value Arguments:
 #   CONDITION
 #     The condition under which the target will be extended.
@@ -14,12 +18,10 @@
 #     module, these files will raise a warning at configure time if the condition is not met.
 #   COMPILE_FLAGS
 #     Custom compilation flags.
-#   EXTRA_LINKER_SCRIPT_CONTENT
-#     Extra content that should be appended to a target linker script. Applicable for ld only.
-#   EXTRA_LINKER_SCRIPT_EXPORTS
+#   EXTRA_ELF_LINKER_SCRIPT_EXPORTS
 #     Extra content that should be added to export section of the linker script.
 #   NO_PCH_SOURCES
-#     Skip the specified source files by PRECOMPILE_HEADERS feature.
+#     Exclude the specified source files from PRECOMPILE_HEADERS and UNITY_BUILD builds.
 function(qt_internal_extend_target target)
     if(NOT TARGET "${target}")
         message(FATAL_ERROR "${target} is not a target.")
@@ -41,10 +43,13 @@ function(qt_internal_extend_target target)
 
     set(option_args
         NO_UNITY_BUILD
+        ${__qt_internal_sbom_optional_args}
     )
     set(single_args
         PRECOMPILED_HEADER
-        EXTRA_LINKER_SCRIPT_CONTENT
+        EXTRA_ELF_LINKER_SCRIPT_CONTENT
+        ELF_LINKER_DYNAMIC_LIST
+        ${__qt_internal_sbom_single_args}
     )
     set(multi_args
         ${__default_public_args}
@@ -53,7 +58,8 @@ function(qt_internal_extend_target target)
         CONDITION
         CONDITION_INDEPENDENT_SOURCES
         COMPILE_FLAGS
-        EXTRA_LINKER_SCRIPT_EXPORTS
+        EXTRA_ELF_LINKER_SCRIPT_EXPORTS
+        ${__qt_internal_sbom_multi_args}
     )
 
     cmake_parse_arguments(PARSE_ARGV 1 arg
@@ -74,20 +80,26 @@ function(qt_internal_extend_target target)
         endif()
         set(dbus_sources "")
         foreach(adaptor ${arg_DBUS_ADAPTOR_SOURCES})
-            qt_create_qdbusxml2cpp_command("${target}" "${adaptor}"
-                ADAPTOR
-                BASENAME "${arg_DBUS_ADAPTOR_BASENAME}"
-                FLAGS ${arg_DBUS_ADAPTOR_FLAGS}
+            _qt_internal_forward_function_args(
+                FORWARD_PREFIX arg_DBUS_ADAPTOR
+                FORWARD_OUT_VAR forwarded_args
+                FORWARD_SINGLE
+                    BASENAME
+                    FLAGS
             )
+            qt_create_qdbusxml2cpp_command("${target}" "${adaptor}" ADAPTOR ${forwarded_args})
             list(APPEND dbus_sources "${adaptor}")
         endforeach()
 
         foreach(interface ${arg_DBUS_INTERFACE_SOURCES})
-            qt_create_qdbusxml2cpp_command("${target}" "${interface}"
-                INTERFACE
-                BASENAME "${arg_DBUS_INTERFACE_BASENAME}"
-                FLAGS ${arg_DBUS_INTERFACE_FLAGS}
+            _qt_internal_forward_function_args(
+                FORWARD_PREFIX arg_DBUS_INTERFACE
+                FORWARD_OUT_VAR forwarded_args
+                FORWARD_SINGLE
+                    BASENAME
+                    FLAGS
             )
+            qt_create_qdbusxml2cpp_command("${target}" "${interface}" INTERFACE ${forwarded_args})
             list(APPEND dbus_sources "${interface}")
         endforeach()
 
@@ -99,10 +111,13 @@ function(qt_internal_extend_target target)
         get_target_property(target_type ${target} TYPE)
         set(is_library FALSE)
         set(is_interface_lib FALSE)
+        set(is_executable FALSE)
         if(${target_type} STREQUAL "STATIC_LIBRARY" OR ${target_type} STREQUAL "SHARED_LIBRARY")
             set(is_library TRUE)
         elseif(target_type STREQUAL "INTERFACE_LIBRARY")
             set(is_interface_lib TRUE)
+        elseif(target_type STREQUAL "EXECUTABLE")
+            set(is_executable TRUE)
         endif()
 
         foreach(lib ${arg_PUBLIC_LIBRARIES} ${arg_LIBRARIES})
@@ -133,6 +148,12 @@ function(qt_internal_extend_target target)
                 endif()
             endif()
         endforeach()
+
+        list(TRANSFORM arg_PUBLIC_LIBRARIES REPLACE "^Qt::" "${QT_CMAKE_EXPORT_NAMESPACE}::")
+        list(TRANSFORM arg_LIBRARIES REPLACE "^Qt::" "${QT_CMAKE_EXPORT_NAMESPACE}::")
+        qt_internal_wrap_private_modules("${target}"
+            OUT_VAR arg_LIBRARIES
+            LIBRARIES ${arg_LIBRARIES})
 
         # Set-up the target
 
@@ -179,9 +200,11 @@ function(qt_internal_extend_target target)
                             ${private_visibility_option} ${arg_LINK_OPTIONS})
 
         if(NOT is_interface_lib)
+            _qt_internal_get_moc_compiler_flavor_flags(flavor_flags)
             set_property(TARGET "${target}" APPEND PROPERTY
-                AUTOMOC_MOC_OPTIONS "${arg_MOC_OPTIONS}"
+                AUTOMOC_MOC_OPTIONS "${arg_MOC_OPTIONS}" ${flavor_flags}
             )
+
             # Plugin types associated to a module
             if(NOT "x${arg_PLUGIN_TYPES}" STREQUAL "x")
                 qt_internal_add_plugin_types("${target}" "${arg_PLUGIN_TYPES}")
@@ -204,6 +227,42 @@ function(qt_internal_extend_target target)
             endif()
         endforeach()
 
+        if(arg_LIBRARIES)
+            _qt_internal_append_to_target_property_without_duplicates(${target}
+                _qt_extend_target_libraries "${arg_LIBRARIES}"
+            )
+        endif()
+
+        if(arg_PUBLIC_LIBRARIES)
+            _qt_internal_append_to_target_property_without_duplicates(${target}
+                _qt_extend_target_public_libraries "${arg_PUBLIC_LIBRARIES}"
+            )
+        endif()
+
+        set(all_libraries ${arg_LIBRARIES} ${arg_PUBLIC_LIBRARIES})
+        _qt_internal_work_around_autogen_discarded_dependencies(${target} ${all_libraries})
+
+        if(QT_GENERATE_SBOM)
+            set(sbom_args "")
+            _qt_internal_forward_function_args(
+                FORWARD_APPEND
+                FORWARD_PREFIX arg
+                FORWARD_OUT_VAR sbom_args
+                FORWARD_OPTIONS
+                    ${__qt_internal_sbom_optional_args}
+                FORWARD_SINGLE
+                    ${__qt_internal_sbom_single_args}
+                FORWARD_MULTI
+                    ${__qt_internal_sbom_multi_args}
+            )
+            # Don't call extend_sbom unless we actually have any SBOM args, to prevent
+            # recording of a target if it has no SBOM info. Relevant for QtFooModulePrivate targets
+            # which don't appear in the SBOM atm.
+            if(sbom_args)
+                _qt_internal_extend_sbom(${target} ${sbom_args})
+            endif()
+        endif()
+
         set(target_private "${target}Private")
         get_target_property(is_internal_module ${target} _qt_is_internal_module)
         # Internal modules don't have Private targets but we still need to
@@ -214,6 +273,9 @@ function(qt_internal_extend_target target)
         if(TARGET "${target_private}")
             target_link_libraries("${target_private}"
                                   INTERFACE ${arg_PRIVATE_MODULE_INTERFACE})
+            qt_internal_register_target_dependencies("${target_private}"
+                PUBLIC ${arg_PRIVATE_MODULE_INTERFACE}
+            )
         elseif(arg_PRIVATE_MODULE_INTERFACE)
             set(warning_message "")
             string(APPEND warning_message
@@ -223,10 +285,18 @@ function(qt_internal_extend_target target)
                 "Ensure the target exists or remove the option.")
             message(AUTHOR_WARNING "${warning_message}")
         endif()
-        qt_register_target_dependencies("${target}"
-                                        "${arg_PUBLIC_LIBRARIES};${arg_PRIVATE_MODULE_INTERFACE}"
-                                        "${qt_libs_private};${arg_LIBRARIES}")
 
+        set(qt_register_target_dependencies_args "")
+        if(arg_PUBLIC_LIBRARIES)
+            list(APPEND qt_register_target_dependencies_args
+                PUBLIC ${arg_PUBLIC_LIBRARIES})
+        endif()
+        if(qt_libs_private OR arg_LIBRARIES)
+            list(APPEND qt_register_target_dependencies_args
+                PRIVATE ${qt_libs_private} ${arg_LIBRARIES})
+        endif()
+        qt_internal_register_target_dependencies("${target}"
+            ${qt_register_target_dependencies_args})
 
         qt_autogen_tools(${target}
                          ENABLE_AUTOGEN_TOOLS ${arg_ENABLE_AUTOGEN_TOOLS}
@@ -262,14 +332,100 @@ function(qt_internal_extend_target target)
             ${sources_property} "${arg_CONDITION_INDEPENDENT_SOURCES}")
     endif()
 
-    if(arg_EXTRA_LINKER_SCRIPT_CONTENT)
+    if(arg_EXTRA_ELF_LINKER_SCRIPT_CONTENT)
         set_target_properties(${target} PROPERTIES
-            _qt_extra_linker_script_content "${arg_EXTRA_LINKER_SCRIPT_CONTENT}")
+            _qt_extra_elf_linker_script_content "${arg_EXTRA_ELF_LINKER_SCRIPT_CONTENT}")
     endif()
-    if(arg_EXTRA_LINKER_SCRIPT_EXPORTS)
+    if(arg_EXTRA_ELF_LINKER_SCRIPT_EXPORTS)
         set_target_properties(${target} PROPERTIES
-            _qt_extra_linker_script_exports "${arg_EXTRA_LINKER_SCRIPT_EXPORTS}")
+            _qt_extra_elf_linker_script_exports "${arg_EXTRA_ELF_LINKER_SCRIPT_EXPORTS}")
     endif()
+    if(arg_ELF_LINKER_DYNAMIC_LIST)
+        qt_internal_apply_dynamic_list_linker_flags(${target} "${arg_ELF_LINKER_DYNAMIC_LIST}")
+    endif()
+
+    if(is_executable)
+        # If linking against Gui, make sure to also build the default QPA plugin.
+        # This makes the experience of an initial Qt configuration to build and run one single
+        # test / executable nicer.
+        set(linked_libs ${arg_PUBLIC_LIBRARIES} ${arg_LIBRARIES})
+        if(linked_libs MATCHES "(^|;)(${QT_CMAKE_EXPORT_NAMESPACE}::|Qt::)?Gui($|;)" AND
+            TARGET qpa_default_plugins)
+            add_dependencies("${target}" qpa_default_plugins)
+        endif()
+
+        # For executables collect static plugins that these targets depend on.
+        qt_internal_import_plugins(${target} ${linked_libs})
+    endif()
+endfunction()
+
+# Takes the consuming target, an output variable and a list of libraries that the consuming target
+# links to.
+#
+# Every library that is a private module is wrapped in $<BUILD_INTERFACE> or
+# $<BUILD_LOCAL_INTERFACE> if CMake is new enough.
+#
+# This is necessary for static builds, because if Qt6Foo links to Qt6BarPrivate, this link
+# dependency is purely internal. If we don't do this, CMake adds a target check for Qt6BarPrivate
+# in Qt6FooTargets.cmake. This breaks if Qt6BarPrivate is not find_package'ed before.
+#
+# Every library that is an internal module is wrapped in a similar way, unless the consuming target
+# is STATIC, in which case the internal module is added as-is, otherwise linking would fail.
+# That's because internal modules are private modules that don't have a public counterpart, so
+# if we don't export the linkage, user builds will fail. In this case it's preferable to find
+# the Private package, rather than fail the build.
+function(qt_internal_wrap_private_modules target)
+    set(option_args "")
+    set(single_args
+        OUT_VAR
+    )
+    set(multi_args
+        LIBRARIES
+    )
+
+    cmake_parse_arguments(PARSE_ARGV 1 arg
+        "${option_args}"
+        "${single_args}"
+        "${multi_args}"
+    )
+    _qt_internal_validate_all_args_are_parsed(arg)
+
+    set(result "")
+
+    if(CMAKE_VERSION VERSION_LESS "3.26")
+        set(wrapper_genex "BUILD_INTERFACE")
+    else()
+        set(wrapper_genex "BUILD_LOCAL_INTERFACE")
+    endif()
+
+    get_target_property(target_type "${target}" TYPE)
+
+    foreach(lib IN LISTS arg_LIBRARIES)
+        if(TARGET "${lib}")
+            get_target_property(lib_is_private_module ${lib} _qt_is_private_module)
+            get_target_property(lib_is_internal_module ${lib} _qt_is_internal_module)
+
+            if(lib_is_private_module)
+                # Add the public module as non-wrapped link dependency. This is necessary for
+                # targets that link only to the private module. Consumers of this target would then
+                # get a linker error about missing symbols from that Qt module.
+                get_target_property(lib_public_module_target ${lib} _qt_public_module_target_name)
+                list(APPEND result "${INSTALL_CMAKE_NAMESPACE}::${lib_public_module_target}")
+            endif()
+
+            if(lib_is_private_module
+                    OR
+                    (lib_is_internal_module
+                        AND NOT target_type STREQUAL "STATIC_LIBRARY")
+                )
+                # Wrap the private or internal module in BUILD_LOCAL_INTERFACE.
+                set(lib "$<${wrapper_genex}:${lib}>")
+            endif()
+        endif()
+        list(APPEND result "${lib}")
+    endforeach()
+
+    set("${arg_OUT_VAR}" "${result}" PARENT_SCOPE)
 endfunction()
 
 # Given CMAKE_CONFIG and ALL_CMAKE_CONFIGS, determines if a directory suffix needs to be appended
@@ -278,7 +434,7 @@ endfunction()
 function(qt_get_install_target_default_args)
     cmake_parse_arguments(PARSE_ARGV 0 arg
        ""
-       "OUT_VAR;CMAKE_CONFIG;RUNTIME;LIBRARY;ARCHIVE;INCLUDES;BUNDLE"
+       "OUT_VAR;OUT_VAR_RUNTIME;CMAKE_CONFIG;RUNTIME;LIBRARY;ARCHIVE;INCLUDES;BUNDLE"
        "ALL_CMAKE_CONFIGS")
     _qt_internal_validate_all_args_are_parsed(arg)
 
@@ -328,6 +484,13 @@ function(qt_get_install_target_default_args)
         BUNDLE DESTINATION   "${bundle}${suffix}"
         INCLUDES DESTINATION "${includes}${suffix}")
     set(${arg_OUT_VAR} "${args}" PARENT_SCOPE)
+
+    if(arg_OUT_VAR_RUNTIME)
+        set(args
+            "${runtime}${suffix}"
+        )
+        set(${arg_OUT_VAR_RUNTIME} "${args}" PARENT_SCOPE)
+    endif()
 endfunction()
 
 macro(qt_internal_setup_default_target_function_options)
@@ -343,7 +506,6 @@ macro(qt_internal_setup_default_target_function_options)
         DBUS_INTERFACE_BASENAME
         DBUS_INTERFACE_FLAGS
         DBUS_INTERFACE_SOURCES
-        FEATURE_DEPENDENCIES
         COMPILE_OPTIONS
         LINK_OPTIONS
         MOC_OPTIONS
@@ -371,6 +533,12 @@ macro(qt_internal_setup_default_target_function_options)
         TARGET_COPYRIGHT
     )
 
+    _qt_internal_get_sbom_add_target_common_options(
+        __qt_internal_sbom_optional_args
+        __qt_internal_sbom_single_args
+        __qt_internal_sbom_multi_args
+    )
+
     # Collection of arguments so they can be shared across qt_internal_add_executable
     # and qt_internal_add_test_helper.
     set(__qt_internal_add_executable_optional_args
@@ -380,7 +548,11 @@ macro(qt_internal_setup_default_target_function_options)
         DELAY_RC
         DELAY_TARGET_INFO
         QT_APP
+        QT_TEST
+        QT_MANUAL_TEST
+        QT_BENCHMARK_TEST
         NO_UNITY_BUILD
+        ${__qt_internal_sbom_optional_args}
     )
     set(__qt_internal_add_executable_single_args
         CORE_LIBRARY
@@ -388,10 +560,12 @@ macro(qt_internal_setup_default_target_function_options)
         INSTALL_DIRECTORY
         VERSION
         ${__default_target_info_args}
+        ${__qt_internal_sbom_single_args}
     )
     set(__qt_internal_add_executable_multi_args
         ${__default_private_args}
         ${__default_public_args}
+        ${__qt_internal_sbom_multi_args}
     )
 endmacro()
 
@@ -427,7 +601,15 @@ function(qt_internal_setup_cmake_config_postfix)
             set(default_cmake_debug_postfix "d")
         endif()
     elseif(APPLE)
-        set(default_cmake_debug_postfix "_debug")
+        # Only add a suffix for explicit no-framework builds.
+        # For framework builds the library inside the framework
+        # is always unsuffixed, and we want to match that for
+        # plugins and other non-framework (static) libraries.
+        if(NOT (QT_FEATURE_framework OR FEATURE_framework
+           # Account for default in configure.json being ON
+           OR (NOT DEFINED QT_FEATURE_framework AND NOT DEFINED FEATURE_framework)))
+            set(default_cmake_debug_postfix "_debug")
+        endif()
     endif()
 
     set(custom_postfix_vars "")
@@ -658,13 +840,12 @@ function(qt_internal_export_additional_targets_file)
 
     qt_internal_append_export_additional_targets()
 
-    set_property(GLOBAL APPEND PROPERTY _qt_export_additional_targets_ids "${id}")
     set_property(GLOBAL APPEND
         PROPERTY _qt_export_additional_targets_export_name_prefix_${id} "${arg_EXPORT_NAME_PREFIX}")
     set_property(GLOBAL APPEND
         PROPERTY _qt_export_additional_targets_config_install_dir_${id} "${arg_CONFIG_INSTALL_DIR}")
 
-    qt_add_list_file_finalizer(qt_internal_export_additional_targets_file_finalizer)
+    qt_add_list_file_finalizer(qt_internal_export_additional_targets_file_finalizer "${id}")
 endfunction()
 
 function(qt_internal_get_export_additional_targets_id export_name out_var)
@@ -730,19 +911,9 @@ function(qt_internal_validate_export_additional_targets)
     set(arg_TARGET_EXPORT_NAMES "${arg_TARGET_EXPORT_NAMES}" PARENT_SCOPE)
 endfunction()
 
-# The finalizer might be called multiple times in the same scope, but only the first one will
-# process all the ids.
-function(qt_internal_export_additional_targets_file_finalizer)
-    get_property(ids GLOBAL PROPERTY _qt_export_additional_targets_ids)
-
-    foreach(id ${ids})
-        qt_internal_export_additional_targets_file_handler("${id}")
-    endforeach()
-
-    set_property(GLOBAL PROPERTY _qt_export_additional_targets_ids "")
-endfunction()
-
-function(qt_internal_export_additional_targets_file_handler id)
+# The finalizer might be called multiple times in the same directory scope, but it will only process
+# one specific id.
+function(qt_internal_export_additional_targets_file_finalizer id)
     get_property(arg_EXPORT_NAME_PREFIX GLOBAL PROPERTY
         _qt_export_additional_targets_export_name_prefix_${id})
     get_property(arg_CONFIG_INSTALL_DIR GLOBAL PROPERTY
@@ -901,6 +1072,7 @@ endif()\n")
         set(write_implib FALSE)
         set(write_soname FALSE)
         set(write_objects FALSE)
+        set(write_link_dependencies FALSE)
         set(write_location TRUE)
 
         if(target_type STREQUAL "SHARED_LIBRARY")
@@ -911,6 +1083,7 @@ endif()\n")
             else()
                 set(write_soname TRUE)
             endif()
+            set(write_link_dependencies TRUE)
         elseif(target_type STREQUAL "OBJECT_LIBRARY")
             set(write_objects TRUE)
             set(write_location FALSE)
@@ -925,6 +1098,9 @@ endif()\n")
             endif()
             if(write_soname)
                 string(APPEND content "get_target_property(_qt_imported_soname ${full_target} IMPORTED_SONAME_${uc_release_cfg})\n")
+            endif()
+            if(write_link_dependencies)
+                string(APPEND content "get_target_property(_qt_imported_link_dependencies ${full_target} IMPORTED_LINK_DEPENDENT_LIBRARIES_${uc_release_cfg})\n")
             endif()
             if(write_objects)
                 string(APPEND content "get_target_property(_qt_imported_objects ${full_target} IMPORTED_OBJECTS_${uc_release_cfg})\n")
@@ -941,6 +1117,9 @@ endif()\n")
         endif()
         if(write_soname)
             string(APPEND content "get_target_property(_qt_imported_soname_default ${full_target} IMPORTED_SONAME_$\{QT_DEFAULT_IMPORT_CONFIGURATION})\n")
+        endif()
+        if(write_link_dependencies)
+            string(APPEND content "get_target_property(_qt_imported_link_dependencies_default ${full_target} IMPORTED_LINK_DEPENDENT_LIBRARIES_$\{QT_DEFAULT_IMPORT_CONFIGURATION})\n")
         endif()
         if(write_objects)
             string(APPEND content "get_target_property(_qt_imported_objects_default ${full_target} IMPORTED_OBJECTS_$\{QT_DEFAULT_IMPORT_CONFIGURATION})\n")
@@ -978,6 +1157,12 @@ if(_qt_imported_soname${var_suffix})
     set_property(TARGET ${full_target} PROPERTY IMPORTED_SONAME${property_suffix} \"$\{_qt_imported_soname${var_suffix}}\")
 endif()")
             endif()
+            if(write_link_dependencies)
+                string(APPEND content "
+if(_qt_imported_link_dependencies${var_suffix})
+    set_property(TARGET ${full_target} PROPERTY IMPORTED_LINK_DEPENDENT_LIBRARIES${property_suffix} \"$\{_qt_imported_link_dependencies${var_suffix}}\")
+endif()")
+            endif()
             if(write_objects)
                 string(APPEND content "
 if(_qt_imported_objects${var_suffix})
@@ -998,6 +1183,8 @@ unset(_qt_imported_location)
 unset(_qt_imported_location_default)
 unset(_qt_imported_soname)
 unset(_qt_imported_soname_default)
+unset(_qt_imported_link_dependencies)
+unset(_qt_imported_link_dependencies_default)
 unset(_qt_imported_objects)
 unset(_qt_imported_objects_default)
 unset(_qt_imported_clr)
@@ -1015,25 +1202,51 @@ unset(_qt_imported_configs)")
 endfunction()
 
 function(qt_internal_export_modern_cmake_config_targets_file)
-    cmake_parse_arguments(__arg "" "EXPORT_NAME_PREFIX;CONFIG_INSTALL_DIR" "TARGETS" ${ARGN})
+    cmake_parse_arguments(arg
+        ""
+        "EXPORT_NAME_PREFIX;CONFIG_BUILD_DIR;CONFIG_INSTALL_DIR"
+        "TARGETS"
+        ${ARGN}
+    )
 
-    set(export_name "${__arg_EXPORT_NAME_PREFIX}VersionlessTargets")
-    foreach(target ${__arg_TARGETS})
-        if (TARGET "${target}Versionless")
-            continue()
-        endif()
+    if("${arg_TARGETS}" STREQUAL "")
+        message(FATAL_ERROR "Target list is empty")
+    endif()
 
-        add_library("${target}Versionless" INTERFACE)
-        target_link_libraries("${target}Versionless" INTERFACE "${target}")
-        set_target_properties("${target}Versionless" PROPERTIES
-            EXPORT_NAME "${target}"
-            _qt_is_versionless_target "TRUE")
-        set_property(TARGET "${target}Versionless"
-                     APPEND PROPERTY EXPORT_PROPERTIES _qt_is_versionless_target)
+    if("${arg_CONFIG_BUILD_DIR}" STREQUAL "")
+        message(FATAL_ERROR "CONFIG_BUILD_DIR is not specified")
+    endif()
 
-        qt_install(TARGETS "${target}Versionless" EXPORT ${export_name})
-    endforeach()
-    qt_install(EXPORT ${export_name} NAMESPACE Qt:: DESTINATION "${__arg_CONFIG_INSTALL_DIR}")
+    if("${arg_CONFIG_INSTALL_DIR}" STREQUAL "")
+        message(FATAL_ERROR "CONFIG_INSTALL_DIR is not specified")
+    endif()
+
+    if("${arg_EXPORT_NAME_PREFIX}" STREQUAL "")
+        message(FATAL_ERROR "EXPORT_NAME_PREFIX is not specified")
+    endif()
+
+    set(versionless_targets ${arg_TARGETS})
+
+    # CMake versions < 3.18 compatibility code. Creates the mimics of the versioned libraries.
+    set(versionless_targets_export "${arg_CONFIG_BUILD_DIR}/${arg_EXPORT_NAME_PREFIX}VersionlessTargets.cmake")
+    configure_file("${QT_CMAKE_DIR}/QtVersionlessTargets.cmake.in"
+        "${versionless_targets_export}"
+        @ONLY
+    )
+
+    # CMake versions >= 3.18 code. Create the versionless ALIAS targets.
+    set(alias_export "${arg_CONFIG_BUILD_DIR}/${arg_EXPORT_NAME_PREFIX}VersionlessAliasTargets.cmake")
+    configure_file("${QT_CMAKE_DIR}/QtVersionlessAliasTargets.cmake.in"
+        "${alias_export}"
+        @ONLY
+    )
+
+    qt_install(FILES
+        "${alias_export}"
+        "${versionless_targets_export}"
+        DESTINATION "${arg_CONFIG_INSTALL_DIR}"
+        COMPONENT Devel
+    )
 endfunction()
 
 function(qt_internal_create_tracepoints name tracepoints_file)
@@ -1061,9 +1274,10 @@ function(qt_internal_create_tracepoints name tracepoints_file)
         endif()
 
         if(NOT "${QT_HOST_PATH}" STREQUAL "")
+            qt_internal_get_host_info_var_prefix(host_info_var_prefix)
             qt_path_join(tracegen
                 "${QT_HOST_PATH}"
-                "${QT${PROJECT_VERSION_MAJOR}_HOST_INFO_LIBEXECDIR}"
+                "${${host_info_var_prefix}_LIBEXECDIR}"
                 "tracegen")
         else()
             set(tracegen "${QT_CMAKE_EXPORT_NAMESPACE}::tracegen")
@@ -1098,17 +1312,21 @@ function(qt_internal_generate_tracepoints name provider)
         endforeach()
 
         if(NOT "${QT_HOST_PATH}" STREQUAL "")
+            qt_internal_get_host_info_var_prefix(host_info_var_prefix)
             qt_path_join(tracepointgen
                 "${QT_HOST_PATH}"
-                "${QT${PROJECT_VERSION_MAJOR}_HOST_INFO_LIBEXECDIR}"
+                "${${host_info_var_prefix}_LIBEXECDIR}"
                 "tracepointgen")
         else()
             set(tracepointgen "${QT_CMAKE_EXPORT_NAMESPACE}::tracepointgen")
         endif()
 
+        add_custom_target(${name}_${provider_name}_sync)
+        qt_internal_add_sync_header_dependencies(${name}_${provider_name}_sync ${name})
+
         add_custom_command(OUTPUT "${tracepoints_path}"
             COMMAND ${tracepointgen} ${provider_name} "${tracepoints_path}"  "I$<JOIN:$<TARGET_PROPERTY:${name},INCLUDE_DIRECTORIES>,;>" ${absolute_file_paths}
-            DEPENDS ${absolute_file_paths}
+            DEPENDS ${absolute_file_paths} ${name}_${provider_name}_sync
             VERBATIM)
         add_custom_target(${name}_${provider_name}_tracepoints_file DEPENDS "${tracepoints_path}")
         add_dependencies(${name} ${name}_${provider_name}_tracepoints_file)
@@ -1131,9 +1349,10 @@ function(qt_internal_generate_tracepoints name provider)
         endif()
 
         if(NOT "${QT_HOST_PATH}" STREQUAL "")
+            qt_internal_get_host_info_var_prefix(host_info_var_prefix)
             qt_path_join(tracegen
                 "${QT_HOST_PATH}"
-                "${QT${PROJECT_VERSION_MAJOR}_HOST_INFO_LIBEXECDIR}"
+                "${${host_info_var_prefix}_LIBEXECDIR}"
                 "tracegen")
         else()
             set(tracegen "${QT_CMAKE_EXPORT_NAMESPACE}::tracegen")
@@ -1308,6 +1527,7 @@ endfunction()
 # Needed to allow selectively applying certain flags via PlatformXInternal targets.
 function(qt_internal_mark_as_internal_library target)
     set_target_properties(${target} PROPERTIES _qt_is_internal_library TRUE)
+    set_property(TARGET "${target}" APPEND PROPERTY EXPORT_PROPERTIES "_qt_is_internal_library")
     qt_internal_mark_as_internal_target(${target})
 endfunction()
 
@@ -1317,6 +1537,7 @@ endfunction()
 # Needed to allow selectively applying certain flags via PlatformXInternal targets.
 function(qt_internal_mark_as_internal_target target)
     set_target_properties(${target} PROPERTIES _qt_is_internal_target TRUE)
+    set_property(TARGET "${target}" APPEND PROPERTY EXPORT_PROPERTIES "_qt_is_internal_target")
 endfunction()
 
 # Marks a target with a property to skip it adding it as a dependency when building examples as
@@ -1338,6 +1559,7 @@ function(qt_internal_is_target_skipped_for_examples target out_var)
 endfunction()
 
 function(qt_internal_link_internal_platform_for_object_library target)
+    cmake_parse_arguments(arg "" "PARENT_TARGET" "" ${ARGN})
     # We need to apply iOS bitcode flags to object libraries that are associated with internal
     # modules or plugins (e.g. object libraries added by qt_internal_add_resource,
     # qt_internal_add_plugin, etc.)
@@ -1345,6 +1567,13 @@ function(qt_internal_link_internal_platform_for_object_library target)
     # present by default.
     # Achieve this by compiling the cpp files with the PlatformModuleInternal compile flags.
     target_link_libraries("${target}" PRIVATE Qt::PlatformModuleInternal)
+
+    if(arg_PARENT_TARGET AND TARGET "${arg_PARENT_TARGET}")
+        foreach(property QT_SKIP_WARNINGS_ARE_ERRORS _qt_internal_use_exceptions)
+            set_property(TARGET "${target}" PROPERTY
+                ${property} "$<BOOL:$<TARGET_PROPERTY:${arg_PARENT_TARGET},${property}>>")
+        endforeach()
+    endif()
 endfunction()
 
 # Use ${dep_target}'s include dirs when building ${target}.
@@ -1459,15 +1688,35 @@ function(qt_internal_get_target_sources_property out_var)
     set(${out_var} "${${out_var}}" PARENT_SCOPE)
 endfunction()
 
-# This function collects target properties that contain generator expressions and needs to be
-# exported. This function is needed since the CMake EXPORT_PROPERTIES property doesn't support
-# properties that contain generator expressions.
-# Usage: qt_internal_add_genex_properties_export(target properties...)
-function(qt_internal_add_genex_properties_export target)
+# This function collects target properties that need to be exported without using CMake's
+# EXPORT_PROPERTIES.
+# Use cases:
+#  - Properties named INTERFACE_foo (which CMake doesn't allow exporting)
+#  - Properties that contain generator expressions (need special handling for multi-config builds)
+# Usage:
+#  qt_internal_add_custom_properties_to_export(target
+#      PROPERTIES property1 [property2 ...]
+#      PROPERTIES_WITHOUT_GENEXES property3 [property4 ...]
+#  )
+# Arguments:
+#   PROPERTIES
+#     should contain names of properties that can differ in multi-config builds (e.g. paths)
+#   PROPERTIES_WITHOUT_GENEXES
+#     should contain names of properties that will always have the same value in multi config
+#     builds (e.g, feature values).
+function(qt_internal_add_custom_properties_to_export target)
+    set(opt_args "")
+    set(single_args "")
+    set(multi_args
+        PROPERTIES
+        PROPERTIES_WITHOUT_GENEXES
+    )
+    cmake_parse_arguments(PARSE_ARGV 1 arg "${opt_args}" "${single_args}" "${multi_args}")
+    _qt_internal_validate_all_args_are_parsed(arg)
+
     get_cmake_property(is_multi_config GENERATOR_IS_MULTI_CONFIG)
 
-    set(config_check_begin "")
-    set(config_check_end "")
+    # Prepare multi-config helper genexes.
     if(is_multi_config)
         list(GET CMAKE_CONFIGURATION_TYPES 0 first_config_type)
 
@@ -1475,7 +1724,7 @@ function(qt_internal_add_genex_properties_export target)
         # The check is only applicable to the 'main' configuration. If user project doesn't use
         # multi-config generator, then the check supposed to return true and the value from the
         # 'main' configuration supposed to be used.
-        string(JOIN "" check_if_config_empty
+        string(CONCAT check_if_config_empty
             "$<1:$><NOT:"
                 "$<1:$><BOOL:"
                     "$<1:$><CONFIG$<ANGLE-R>"
@@ -1485,7 +1734,7 @@ function(qt_internal_add_genex_properties_export target)
 
         # The genex snippet is evaluated to '$<CONFIG:'Qt config type'>' in the generated cmake
         # file and checks if the config that user uses matches the generated cmake file config.
-        string(JOIN "" check_user_config
+        string(CONCAT check_user_config
             "$<1:$><CONFIG:$<CONFIG>$<ANGLE-R>"
         )
 
@@ -1496,34 +1745,70 @@ function(qt_internal_add_genex_properties_export target)
         # user project according to the user config type.
         # All genexes need to be escaped properly to protect them from evaluation by the
         # file(GENERATE call in the qt_internal_export_genex_properties function.
-        string(JOIN "" config_check_begin
+        string(CONCAT config_check_begin_multi
             "$<1:$><"
                 "$<1:$><OR:"
                     "${check_user_config}"
                     "$<$<CONFIG:${first_config_type}>:$<COMMA>${check_if_config_empty}>"
                 "$<ANGLE-R>:"
         )
-        set(config_check_end "$<ANGLE-R>")
+        set(config_check_end_multi "$<ANGLE-R>")
     endif()
     set(target_name "${QT_CMAKE_EXPORT_NAMESPACE}::${target}")
-    foreach(property IN LISTS ARGN)
-        set(target_property_genex "$<TARGET_PROPERTY:${target_name},${property}>")
-        # All properties that contain lists need to be protected of processing by JOIN genex calls.
-        # So this escapes the semicolons for these list.
-        set(target_property_list_escape
-            "$<JOIN:$<GENEX_EVAL:${target_property_genex}>,\;>")
-        set(property_value
-            "\"${config_check_begin}${target_property_list_escape}${config_check_end}\"")
-        set_property(TARGET ${target} APPEND PROPERTY _qt_export_genex_properties_content
-            "${property} ${property_value}")
+
+    set(property_sources
+        PROPERTIES
+        PROPERTIES_WITHOUT_GENEXES
+    )
+
+    foreach(property_source IN LISTS property_sources)
+        if(property_source STREQUAL "PROPERTIES")
+            # Properties with genexes need multi-config specific handling.
+            set(config_check_begin "${config_check_begin_multi}")
+            set(config_check_end "${config_check_end_multi}")
+
+            set(output_property "_qt_export_custom_properties_content")
+        elseif(property_source STREQUAL "PROPERTIES_WITHOUT_GENEXES")
+            # Properties without genexes don't need the config checks.
+            set(config_check_begin "")
+            set(config_check_end "")
+
+            set(output_property "_qt_export_custom_properties_no_genexes_content")
+        else()
+            message(FATAL_ERROR "Invalid type of property source" ${property_source}"")
+        endif()
+
+        foreach(property IN LISTS arg_${property_source})
+            set(target_property_genex "$<TARGET_PROPERTY:${target_name},${property}>")
+            # All properties that contain lists need to be protected of processing by JOIN genex
+            # calls. So this escapes the semicolons for these list.
+            set(target_property_list_escape
+                "$<JOIN:$<GENEX_EVAL:${target_property_genex}>,\;>")
+            set(property_value
+                "\"${config_check_begin}${target_property_list_escape}${config_check_end}\"")
+            set_property(TARGET ${target} APPEND PROPERTY "${output_property}"
+                "${property} ${property_value}")
+        endforeach()
     endforeach()
 endfunction()
 
-# This function executes generator expressions for the properties that are added by the
-# qt_internal_add_genex_properties_export function and sets the calculated values to the
-# corresponding properties in the generated ExtraProperties.cmake file. The file then needs to be
-# included after the target creation routines in Config.cmake files. It also supports Multi-Config
-# builds.
+# This function generates and installs ${EXPORT_NAME_PREFIX}ExportProperties-$<CONFIG>.cmake files
+# to be included from inside a FooConfig.cmake file.
+#
+# The file contains set_property(TARGET PROPERTY) assignments that append values to a given target's
+# properties as added by the qt_internal_add_custom_properties_to_export function.
+#
+# The assigned values are computed from the result of executing the generator expressions that were
+# stored in the properties, and are wrapped in config-specific genexes in a multi-config build.
+#
+# Example output:
+# set_property(TARGET Qt6::Foo PROPERTY MY_GENEX_PROP
+#                     "$<$<OR:$<CONFIG:RelWithDebInfo>,$<NOT:$<BOOL:$<CONFIG>>>>:OneReleaseVal>")
+# set_property(TARGET Qt6::Foo PROPERTY MY_REGULAR_PROP "SecondValue")
+# include("${CMAKE_CURRENT_LIST_DIR}/Qt6FooExtraProperties-Debug.cmake")
+# inside the include
+# set_property(TARGET Qt6::Foo APPEND PROPERTY MY_GENEX_PROP "$<$<OR:$<CONFIG:Debug>>:OneDebugVal>")
+#
 # Arguments:
 # EXPORT_NAME_PREFIX:
 #    The portion of the file name before ExtraProperties.cmake
@@ -1532,13 +1817,15 @@ endfunction()
 # TARGETS:
 #    The internal target names.
 function(qt_internal_export_genex_properties)
-    set(option_args "")
+    set(opt_args "")
     set(single_args
         EXPORT_NAME_PREFIX
         CONFIG_INSTALL_DIR
     )
-    set(multi_args TARGETS)
-    cmake_parse_arguments(arg "${option_args}" "${single_args}" "${multi_args}" ${ARGN})
+    set(multi_args
+        TARGETS
+    )
+    cmake_parse_arguments(PARSE_ARGV 0 arg "${opt_args}" "${single_args}" "${multi_args}")
 
     if(NOT arg_EXPORT_NAME_PREFIX)
         message(FATAL_ERROR "qt_internal_export_genex_properties: "
@@ -1550,24 +1837,36 @@ function(qt_internal_export_genex_properties)
             "TARGETS argument must contain at least one target")
     endif()
 
+    # TODO: Handling more than one target won't work correctly atm due to trying to create and
+    # install the same file name multiple times for each target.
+    list(LENGTH arg_TARGETS targets_count)
+    if(targets_count GREATER 1)
+        message(AUTHOR_WARNING "qt_internal_export_genex_properties: "
+            "Specifying more than one target is not fully supported yet.")
+    endif()
+
+    get_cmake_property(is_multi_config GENERATOR_IS_MULTI_CONFIG)
+
+    set(should_append "")
+    set(config_suffix "")
+    set(is_first_config "1")
+    if(is_multi_config)
+        list(GET CMAKE_CONFIGURATION_TYPES 0 first_config_type)
+
+        # The non-genex properties should only go to the first config file.
+        set(is_first_config "$<CONFIG:${first_config_type}>")
+
+        set(config_suffix "$<$<NOT:${is_first_config}>:-$<CONFIG>>")
+        # If the generated file belongs to the 'main' config type, we should set property
+        # but not append it.
+        string(JOIN "" should_append
+            "$<$<NOT:${is_first_config}>: APPEND>")
+    endif()
+
     foreach(target IN LISTS arg_TARGETS)
-        get_cmake_property(is_multi_config GENERATOR_IS_MULTI_CONFIG)
-
         set(output_file_base_name "${arg_EXPORT_NAME_PREFIX}ExtraProperties")
-        set(should_append "")
-        set(config_suffix "")
-        if(is_multi_config)
-            list(GET CMAKE_CONFIGURATION_TYPES 0 first_config_type)
-            set(config_suffix "$<$<NOT:$<CONFIG:${first_config_type}>>:-$<CONFIG>>")
-            # If the generated file belongs to the 'main' config type, we should set property
-            # but not append it.
-            string(JOIN "" should_append
-                "$<$<NOT:$<CONFIG:${first_config_type}>>: APPEND>")
-        endif()
         set(file_name "${output_file_base_name}${config_suffix}.cmake")
-
-        qt_path_join(output_file "${arg_CONFIG_INSTALL_DIR}"
-            "${file_name}")
+        qt_path_join(output_file "${arg_CONFIG_INSTALL_DIR}" "${file_name}")
 
         if(NOT IS_ABSOLUTE "${output_file}")
             qt_path_join(output_file "${QT_BUILD_DIR}" "${output_file}")
@@ -1575,17 +1874,51 @@ function(qt_internal_export_genex_properties)
 
         set(target_name "${QT_CMAKE_EXPORT_NAMESPACE}::${target}")
 
+        # Common genex helpers.
         string(JOIN "" set_property_begin "set_property(TARGET "
             "${target_name}${should_append} PROPERTY "
         )
         set(set_property_end ")")
         set(set_property_glue "${set_property_end}\n${set_property_begin}")
+        set(t_prop "TARGET_PROPERTY:${target}")
+
+        # Handle the properties that contain genexes.
         set(property_list
-            "$<GENEX_EVAL:$<TARGET_PROPERTY:${target},_qt_export_genex_properties_content>>")
-        string(JOIN "" set_property_content "${set_property_begin}"
+            "$<GENEX_EVAL:$<${t_prop},_qt_export_custom_properties_content>>")
+        set(property_has_values "$<BOOL:${property_list}>")
+        string(CONCAT set_property_content
+            "${set_property_begin}"
             "$<JOIN:${property_list},${set_property_glue}>"
             "${set_property_end}")
 
+        string(CONCAT set_property_content_conditional
+            "$<${property_has_values}:"
+            "\n${set_property_content}"
+            ">")
+
+        # We need to ensure the no genexes content only gets added to the first config file.
+        set(property_no_genexes_list
+            "$<GENEX_EVAL:$<${t_prop},_qt_export_custom_properties_no_genexes_content>>")
+        set(property_no_genexes_has_values "$<BOOL:${property_no_genexes_list}>")
+        string(CONCAT property_no_genexes_has_values_and_first_config
+            "$<AND:${property_no_genexes_has_values},${is_first_config}>")
+
+        string(CONCAT set_property_no_genexes_content
+            "${set_property_begin}"
+            "$<JOIN:${property_no_genexes_list},${set_property_glue}>"
+            "${set_property_end}")
+
+        string(CONCAT set_property_no_genexes_content_conditional
+            "$<${property_no_genexes_has_values_and_first_config}:"
+            "\n${set_property_no_genexes_content}"
+            ">")
+
+        # Final content is generated if at least one genex-carrying property has a value,
+        # or if we are in the first config and at least one no-genex property has a value.
+        set(content_available_condition
+            "$<OR:${property_has_values},${property_no_genexes_has_values_and_first_config}>")
+
+        set(config_includes_string "")
         if(is_multi_config)
             set(config_includes "")
             foreach(config IN LISTS CMAKE_CONFIGURATION_TYPES)
@@ -1598,17 +1931,89 @@ function(qt_internal_export_genex_properties)
             endforeach()
             list(JOIN config_includes "\n" config_includes_string)
             set(config_includes_string
-                "\n$<$<CONFIG:${first_config_type}>:${config_includes_string}>")
+                "\n$<${is_first_config}:${config_includes_string}>")
+
+            # Config includes should be included if we have properties with genexes, which are
+            # config specific.
+            string(CONCAT config_includes_string_conditional
+                "$<${property_has_values}:"
+                "${config_includes_string}"
+                ">")
         endif()
 
+        string(CONCAT final_content
+            "$<${content_available_condition}:"
+            "${set_property_content_conditional}"
+            "${set_property_no_genexes_content_conditional}"
+            "${config_includes_string_conditional}"
+            ">")
+
         file(GENERATE OUTPUT "${output_file}"
-            CONTENT "$<$<BOOL:${property_list}>:${set_property_content}${config_includes_string}>"
-            CONDITION "$<BOOL:${property_list}>"
+            CONTENT "${final_content}"
+            CONDITION "${content_available_condition}"
+        )
+
+        qt_install(FILES "$<${content_available_condition}:${output_file}>"
+            DESTINATION "${arg_CONFIG_INSTALL_DIR}"
+            COMPONENT Devel
         )
     endforeach()
+endfunction()
 
-    qt_install(FILES "$<$<BOOL:${property_list}>:${output_file}>"
-        DESTINATION "${arg_CONFIG_INSTALL_DIR}"
-        COMPONENT Devel
+# A small wrapper for adding the Platform target, and a building block for the PlatformXInternal
+# and GlobalConfig INTERFACE targets to apply common options.
+function(qt_internal_add_platform_target target)
+    _qt_internal_add_library("${target}" INTERFACE)
+    qt_internal_add_target_aliases("${target}")
+
+    # The platform targets should never be promoted to global via the
+    # _qt_internal_promote_3rd_party_target_to_global command.
+    set_property(TARGET "${target}" PROPERTY _qt_should_skip_3rd_party_global_promotion TRUE)
+    set_property(TARGET "${target}" APPEND PROPERTY EXPORT_PROPERTIES
+        "_qt_should_skip_3rd_party_global_promotion")
+endfunction()
+
+# A small wrapper for adding the PlatformXInternal and GlobalConfig INTERFACE targets to apply
+# common options.
+# They can't be added via qt_internal_add_module, because it automatically links to the
+# PlatformInternal targets creating a cyclic dependency.
+function(qt_internal_add_platform_internal_target target)
+    qt_internal_add_platform_target("${target}")
+    qt_internal_mark_as_internal_library("${target}")
+
+    qt_internal_add_sbom("${target}"
+        SBOM_ENTITY_TYPE QT_MODULE
     )
+endfunction()
+
+# A small wrapper for passing --dynamic-list to the linker. It will ensure that the symbols will
+# be mangled when qt is compiled in a namespace
+function(qt_internal_apply_dynamic_list_linker_flags target dynlist_template)
+    if(NOT QT_FEATURE_reduce_relocations)
+        return()
+    endif()
+
+    string(REPLACE ".in" "" dynlist_file "${dynlist_template}")
+    set(dynlist_file_abspath "${CMAKE_CURRENT_BINARY_DIR}/${dynlist_file}")
+
+    if(QT_NAMESPACE)
+        set(QT_NAMESPACE_PREFIX "${QT_NAMESPACE}::")
+        set(QT_NAMESPACE_MANGLE_SUFFIX "_${QT_NAMESPACE}")
+    else()
+        set(QT_NAMESPACE_PREFIX "")
+        set(QT_NAMESPACE_MANGLE_SUFFIX "")
+    endif()
+
+    configure_file(
+        "${dynlist_template}"
+        "${dynlist_file_abspath}"
+    )
+
+    qt_internal_extend_target(${target}
+        SOURCES
+            "${dynlist_template}"
+            "${dynlist_file_abspath}"
+    )
+
+    target_link_options(${target} PRIVATE "LINKER:--dynamic-list=${dynlist_file_abspath}")
 endfunction()

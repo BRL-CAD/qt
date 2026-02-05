@@ -19,6 +19,7 @@
 
 #include <QtCore/qobject_impl.h>
 #include <QtCore/qbindingstorage.h>
+#include <QtCore/qtcoreexports.h>
 
 #include <chrono>
 
@@ -89,9 +90,11 @@ public:
     QDynamicMetaObjectData *metaObject;
     QBindingStorage bindingStorage;
 
-    // ### Qt7: Make this return a const QMetaObject *. You should not mess with
-    //          the metaobjects of existing objects.
+#if QT_CORE_REMOVED_SINCE(6, 9) && defined(Q_COMPILER_MANGLES_RETURN_TYPE)
     QMetaObject *dynamicMetaObject() const;
+#else
+    const QMetaObject *dynamicMetaObject() const;
+#endif
 
 #ifdef QT_DEBUG
     enum { CheckForParentChildLoopsWarnDepth = 4096 };
@@ -141,8 +144,14 @@ public:
     bool moveToThread(QThread *thread QT6_DECL_NEW_OVERLOAD_TAIL);
 
     int startTimer(int interval, Qt::TimerType timerType = Qt::CoarseTimer);
+
+#if QT_CORE_REMOVED_SINCE(6, 8)
     int startTimer(std::chrono::milliseconds time, Qt::TimerType timerType = Qt::CoarseTimer);
+#endif
+    int startTimer(std::chrono::nanoseconds time, Qt::TimerType timerType = Qt::CoarseTimer);
+
     void killTimer(int id);
+    void killTimer(Qt::TimerId id);
 
     template<typename T>
     T findChild(QAnyStringView aName, Qt::FindChildOptions options = Qt::FindChildrenRecursively) const
@@ -232,7 +241,7 @@ public:
             constexpr int FunctorArgumentCount = QtPrivate::ComputeFunctorArgumentCount<std::decay_t<Func2>, typename SignalType::Arguments>::Value;
             [[maybe_unused]]
             constexpr int SlotArgumentCount = (FunctorArgumentCount >= 0) ? FunctorArgumentCount : 0;
-            typedef typename QtPrivate::FunctorReturnType<std::decay_t<Func2>, typename QtPrivate::List_Left<typename SignalType::Arguments, SlotArgumentCount>::Value>::Value SlotReturnType;
+            typedef typename QtPrivate::FunctorReturnType<std::decay_t<Func2>, typename QtPrivate::List_Left<typename SignalType::Arguments, SlotArgumentCount>::Value>::type SlotReturnType;
 
             static_assert((QtPrivate::AreArgumentsCompatible<SlotReturnType, typename SignalType::ReturnType>::value),
                             "Return type of the slot is not compatible with the return type of the signal.");
@@ -378,7 +387,10 @@ protected:
 
 private:
     void doSetObjectName(const QString &name);
+#if QT_CORE_REMOVED_SINCE(6, 10)
     bool doSetProperty(const char *name, const QVariant *lvalue, QVariant *rvalue);
+#endif
+    bool doSetProperty(const char *name, const QVariant &value, QVariant *rvalue);
 
     Q_DISABLE_COPY(QObject)
 
@@ -400,38 +412,27 @@ inline QMetaObject::Connection QObject::connect(const QObject *asender, const ch
 #if QT_CORE_INLINE_IMPL_SINCE(6, 6)
 bool QObject::setProperty(const char *name, const QVariant &value)
 {
-    return doSetProperty(name, &value, nullptr);
+    return doSetProperty(name, value, nullptr);
 }
 #endif // inline since 6.6
 bool QObject::setProperty(const char *name, QVariant &&value)
 {
-    return doSetProperty(name, &value, &value);
+    return doSetProperty(name, value, &value);
 }
 
 template <class T>
 inline T qobject_cast(QObject *object)
 {
-    static_assert(std::is_pointer_v<T>,
-                  "qobject_cast requires to cast towards a pointer type");
-    typedef typename std::remove_cv<typename std::remove_pointer<T>::type>::type ObjType;
-    static_assert(QtPrivate::HasQ_OBJECT_Macro<ObjType>::Value,
-                    "qobject_cast requires the type to have a Q_OBJECT macro");
-    return static_cast<T>(ObjType::staticMetaObject.cast(object));
+    return QtPrivate::qobject_cast_helper<T>(object);
 }
 
 template <class T>
 inline T qobject_cast(const QObject *object)
 {
-    static_assert(std::is_pointer_v<T>,
-                  "qobject_cast requires to cast towards a pointer type");
     static_assert(std::is_const_v<std::remove_pointer_t<T>>,
                   "qobject_cast cannot cast away constness (use const_cast)");
-    typedef typename std::remove_cv<typename std::remove_pointer<T>::type>::type ObjType;
-    static_assert(QtPrivate::HasQ_OBJECT_Macro<ObjType>::Value,
-                      "qobject_cast requires the type to have a Q_OBJECT macro");
-    return static_cast<T>(ObjType::staticMetaObject.cast(object));
+    return QtPrivate::qobject_cast_helper<T>(object);
 }
-
 
 template <class T> constexpr const char * qobject_interface_iid() = delete;
 template <class T> inline T *

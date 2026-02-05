@@ -1,5 +1,6 @@
 // Copyright (C) 2016 The Qt Company Ltd.
 // SPDX-License-Identifier: LicenseRef-Qt-Commercial OR LGPL-3.0-only OR GPL-2.0-only OR GPL-3.0-only
+// Qt-Security score:significant reason:default
 
 #ifndef QTABLEWIDGET_P_H
 #define QTABLEWIDGET_P_H
@@ -58,11 +59,15 @@ public:
     QTableModel(int rows, int columns, QTableWidget *parent);
     ~QTableModel();
 
+    inline QTableWidget *view() const { return qobject_cast<QTableWidget *>(QObject::parent()); }
+
     bool insertRows(int row, int count = 1, const QModelIndex &parent = QModelIndex()) override;
     bool insertColumns(int column, int count = 1, const QModelIndex &parent = QModelIndex()) override;
 
     bool removeRows(int row, int count = 1, const QModelIndex &parent = QModelIndex()) override;
     bool removeColumns(int column, int count = 1, const QModelIndex &parent = QModelIndex()) override;
+
+    bool moveRows(const QModelIndex &sourceParent, int sourceRow, int count, const QModelIndex &destinationParent, int destinationChild) override;
 
     void setItem(int row, int column, QTableWidgetItem *item);
     QTableWidgetItem *takeItem(int row, int column);
@@ -101,10 +106,10 @@ public:
     Qt::ItemFlags flags(const QModelIndex &index) const override;
 
     void sort(int column, Qt::SortOrder order) override;
-    static bool itemLessThan(const QPair<QTableWidgetItem*,int> &left,
-                             const QPair<QTableWidgetItem*,int> &right);
-    static bool itemGreaterThan(const QPair<QTableWidgetItem*,int> &left,
-                                const QPair<QTableWidgetItem*,int> &right);
+    static bool itemLessThan(const std::pair<QTableWidgetItem*,int> &left,
+                             const std::pair<QTableWidgetItem*,int> &right);
+    static bool itemGreaterThan(const std::pair<QTableWidgetItem*,int> &left,
+                                const std::pair<QTableWidgetItem*,int> &right);
 
     void ensureSorted(int column, Qt::SortOrder order, int start, int end);
     QList<QTableWidgetItem *> columnItems(int column) const;
@@ -132,6 +137,7 @@ public:
     bool dropMimeData(const QMimeData *data, Qt::DropAction action,
             int row, int column, const QModelIndex &parent) override;
     Qt::DropActions supportedDropActions() const override;
+    Qt::DropActions supportedDragActions() const override;
 
     QMimeData *internalMimeData()  const;
 
@@ -169,6 +175,7 @@ public:
     void dataChanged(const QModelIndex &topLeft, const QModelIndex &bottomRight);
 
     std::array<QMetaObject::Connection, 10> connections;
+    std::optional<Qt::DropActions> supportedDragActions;
 };
 
 class QTableWidgetItemPrivate

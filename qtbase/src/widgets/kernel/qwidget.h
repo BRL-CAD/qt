@@ -1,5 +1,6 @@
 // Copyright (C) 2016 The Qt Company Ltd.
 // SPDX-License-Identifier: LicenseRef-Qt-Commercial OR LGPL-3.0-only OR GPL-2.0-only OR GPL-3.0-only
+// Qt-Security score:significant reason:default
 
 #ifndef QWIDGET_H
 #define QWIDGET_H
@@ -64,7 +65,6 @@ class QLocale;
 class QGraphicsProxyWidget;
 class QGraphicsEffect;
 class QRasterWindowSurface;
-class QUnifiedToolbarSurface;
 class QPixmap;
 #ifndef QT_NO_DEBUG_STREAM
 class QDebug;
@@ -166,6 +166,7 @@ class Q_WIDGETS_EXPORT QWidget : public QObject, public QPaintDevice
 #if QT_CONFIG(accessibility)
     Q_PROPERTY(QString accessibleName READ accessibleName WRITE setAccessibleName)
     Q_PROPERTY(QString accessibleDescription READ accessibleDescription WRITE setAccessibleDescription)
+    Q_PROPERTY(QString accessibleIdentifier READ accessibleIdentifier WRITE setAccessibleIdentifier)
 #endif
     Q_PROPERTY(Qt::LayoutDirection layoutDirection READ layoutDirection WRITE setLayoutDirection RESET unsetLayoutDirection)
     QDOC_PROPERTY(Qt::WindowFlags windowFlags READ windowFlags WRITE setWindowFlags)
@@ -406,6 +407,8 @@ public:
     void setAccessibleName(const QString &name);
     QString accessibleDescription() const;
     void setAccessibleDescription(const QString &description);
+    QString accessibleIdentifier() const;
+    void setAccessibleIdentifier(const QString &identifier);
 #endif
 
     void setLayoutDirection(Qt::LayoutDirection direction);
@@ -624,6 +627,7 @@ public:
     static QWidget *find(WId);
     inline QWidget *childAt(int x, int y) const;
     QWidget *childAt(const QPoint &p) const;
+    QWidget *childAt(const QPointF &p) const;
 
     void setAttribute(Qt::WidgetAttribute, bool on = true);
     inline bool testAttribute(Qt::WidgetAttribute) const;
@@ -796,7 +800,7 @@ template <> inline const QWidget *qobject_cast<const QWidget*>(const QObject *o)
 #endif // !Q_QDOC
 
 inline QWidget *QWidget::childAt(int ax, int ay) const
-{ return childAt(QPoint(ax, ay)); }
+{ return childAt(QPointF(ax, ay)); }
 
 inline Qt::WindowType QWidget::windowType() const
 { return static_cast<Qt::WindowType>((data->window_flags & Qt::WindowType_Mask).toInt()); }

@@ -39,7 +39,9 @@ private slots:
     void navigation7();
     void navigation8();
     void navigation9();
+#ifndef QT_NO_TEXTHTMLPARSER
     void navigation10();
+#endif
     void movePositionEndOfLine();
     void insertBlock();
     void insertWithBlockSeparator1();
@@ -431,6 +433,7 @@ void tst_QTextCursor::navigation9()
     QCOMPARE(cursor.position(), 15);
 }
 
+#ifndef QT_NO_TEXTHTMLPARSER
 void tst_QTextCursor::navigation10()
 {
     doc->setHtml("<html><p>just a simple paragraph.</p>"
@@ -542,6 +545,7 @@ void tst_QTextCursor::navigation10()
     QVERIFY(ok);
     QCOMPARE(cursor.position(), 1); // a
 }
+#endif
 
 void tst_QTextCursor::insertBlock()
 {
@@ -1502,14 +1506,18 @@ void tst_QTextCursor::insertHtml()
     qCDebug(lcTests) << "sel text after insertion" << cursor.selectedText();
     qCDebug(lcTests) << "text after insertion" << cursor.document()->toPlainText();
     qCDebug(lcTests) << "html after insertion" << cursor.document()->toHtml();
+#if QT_CONFIG(textmarkdownwriter)
     qCDebug(lcTests) << "markdown after insertion" << cursor.document()->toMarkdown();
+#endif
     QCOMPARE(cursor.selectedText(), expectedSelText);
     QCOMPARE(cursor.document()->toPlainText(), expectedText);
     if (auto defaultFont = QFontDatabase::systemFont(QFontDatabase::GeneralFont); QFontInfo(defaultFont).fixedPitch()) {
         qWarning() << defaultFont << "is QFontDatabase::GeneralFont, and is fixedPitch";
         QSKIP("cannot reliably distinguish normal and monospace markdown spans on this system (QTBUG-103484)");
     }
+#if QT_CONFIG(textmarkdownwriter)
     QCOMPARE(cursor.document()->toMarkdown(), expectedMarkdown);
+#endif
 }
 
 #endif // QT_NO_TEXTHTMLPARSER

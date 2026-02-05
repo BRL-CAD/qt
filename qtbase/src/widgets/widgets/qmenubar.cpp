@@ -1,5 +1,6 @@
 // Copyright (C) 2016 The Qt Company Ltd.
 // SPDX-License-Identifier: LicenseRef-Qt-Commercial OR LGPL-3.0-only OR GPL-2.0-only OR GPL-3.0-only
+// Qt-Security score:significant reason:default
 
 #include <qmenubar.h>
 
@@ -14,9 +15,6 @@
 #include <qevent.h>
 #if QT_CONFIG(mainwindow)
 #include <qmainwindow.h>
-#endif
-#if QT_CONFIG(toolbar)
-#include <qtoolbar.h>
 #endif
 #if QT_CONFIG(toolbutton)
 #include <qtoolbutton.h>
@@ -286,15 +284,22 @@ void QMenuBarPrivate::popupAction(QAction *action, bool activateFirst)
         activeMenuPriv->causedPopup.action = action;
 
         QRect adjustedActionRect = actionRect(action);
-        QPoint pos(q->mapToGlobal(QPoint(adjustedActionRect.left(), adjustedActionRect.bottom() + 1)));
+        QPoint popupPos = adjustedActionRect.bottomLeft() + QPoint(0, 1);
+
         //we put the popup menu on the screen containing the bottom-center of the action rect
         QScreen *menubarScreen = q->window()->windowHandle()->screen();
-        QPointer<QScreen> popupScreen = menubarScreen->virtualSiblingAt(pos + QPoint(adjustedActionRect.width() / 2, 0));
+        QPoint screenTestPos = q->mapToGlobal(popupPos + QPoint(adjustedActionRect.width() / 2, 0));
+        QPointer<QScreen> popupScreen = menubarScreen->virtualSiblingAt(screenTestPos);
         if (!popupScreen)
             popupScreen = menubarScreen;
         std::swap(popupScreen, activeMenuPriv->popupScreen);
         const QSize popup_size = activeMenu->sizeHint();
         std::swap(popupScreen, activeMenuPriv->popupScreen);
+
+        // Use screenTestPos.y() for the popup y position. This is the correct global y
+        // consistent with the selected screen in cases where the action rect spans
+        // multiple screens with different scale factors.
+        QPoint pos(q->mapToGlobal(popupPos).x(), screenTestPos.y());
 
         QRect screenRect = popupScreen->geometry();
         pos = QPoint(qMax(pos.x(), screenRect.x()), qMax(pos.y(), screenRect.y()));

@@ -33,10 +33,12 @@
 #include <stdlib.h>
 #include <string.h>
 #include <limits.h>
-#include <vector>
 
-#include <vector>
+#include <QtCore/q20algorithm.h>
+#include <atomic>
+#include <cstdio>
 #include <memory>
+#include <vector>
 
 QT_BEGIN_NAMESPACE
 
@@ -67,10 +69,72 @@ static void saveCoverageTool(const char * appname, bool testfailed, bool install
 #endif
 }
 
+Q_CONSTINIT static QBasicMutex elapsedTimersMutex; // due to the WatchDog thread
 Q_CONSTINIT static QElapsedTimer elapsedFunctionTime;
 Q_CONSTINIT static QElapsedTimer elapsedTotalTime;
 
-#define FOREACH_TEST_LOGGER for (const auto &logger : std::as_const(*QTest::loggers()))
+namespace {
+class LoggerRegistry
+{
+    using LoggersContainer = std::vector<std::shared_ptr<QAbstractTestLogger>>;
+    using SharedLoggersContainer = std::shared_ptr<const LoggersContainer>;
+
+public:
+    void addLogger(std::unique_ptr<QAbstractTestLogger> logger)
+    {
+        // read/update/clone
+        const SharedLoggersContainer currentLoggers = load();
+        auto newLoggers = currentLoggers
+                ? std::make_shared<LoggersContainer>(*currentLoggers)
+                : std::make_shared<LoggersContainer>();
+        newLoggers->emplace_back(std::move(logger));
+        store(std::move(newLoggers));
+    }
+
+    void clear() { store(SharedLoggersContainer{}); }
+
+    auto allLoggers() const
+    {
+        struct LoggersRange
+        {
+            const SharedLoggersContainer loggers;
+
+            auto begin() const
+            {
+                return loggers ? loggers->cbegin() : LoggersContainer::const_iterator{};
+            }
+            auto end() const
+            {
+                return loggers ? loggers->cend() : LoggersContainer::const_iterator{};
+            }
+            bool isEmpty() const { return loggers ? loggers->empty() : true; }
+        };
+
+        return LoggersRange{ load() };
+    }
+
+private:
+#ifdef __cpp_lib_atomic_shared_ptr
+    SharedLoggersContainer load() const { return loggers.load(std::memory_order_acquire); }
+    void store(SharedLoggersContainer newLoggers)
+    {
+        loggers.store(std::move(newLoggers), std::memory_order_release);
+    }
+    std::atomic<SharedLoggersContainer> loggers = nullptr;
+#else
+    SharedLoggersContainer load() const
+    {
+        return std::atomic_load_explicit(&loggers, std::memory_order_acquire);
+    }
+    void store(SharedLoggersContainer newLoggers)
+    {
+        std::atomic_store_explicit(&loggers, std::move(newLoggers), std::memory_order_release);
+    }
+    SharedLoggersContainer loggers;
+#endif
+};
+
+} // namespace
 
 namespace QTest {
 
@@ -123,14 +187,14 @@ namespace QTest {
 
         inline bool matches(QtMsgType tp, const QString &message) const
         {
-            return tp == type
-                   && (pattern.userType() == QMetaType::QString ?
-                       stringsMatch(pattern.toString(), message) :
+            if (tp != type)
+                return false;
 #if QT_CONFIG(regularexpression)
-                       pattern.toRegularExpression().match(message).hasMatch());
-#else
-                       false);
+            if (const auto *regex = get_if<QRegularExpression>(&pattern))
+                return regex->match(message).hasMatch();
 #endif
+            Q_ASSERT(pattern.metaType() == QMetaType::fromType<QString>());
+            return stringsMatch(pattern.toString(), message);
         }
 
         QtMsgType type;
@@ -143,7 +207,7 @@ namespace QTest {
 
     static std::vector<QVariant> failOnWarningList;
 
-    Q_GLOBAL_STATIC(std::vector<std::unique_ptr<QAbstractTestLogger>>, loggers)
+    Q_GLOBAL_STATIC(LoggerRegistry, loggers)
 
     static int verbosity = 0;
     static int maxWarnings = 2002;
@@ -177,40 +241,76 @@ namespace QTest {
         return false;
     }
 
+    static void handleFatal()
+    {
+            /* Right now, we're inside the custom message handler and we're
+               being qt_message_output in qglobal.cpp. After we return from this
+               function, it will proceed with calling exit() and abort() and
+               hence crash. Therefore, we call these logging functions such that
+               we wrap up nicely, and in particular produce well-formed XML.
+            */
+            QTestLog::leaveTestFunction();
+            QTestLog::stopLogging();
+    }
+
     static bool handleFailOnWarning(const QMessageLogContext &context, const QString &message)
     {
         // failOnWarning can be called multiple times per test function, so let
         // each call cause a failure if required.
         for (const auto &pattern : failOnWarningList) {
-            if (pattern.metaType() == QMetaType::fromType<QString>()) {
-                if (message != pattern.toString())
+            if (const auto *text = get_if<QString>(&pattern)) {
+                if (message != *text)
                     continue;
-            }
 #if QT_CONFIG(regularexpression)
-            else if (pattern.metaType() == QMetaType::fromType<QRegularExpression>()) {
-                if (!message.contains(pattern.toRegularExpression()))
+            } else if (const auto *regex = get_if<QRegularExpression>(&pattern)) {
+                if (!message.contains(*regex))
                     continue;
-            }
 #endif
+            } else {
+                // The no-arg clearFailOnWarnings()'s null pattern matches all messages.
+                Q_ASSERT(pattern.isNull());
+            }
 
             const size_t maxMsgLen = 1024;
             char msg[maxMsgLen] = {'\0'};
-            qsnprintf(msg, maxMsgLen, "Received a warning that resulted in a failure:\n%s",
-                      qPrintable(message));
+            std::snprintf(msg, maxMsgLen, "Received a warning that resulted in a failure:\n%s",
+                          qPrintable(message));
             QTestResult::addFailure(msg, context.file, context.line);
             return true;
         }
         return false;
     }
 
+    static constexpr bool isWarnOrWorse(QtMsgType type)
+    {
+        // ## TODO Inline this once we get to Qt 7 !
+#if QT_VERSION_MAJOR == 7 || defined(QT_BOOTSTRAPPED) // To match QtMsgType decl
+        return type >= QtWarningMsg;
+#else
+        // Until Qt 6, Info was > Fatal :-(
+        switch (type) {
+        case QtWarningMsg:
+        case QtCriticalMsg:
+        case QtFatalMsg:
+            return true;
+        case QtDebugMsg:
+        case QtInfoMsg:
+            return false;
+        }
+        Q_UNREACHABLE_RETURN(false);
+#endif
+    }
+
     static void messageHandler(QtMsgType type, const QMessageLogContext & context, const QString &message)
     {
         static QBasicAtomicInt counter = Q_BASIC_ATOMIC_INITIALIZER(QTest::maxWarnings);
 
-        if (!QTestLog::hasLoggers()) {
-            // if this goes wrong, something is seriously broken.
-            qInstallMessageHandler(oldMessageHandler);
-            QTEST_ASSERT(QTestLog::hasLoggers());
+        if (loggers.isDestroyed() || loggers->allLoggers().isEmpty()) {
+            // the message handler may be called from a worker thread, after the main thread stopped
+            // logging. Forwarding to original message handler to avoid swallowing the message
+            Q_ASSERT(oldMessageHandler);
+            oldMessageHandler(type, context, message);
+            return;
         }
 
         if (handleIgnoredMessage(type, message)) {
@@ -218,47 +318,50 @@ namespace QTest {
             return;
         }
 
-        if (type == QtWarningMsg && handleFailOnWarning(context, message))
+        if (isWarnOrWorse(type) && handleFailOnWarning(context, message)) {
+            if (type == QtFatalMsg)
+                handleFatal();
             return;
+        }
+
+        auto loggerCapture = loggers->allLoggers();
 
         if (type != QtFatalMsg) {
             if (counter.loadRelaxed() <= 0)
                 return;
 
             if (!counter.deref()) {
-                FOREACH_TEST_LOGGER {
+                for (auto &logger : loggerCapture)
                     logger->addMessage(QAbstractTestLogger::Warn,
-                        QStringLiteral("Maximum amount of warnings exceeded. Use -maxwarnings to override."));
-                }
+                                       QStringLiteral("Maximum amount of warnings exceeded. Use "
+                                                      "-maxwarnings to override."));
+
                 return;
             }
         }
 
-        FOREACH_TEST_LOGGER
+        for (auto &logger : loggerCapture)
             logger->addMessage(type, context, message);
 
         if (type == QtFatalMsg) {
-             /* Right now, we're inside the custom message handler and we're
-             * being qt_message_output in qglobal.cpp. After we return from
-             * this function, it will proceed with calling exit() and abort()
-             * and hence crash. Therefore, we call these logging functions such
-             * that we wrap up nicely, and in particular produce well-formed XML. */
             QTestResult::addFailure("Received a fatal error.", context.file, context.line);
-            QTestLog::leaveTestFunction();
-            QTestLog::stopLogging();
+            handleFatal();
         }
     }
 }
 
 void QTestLog::enterTestFunction(const char* function)
 {
-    elapsedFunctionTime.restart();
+    {
+        QMutexLocker locker(&elapsedTimersMutex);
+        elapsedFunctionTime.start();
+    }
     if (printAvailableTags)
         return;
 
     QTEST_ASSERT(function);
 
-    FOREACH_TEST_LOGGER
+    for (auto &logger : QTest::loggers->allLoggers())
         logger->enterTestFunction(function);
 }
 
@@ -266,7 +369,7 @@ void QTestLog::enterTestData(QTestData *data)
 {
     QTEST_ASSERT(data);
 
-    FOREACH_TEST_LOGGER
+    for (auto &logger : QTest::loggers->allLoggers())
         logger->enterTestData(data);
 }
 
@@ -287,7 +390,7 @@ void QTestLog::leaveTestFunction()
     if (printAvailableTags)
         return;
 
-    FOREACH_TEST_LOGGER
+    for (auto &logger : QTest::loggers->allLoggers())
         logger->leaveTestFunction();
 }
 
@@ -297,15 +400,18 @@ void QTestLog::printUnhandledIgnoreMessages()
     QString message;
     QTest::IgnoreResultList *list = QTest::ignoreResultList;
     while (list) {
-        if (list->pattern.userType() == QMetaType::QString) {
-            message = "Did not receive message: \"%1\""_L1.arg(list->pattern.toString());
-        } else {
+        if (const auto *text = get_if<QString>(&list->pattern)) {
+            message = "Did not receive message: \"%1\""_L1.arg(*text);
 #if QT_CONFIG(regularexpression)
-            message = "Did not receive any message matching: \"%1\""_L1.arg(
-                    list->pattern.toRegularExpression().pattern());
+        } else if (const auto *regex = get_if<QRegularExpression>(&list->pattern)) {
+            message = "Did not receive any message matching: \"%1\""_L1.arg(regex->pattern());
 #endif
+        } else {
+            Q_UNREACHABLE();
+            message = "Missing message of unrecognized pattern type: \"%1\""_L1.arg(
+                list->pattern.metaType().name());
         }
-        FOREACH_TEST_LOGGER
+        for (auto &logger : QTest::loggers->allLoggers())
             logger->addMessage(QAbstractTestLogger::Info, message);
 
         list = list->next;
@@ -341,7 +447,7 @@ void QTestLog::addPass(const char *msg)
     ++QTest::passes;
     QTest::currentTestState = QTest::Passed;
 
-    FOREACH_TEST_LOGGER
+    for (auto &logger : QTest::loggers->allLoggers())
         logger->addIncident(QAbstractTestLogger::Pass, msg);
 }
 
@@ -361,7 +467,7 @@ void QTestLog::addFail(const char *msg, const char *file, int line)
     // subsequent failures; they may carry useful information.
 
     QTest::currentTestState = QTest::Failed;
-    FOREACH_TEST_LOGGER
+    for (auto &logger : QTest::loggers->allLoggers())
         logger->addIncident(QAbstractTestLogger::Fail, msg, file, line);
 }
 
@@ -371,7 +477,7 @@ void QTestLog::addXFail(const char *msg, const char *file, int line)
 
     // Will be counted in addPass() if we get there.
 
-    FOREACH_TEST_LOGGER
+    for (auto &logger : QTest::loggers->allLoggers())
         logger->addIncident(QAbstractTestLogger::XFail, msg, file, line);
 }
 
@@ -389,7 +495,7 @@ void QTestLog::addXPass(const char *msg, const char *file, int line)
     }
 
     QTest::currentTestState = QTest::Failed;
-    FOREACH_TEST_LOGGER
+    for (auto &logger : QTest::loggers->allLoggers())
         logger->addIncident(QAbstractTestLogger::XPass, msg, file, line);
 }
 
@@ -401,7 +507,7 @@ void QTestLog::addBPass(const char *msg)
     ++QTest::blacklists; // Not passes ?
     QTest::currentTestState = QTest::Suppressed;
 
-    FOREACH_TEST_LOGGER
+    for (auto &logger : QTest::loggers->allLoggers())
         logger->addIncident(QAbstractTestLogger::BlacklistedPass, msg);
 }
 
@@ -419,7 +525,7 @@ void QTestLog::addBFail(const char *msg, const char *file, int line)
     }
 
     QTest::currentTestState = QTest::Suppressed;
-    FOREACH_TEST_LOGGER
+    for (auto &logger : QTest::loggers->allLoggers())
         logger->addIncident(QAbstractTestLogger::BlacklistedFail, msg, file, line);
 }
 
@@ -437,7 +543,7 @@ void QTestLog::addBXPass(const char *msg, const char *file, int line)
     }
 
     QTest::currentTestState = QTest::Suppressed;
-    FOREACH_TEST_LOGGER
+    for (auto &logger : QTest::loggers->allLoggers())
         logger->addIncident(QAbstractTestLogger::BlacklistedXPass, msg, file, line);
 }
 
@@ -447,7 +553,7 @@ void QTestLog::addBXFail(const char *msg, const char *file, int line)
 
     // Will be counted in addBPass() if we get there.
 
-    FOREACH_TEST_LOGGER
+    for (auto &logger : QTest::loggers->allLoggers())
         logger->addIncident(QAbstractTestLogger::BlacklistedXFail, msg, file, line);
 }
 
@@ -468,21 +574,24 @@ void QTestLog::addSkip(const char *msg, const char *file, int line)
     // It is up to particular loggers to decide whether to report such
     // subsequent skips; they may carry useful information.
 
-    FOREACH_TEST_LOGGER
+    for (auto &logger : QTest::loggers->allLoggers())
         logger->addIncident(QAbstractTestLogger::Skip, msg, file, line);
 }
 
 void QTestLog::addBenchmarkResults(const QList<QBenchmarkResult> &results)
 {
-    FOREACH_TEST_LOGGER
+    for (auto &logger : QTest::loggers->allLoggers())
         logger->addBenchmarkResults(results);
 }
 
 void QTestLog::startLogging()
 {
-    elapsedTotalTime.start();
-    elapsedFunctionTime.start();
-    FOREACH_TEST_LOGGER
+    {
+        QMutexLocker locker(&elapsedTimersMutex);
+        elapsedTotalTime.start();
+        elapsedFunctionTime.start();
+    }
+    for (auto &logger : QTest::loggers->allLoggers())
         logger->startLogging();
     QTest::oldMessageHandler = qInstallMessageHandler(QTest::messageHandler);
 }
@@ -490,10 +599,10 @@ void QTestLog::startLogging()
 void QTestLog::stopLogging()
 {
     qInstallMessageHandler(QTest::oldMessageHandler);
-    FOREACH_TEST_LOGGER {
+    for (auto &logger : QTest::loggers->allLoggers())
         logger->stopLogging();
-    }
-    QTest::loggers()->clear();
+
+    QTest::loggers->clear();
     saveCoverageTool(QTestResult::currentAppName(), failCount() != 0, QTestLog::installedTestCoverage());
 }
 
@@ -538,7 +647,7 @@ void QTestLog::addLogger(LogMode mode, const char *filename)
     }
 
     QTEST_ASSERT(logger);
-    addLogger(logger);
+    addLogger(std::unique_ptr<QAbstractTestLogger>{ logger });
 }
 
 /*!
@@ -546,18 +655,16 @@ void QTestLog::addLogger(LogMode mode, const char *filename)
 
     Adds a new logger to the set of loggers that will be used
     to report incidents and messages during testing.
-
-    The function takes ownership of the logger.
 */
-void QTestLog::addLogger(QAbstractTestLogger *logger)
+void QTestLog::addLogger(std::unique_ptr<QAbstractTestLogger> logger)
 {
     QTEST_ASSERT(logger);
-    QTest::loggers()->emplace_back(logger);
+    QTest::loggers()->addLogger(std::move(logger));
 }
 
 bool QTestLog::hasLoggers()
 {
-    return !QTest::loggers()->empty();
+    return !QTest::loggers()->allLoggers().isEmpty();
 }
 
 /*!
@@ -567,29 +674,26 @@ bool QTestLog::hasLoggers()
 */
 bool QTestLog::isRepeatSupported()
 {
-    FOREACH_TEST_LOGGER {
+    for (auto &logger : QTest::loggers->allLoggers())
         if (!logger->isRepeatSupported())
             return false;
-    }
 
     return true;
 }
 
 bool QTestLog::loggerUsingStdout()
 {
-    FOREACH_TEST_LOGGER {
-        if (logger->isLoggingToStdout())
-            return true;
-    }
-
-    return false;
+    auto loggersCapture = QTest::loggers->allLoggers();
+    return q20::ranges::any_of(loggersCapture.begin(), loggersCapture.end(), [](auto &logger) {
+        return logger->isLoggingToStdout();
+    });
 }
 
 void QTestLog::warn(const char *msg, const char *file, int line)
 {
     QTEST_ASSERT(msg);
 
-    FOREACH_TEST_LOGGER
+    for (auto &logger : QTest::loggers->allLoggers())
         logger->addMessage(QAbstractTestLogger::Warn, QString::fromUtf8(msg), file, line);
 }
 
@@ -597,7 +701,7 @@ void QTestLog::info(const char *msg, const char *file, int line)
 {
     QTEST_ASSERT(msg);
 
-    FOREACH_TEST_LOGGER
+    for (auto &logger : QTest::loggers->allLoggers())
         logger->addMessage(QAbstractTestLogger::Info, QString::fromUtf8(msg), file, line);
 }
 
@@ -628,6 +732,11 @@ void QTestLog::ignoreMessage(QtMsgType type, const QRegularExpression &expressio
     QTest::IgnoreResultList::append(QTest::ignoreResultList, type, QVariant(expression));
 }
 #endif // QT_CONFIG(regularexpression)
+
+void QTestLog::failOnWarning()
+{
+    QTest::failOnWarningList.push_back({});
+}
 
 void QTestLog::failOnWarning(const char *msg)
 {
@@ -699,11 +808,13 @@ bool QTestLog::installedTestCoverage()
 
 qint64 QTestLog::nsecsTotalTime()
 {
+    QMutexLocker locker(&elapsedTimersMutex);
     return elapsedTotalTime.nsecsElapsed();
 }
 
 qint64 QTestLog::nsecsFunctionTime()
 {
+    QMutexLocker locker(&elapsedTimersMutex);
     return elapsedFunctionTime.nsecsElapsed();
 }
 

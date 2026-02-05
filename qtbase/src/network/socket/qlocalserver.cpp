@@ -1,5 +1,6 @@
 // Copyright (C) 2016 The Qt Company Ltd.
 // SPDX-License-Identifier: LicenseRef-Qt-Commercial OR LGPL-3.0-only OR GPL-2.0-only OR GPL-3.0-only
+// Qt-Security score:significant reason:default
 
 #include "qlocalserver.h"
 #include "qlocalserver_p.h"
@@ -197,7 +198,7 @@ qintptr QLocalServer::socketDescriptor() const
     return d->tcpServer.socketDescriptor();
 #elif defined(Q_OS_WIN)
     const auto handle = d->connectionEventNotifier->handle();
-    return handle != INVALID_HANDLE_VALUE ? qintptr(handle) : -1;
+    return handle ? qintptr(handle) : -1;
 #else
     return d->socketNotifier->socket();
 #endif
@@ -265,9 +266,27 @@ bool QLocalServer::hasPendingConnections() const
  */
 void QLocalServer::incomingConnection(quintptr socketDescriptor)
 {
-    Q_D(QLocalServer);
     QLocalSocket *socket = new QLocalSocket(this);
     socket->setSocketDescriptor(socketDescriptor);
+    addPendingConnection(socket);
+}
+
+/*!
+    This function is called by QLocalServer::incomingConnection()
+    to add the \a socket to the list of pending incoming connections.
+
+    \note Don't forget to call this member from reimplemented
+    incomingConnection() if you do not want to break the
+    Pending Connections mechanism. This function emits the
+    newConnection() signal after the socket has been
+    added.
+
+    \sa incomingConnection(), newConnection()
+    \since 6.8
+*/
+void QLocalServer::addPendingConnection(QLocalSocket *socket)
+{
+    Q_D(QLocalServer);
     d->pendingConnections.enqueue(socket);
     emit newConnection();
 }

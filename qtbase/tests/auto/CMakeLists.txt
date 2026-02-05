@@ -4,10 +4,13 @@
 # Order by dependency [*], then alphabetic. [*] If bugs in part A of
 # our source would break tests of part B, then test A before B.
 
+
+add_subdirectory(util/testrunner)
+
 set(run_dbus_tests OFF)
 if (QT_FEATURE_dbus)
     set(run_dbus_tests ON)
-    if(NOT CMAKE_CROSSCOMPILING AND TARGET Qt::DBus)
+    if((NOT CMAKE_CROSSCOMPILING OR WIN32) AND TARGET Qt::DBus)
         execute_process(COMMAND dbus-send --session --type=signal / local.AutotestCheck.Hello
             TIMEOUT 5
             RESULT_VARIABLE dbus_session_test
@@ -56,13 +59,35 @@ if(QT_BUILD_MINIMAL_ANDROID_MULTI_ABI_TESTS)
     return()
 endif()
 
-if(WASM)
+if(QT_BUILD_WASM_BATCHED_TESTS)
+    if(TARGET Qt::Concurrent)
+        add_subdirectory(corelib/io/qurl)
+    endif()
+    add_subdirectory(corelib/io/qdiriterator)
+    add_subdirectory(corelib/io/largefile)
+    add_subdirectory(corelib/io/qdataurl)
+    add_subdirectory(corelib/io/qbuffer)
+    add_subdirectory(corelib/io/qabstractfileengine)
     add_subdirectory(corelib/io/qsettings)
+    add_subdirectory(corelib/io/qstorageinfo)
+    add_subdirectory(corelib/io/qstandardpaths)
+    add_subdirectory(corelib/io/qfileselector)
+    add_subdirectory(corelib/io/qfile)
+    add_subdirectory(corelib/io/qdir)
+    if(TARGET Qt::Concurrent)
+        if(NOT INTEGRITY)
+        add_subdirectory(corelib/io/qdebug)
+        endif()
+    endif()
     add_subdirectory(corelib/serialization)
     add_subdirectory(corelib/text)
     add_subdirectory(corelib/thread)
     add_subdirectory(wasm)
     return()
+endif()
+
+if(WASM)
+    add_subdirectory(wasm)
 endif()
 
 add_subdirectory(testlib)
@@ -110,3 +135,7 @@ if (TARGET Qt::Xml)
 endif()
 # add_subdirectory(installed_cmake) ## FIXME: Does this still make sense in this form?
 add_subdirectory(other)
+if(QT_FEATURE_wayland)
+    add_subdirectory(wayland)
+endif()
+

@@ -1,5 +1,6 @@
 // Copyright (C) 2012 Giuseppe D'Angelo <dangelog@gmail.com>
 // Copyright (C) 2016 The Qt Company Ltd.
+// Copyright (C) 2024 Intel Corporation.
 // SPDX-License-Identifier: LicenseRef-Qt-Commercial OR GPL-3.0-only
 
 #include <QTest>
@@ -148,6 +149,9 @@ void tst_rcc::rcc_data()
     QTest::newRow("size-1") << sizesPath << "size-1.qrc" << "size-1.expected";
     QTest::newRow("size-2-0-35-1") << sizesPath << "size-2-0-35-1.qrc" <<
                                       (sizeof(size_t) == 8 ? "size-2-0-35-1.expected" : "size-2-0-35-1.expected32");
+
+    QTest::newRow("legal") << m_dataPath + QLatin1StringView("/legal")
+                               << "legal.qrc" << "rcc_legal.cpp";
 }
 
 static QStringList readLinesFromFile(const QString &fileName,
@@ -307,10 +311,15 @@ void tst_rcc::binary()
     const QString rootPrefix = QLatin1String("/test_root/");
     const QString resourceRootPrefix = QLatin1Char(':') + rootPrefix;
 
-    QLocale oldDefaultLocale;
+    const auto restoreLocale = qScopeGuard([prior = QLocale()]() {
+        QLocale::setDefault(prior);
+    });
     QLocale::setDefault(locale);
     QVERIFY(QFile::exists(resourceFile));
     QVERIFY(QResource::registerResource(resourceFile, rootPrefix));
+    const auto unregister = qScopeGuard([resourceFile, rootPrefix]() {
+        QVERIFY(QResource::unregisterResource(resourceFile, rootPrefix));
+    });
 
     { // need to destroy the iterators on the resource, in order to be able to unregister it
 
@@ -336,7 +345,7 @@ void tst_rcc::binary()
 
     // now actually check the file contents
     QDir directory(baseDirectory);
-    for (QStringMap::const_iterator i = expectedFiles.constBegin(); i != expectedFiles.constEnd(); ++i) {
+    for (auto i = expectedFiles.constBegin(); i != expectedFiles.constEnd(); ++i) {
         QString resourceFileName = i.key();
         QString actualFileName = i.value();
 
@@ -353,9 +362,6 @@ void tst_rcc::binary()
     }
 
     }
-
-    QVERIFY(QResource::unregisterResource(resourceFile, rootPrefix));
-    QLocale::setDefault(oldDefaultLocale);
 }
 
 void tst_rcc::readback_data()

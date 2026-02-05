@@ -20,6 +20,7 @@
 // code lives here is that some special apps/libraries for e.g., QtJambi,
 // Gammaray need access to the structs in this file.
 
+#include <QtCore/qalloc.h>
 #include <QtCore/qobject.h>
 #include <QtCore/private/qobject_p.h>
 
@@ -64,7 +65,7 @@ struct QObjectPrivate::ConnectionOrSignalVector
         Connection *next;
     };
 };
-static_assert(std::is_trivial_v<QObjectPrivate::ConnectionOrSignalVector>);
+static_assert(std::is_trivially_copyable_v<QObjectPrivate::ConnectionOrSignalVector>);
 
 struct QObjectPrivate::Connection : public ConnectionOrSignalVector
 {
@@ -130,8 +131,8 @@ struct QObjectPrivate::SignalVector : public ConnectionOrSignalVector
     }
     int count() const { return static_cast<int>(allocated); }
 };
-static_assert(
-        std::is_trivial_v<QObjectPrivate::SignalVector>); // it doesn't need to be, but it helps
+// it doesn't need to be, but it helps
+static_assert(std::is_trivially_copyable_v<QObjectPrivate::SignalVector>);
 
 struct QObjectPrivate::ConnectionData
 {
@@ -142,7 +143,7 @@ struct QObjectPrivate::ConnectionData
     QAtomicPointer<SignalVector> signalVector;
     Connection *senders = nullptr;
     Sender *currentSender = nullptr; // object currently activating the object
-    std::atomic<TaggedSignalVector> orphaned = {};
+    std::atomic<TaggedSignalVector> orphaned = {nullptr};
 
     ~ConnectionData()
     {
@@ -152,8 +153,9 @@ struct QObjectPrivate::ConnectionData
             deleteOrphaned(c);
         SignalVector *v = signalVector.loadRelaxed();
         if (v) {
+            const size_t allocSize = sizeof(SignalVector) + (v->allocated + 1) * sizeof(ConnectionList);
             v->~SignalVector();
-            free(v);
+            QtPrivate::sizedFree(v, allocSize);
         }
     }
 
@@ -179,13 +181,13 @@ struct QObjectPrivate::ConnectionData
         return signalVector.loadRelaxed()->at(signal);
     }
 
-    void resizeSignalVector(uint size)
+    void resizeSignalVector(size_t size)
     {
         SignalVector *vector = this->signalVector.loadRelaxed();
         if (vector && vector->allocated > size)
             return;
         size = (size + 7) & ~7;
-        void *ptr = malloc(sizeof(SignalVector) + (size + 1) * sizeof(ConnectionList));
+        void *ptr = QtPrivate::fittedMalloc(sizeof(SignalVector), &size, sizeof(ConnectionList), 1);
         auto newVector = new (ptr) SignalVector;
 
         int start = -1;

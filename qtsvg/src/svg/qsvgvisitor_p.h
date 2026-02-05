@@ -19,19 +19,22 @@
 #include <private/qsvghandler_p.h>
 #include <private/qsvggraphics_p.h>
 #include <private/qsvgstructure_p.h>
+#include <private/qsvganimate_p.h>
 
 QT_BEGIN_NAMESPACE
 
-class Q_SVG_PRIVATE_EXPORT QSvgVisitor {
+class Q_SVG_EXPORT QSvgVisitor {
 public:
     void traverse(const QSvgStructureNode *node);
+    void traverse(const QSvgNode *node);
+
     virtual ~QSvgVisitor() {}
 
 protected:
     virtual void visitNode(const QSvgNode *) {}
     virtual bool visitStructureNodeStart(const QSvgStructureNode *node) { visitNode(node); return true; }
     virtual void visitStructureNodeEnd(const QSvgStructureNode *) {}
-    virtual void visitAnimationNode(const QSvgAnimation *node) { visitNode(node); }
+    virtual void visitAnimateNode(const QSvgAnimateNode *node) { visitNode(node); }
     virtual void visitEllipseNode(const QSvgEllipse *node) { visitNode(node); }
     virtual void visitImageNode(const QSvgImage *node) { visitNode(node); }
     virtual void visitLineNode(const QSvgLine *node) { visitNode(node); }
@@ -52,6 +55,8 @@ protected:
     virtual void visitDefsNodeEnd(const QSvgDefs *node)  { visitStructureNodeEnd(node); };
     virtual bool visitSwitchNodeStart(const QSvgSwitch *node) { return visitStructureNodeStart(node); }
     virtual void visitSwitchNodeEnd(const QSvgSwitch *node)  { visitStructureNodeEnd(node); };
+    virtual bool visitMaskNodeStart(const QSvgMask *node) { return visitStructureNodeStart(node); }
+    virtual void visitMaskNodeEnd(const QSvgMask *node) { visitStructureNodeEnd(node); }
 };
 
 QT_END_NAMESPACE

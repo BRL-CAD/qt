@@ -1,5 +1,6 @@
 // Copyright (C) 2016 The Qt Company Ltd.
 // SPDX-License-Identifier: LicenseRef-Qt-Commercial OR LGPL-3.0-only OR GPL-2.0-only OR GPL-3.0-only
+// Qt-Security score:significant reason:default
 
 #include "qvariantanimation.h"
 #include "qvariantanimation_p.h"
@@ -151,6 +152,9 @@ template<> Q_INLINE_TEMPLATE QLineF _q_interpolate(const QLineF &f, const QLineF
 
 QVariantAnimationPrivate::QVariantAnimationPrivate() : duration(250), interpolator(&defaultInterpolator)
 { }
+
+QVariantAnimationPrivate::~QVariantAnimationPrivate()
+    = default;
 
 void QVariantAnimationPrivate::convertValues(int t)
 {
@@ -335,7 +339,7 @@ QVariantAnimation::~QVariantAnimation()
     elastic effect on the values of the interpolated variant.
 
     QVariantAnimation will use the QEasingCurve::valueForProgress() to
-    transform the "normalized progress" (currentTime / totalDuration)
+    transform the "normalized progress" (currentTime() / totalDuration())
     of the animation into the effective progress actually
     used by the animation. It is this effective progress that will be
     the progress when interpolated() is called. Also, the steps in the

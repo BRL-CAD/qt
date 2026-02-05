@@ -1,6 +1,7 @@
 // Copyright (C) 2016 The Qt Company Ltd.
 // Copyright (C) 2017 Intel Corporation.
 // SPDX-License-Identifier: LicenseRef-Qt-Commercial OR LGPL-3.0-only OR GPL-2.0-only OR GPL-3.0-only
+// Qt-Security score:significant reason:default
 
 #include "qnetworkproxy.h"
 
@@ -166,13 +167,15 @@ QList<QNetworkProxy> QNetworkProxyFactory::systemProxyForQuery(const QNetworkPro
         break;
     // fake URLs to get libproxy to tell us the SOCKS proxy
     case QNetworkProxyQuery::TcpSocket:
-        queryUrl.setScheme(QStringLiteral("tcp"));
+        if (queryUrl.scheme().isEmpty())
+            queryUrl.setScheme(QStringLiteral("tcp"));
         queryUrl.setHost(query.peerHostName());
         queryUrl.setPort(query.peerPort());
         requiredCapabilities |= QNetworkProxy::TunnelingCapability;
         break;
     case QNetworkProxyQuery::UdpSocket:
-        queryUrl.setScheme(QStringLiteral("udp"));
+        if (queryUrl.scheme().isEmpty())
+            queryUrl.setScheme(QStringLiteral("udp"));
         queryUrl.setHost(query.peerHostName());
         queryUrl.setPort(query.peerPort());
         requiredCapabilities |= QNetworkProxy::UdpTunnelingCapability;

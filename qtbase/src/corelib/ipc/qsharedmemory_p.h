@@ -1,5 +1,6 @@
 // Copyright (C) 2016 The Qt Company Ltd.
 // SPDX-License-Identifier: LicenseRef-Qt-Commercial OR LGPL-3.0-only OR GPL-2.0-only OR GPL-3.0-only
+// Qt-Security score:significant reason:default
 
 #ifndef QSHAREDMEMORY_P_H
 #define QSHAREDMEMORY_P_H
@@ -41,12 +42,22 @@ class QSharedMemoryPrivate;
   */
 class QSharedMemoryLocker
 {
-
+    Q_DISABLE_COPY(QSharedMemoryLocker)
 public:
-    Q_NODISCARD_CTOR QSharedMemoryLocker(QSharedMemory *sharedMemory) : q_sm(sharedMemory)
+    Q_NODISCARD_CTOR explicit QSharedMemoryLocker(QSharedMemory *sharedMemory)
+        : q_sm(sharedMemory)
     {
         Q_ASSERT(q_sm);
     }
+
+    Q_NODISCARD_CTOR QSharedMemoryLocker(QSharedMemoryLocker &&other) noexcept
+        : q_sm{std::exchange(other.q_sm, nullptr)}
+    {}
+
+    QT_MOVE_ASSIGNMENT_OPERATOR_IMPL_VIA_MOVE_AND_SWAP(QSharedMemoryLocker)
+
+    void swap(QSharedMemoryLocker &other) noexcept
+    { qt_ptr_swap(q_sm, other.q_sm); }
 
     inline ~QSharedMemoryLocker()
     {
@@ -63,6 +74,9 @@ public:
     }
 
 private:
+    friend void swap(QSharedMemoryLocker &lhs, QSharedMemoryLocker &rhs) noexcept
+    { lhs.swap(rhs); }
+
     QSharedMemory *q_sm;
 };
 #endif // QT_CONFIG(systemsemaphore)
@@ -92,7 +106,7 @@ public:
     { return quint16(type) <= 0xff; }
     static bool runtimeSupportCheck();
 
-#if QT_CONFIG(sysv_sem)
+#if QT_CONFIG(sysv_shm)
     key_t handle(QSharedMemoryPrivate *self);
     bool cleanHandle(QSharedMemoryPrivate *self);
     bool create(QSharedMemoryPrivate *self, qsizetype size);
@@ -176,9 +190,9 @@ public:
     {
         return visit([&](auto p) { return p->cleanHandle(this); });
     }
-    bool create(qsizetype size)
+    bool create(qsizetype sz)
     {
-        return visit([&](auto p) { return p->create(this, size); });
+        return visit([&](auto p) { return p->create(this, sz); });
     }
     bool attach(QSharedMemory::AccessMode mode)
     {

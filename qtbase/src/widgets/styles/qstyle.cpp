@@ -1,5 +1,6 @@
 // Copyright (C) 2016 The Qt Company Ltd.
 // SPDX-License-Identifier: LicenseRef-Qt-Commercial OR LGPL-3.0-only OR GPL-2.0-only OR GPL-3.0-only
+// Qt-Security score:significant reason:default
 
 #include "qstyle.h"
 #include "qapplication.h"
@@ -7,13 +8,16 @@
 #include "qwidget.h"
 #include "qbitmap.h"
 #include "qpixmapcache.h"
+#include "qset.h"
 #include "qstyleoption.h"
 #include "private/qstyle_p.h"
+#include "private/qstylehelper_p.h"
 #include "private/qguiapplication_p.h"
 #include <qpa/qplatformtheme.h>
 #ifndef QT_NO_DEBUG
 #include "qdebug.h"
 #endif
+#include <QtCore/q20utility.h>
 
 #include <limits.h>
 #include <algorithm>
@@ -75,6 +79,7 @@ static int unpackControlTypes(QSizePolicy::ControlTypes controls, QSizePolicy::C
     is a zero pointer.
 
     \image paintsystem-stylepainter.png
+           {Diagram showing QStylePainter inherits from QPainter}
 
     The paint system also provides the QStylePainter class inheriting
     from QPainter.  QStylePainter is a convenience class for drawing
@@ -85,7 +90,7 @@ static int unpackControlTypes(QSizePolicy::ControlTypes controls, QSizePolicy::C
 
     \table 100%
     \row
-    \li \inlineimage paintsystem-icon.png
+    \li \inlineimage paintsystem-icon.png {Icon used in Qt}
     \li \b QIcon
 
     The QIcon class provides scalable icons in different modes and states.
@@ -125,11 +130,9 @@ static int unpackControlTypes(QSizePolicy::ControlTypes controls, QSizePolicy::C
     native widgets. The diagram below shows a QComboBox in nine
     different styles.
 
-    \image qstyle-comboboxes.png Nine combo boxes
+    \image qstyle-comboboxes.png {Nine combo boxes showing different styles}
 
     Topics:
-
-    \tableofcontents
 
     \section1 Setting a Style
 
@@ -1834,7 +1837,7 @@ void QStyle::drawItemPixmap(QPainter *painter, const QRect &rect, int alignment,
     message box should be centered or not (see QDialogButtonBox::setCentered()).
 
     \value SH_MessageBox_TextInteractionFlags A boolean indicating if
-    the text in a message box should allow user interfactions (e.g.
+    the text in a message box should allow user interactions (e.g.
     selection) or not.
 
     \value SH_TitleBar_AutoRaise A boolean indicating whether
@@ -2234,7 +2237,7 @@ int QStyle::sliderPositionFromValue(int min, int max, int logicalValue, int span
     if (range > (uint)INT_MAX/4096) {
         double dpos = (double(p))/(double(range)/span);
         return int(dpos);
-    } else if (range > (uint)span) {
+    } else if (q20::cmp_greater(range, span)) {
         return (2 * p * span + range) / (2*range);
     } else {
         uint div = span / range;
@@ -2273,7 +2276,7 @@ int QStyle::sliderValueFromPosition(int min, int max, int pos, int span, bool up
 
     const qint64 range = qint64(max) - min;
 
-    if ((uint)span > range) {
+    if (q20::cmp_greater(span, range)) {
         const int tmp = (2 * range * pos + span) / (qint64(2) * span);
         return upsideDown ? max - tmp : tmp + min;
     } else {
@@ -2421,6 +2424,53 @@ bool QStylePrivate::useFullScreenForPopup()
 {
     auto theme = QGuiApplicationPrivate::platformTheme();
     return theme && theme->themeHint(QPlatformTheme::UseFullScreenForPopupMenu).toBool();
+}
+
+//
+// QCachedPainter
+QSet<QString> QCachedPainter::s_pixmapCacheKeys;
+QCachedPainter::QCachedPainter(QPainter *painter, const QString &cachePrefix,
+                               const QStyleOption *option, QSize size, QRect paintRect)
+    : m_painter(painter)
+    , m_option(option)
+    , m_paintRect(paintRect)
+{
+    const auto sz = size.isEmpty() ? option->rect.size() : size;
+    const qreal dpr = QStyleHelper::getDpr(painter);
+    m_pixmapName = QStyleHelper::uniqueName(cachePrefix, option, sz, dpr);
+    m_alreadyCached = QPixmapCache::find(m_pixmapName, &m_pixmap);
+    if (!m_alreadyCached) {
+        m_pixmap = styleCachePixmap(sz, dpr);
+        m_pixmapPainter = std::make_unique<QPainter>(&m_pixmap);
+        m_pixmapPainter->setRenderHints(painter->renderHints());
+        s_pixmapCacheKeys += m_pixmapName;
+    }
+}
+
+QCachedPainter::~QCachedPainter()
+{
+    finish();
+    if (!m_alreadyCached)
+        QPixmapCache::insert(m_pixmapName, m_pixmap);
+}
+
+void QCachedPainter::finish()
+{
+    m_pixmapPainter.reset();
+    if (!m_pixmapDrawn) {
+        m_pixmapDrawn = true;
+        if (m_paintRect.isNull())
+            m_painter->drawPixmap(m_option->rect.topLeft(), m_pixmap);
+        else
+            m_painter->drawPixmap(m_paintRect, m_pixmap);
+    }
+}
+
+void QCachedPainter::cleanupPixmapCache()
+{
+    for (const auto &key : s_pixmapCacheKeys)
+        QPixmapCache::remove(key);
+    s_pixmapCacheKeys.clear();
 }
 
 QT_END_NAMESPACE

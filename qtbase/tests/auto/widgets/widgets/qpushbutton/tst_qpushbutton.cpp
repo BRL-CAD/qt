@@ -71,7 +71,7 @@ private:
     int release_count;
 
     QPushButton *testWidget;
-    QPointingDevice *m_touchScreen = QTest::createTouchDevice();
+    std::unique_ptr<QPointingDevice> m_touchScreen{QTest::createTouchDevice()};
 };
 
 // Testing get/set functions
@@ -339,7 +339,6 @@ void tst_QPushButton::setAccel()
 
     // The shortcut will not be activated unless the button is in a active
     // window and has focus
-    QApplicationPrivate::setActiveWindow(testWidget);
     testWidget->setFocus();
     QVERIFY(QTest::qWaitForWindowActive(testWidget));
     QTest::keyClick(testWidget, 'A', Qt::AltModifier);
@@ -377,10 +376,10 @@ void tst_QPushButton::clicked()
 
 void tst_QPushButton::touchTap()
 {
-    QTest::touchEvent(testWidget, m_touchScreen).press(0, QPoint(10, 10));
+    QTest::touchEvent(testWidget, m_touchScreen.get()).press(0, QPoint(10, 10));
     QCOMPARE(press_count, 1);
     QCOMPARE(release_count, 0);
-    QTest::touchEvent(testWidget, m_touchScreen).release(0, QPoint(10, 10));
+    QTest::touchEvent(testWidget, m_touchScreen.get()).release(0, QPoint(10, 10));
     QCOMPARE(press_count, 1);
     QCOMPARE(release_count, 1);
     QCOMPARE(click_count, 1);
@@ -390,8 +389,8 @@ void tst_QPushButton::touchTap()
     click_count = 0;
     testWidget->setDown(false);
     for (uint i = 0; i < 10; i++) {
-        QTest::touchEvent(testWidget, m_touchScreen).press(0, QPoint(10, 10));
-        QTest::touchEvent(testWidget, m_touchScreen).release(0, QPoint(10, 10));
+        QTest::touchEvent(testWidget, m_touchScreen.get()).press(0, QPoint(10, 10));
+        QTest::touchEvent(testWidget, m_touchScreen.get()).release(0, QPoint(10, 10));
     }
     QCOMPARE(press_count, 10);
     QCOMPARE(release_count, 10);

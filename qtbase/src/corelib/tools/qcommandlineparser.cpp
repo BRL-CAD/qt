@@ -196,7 +196,8 @@ QStringList QCommandLineParserPrivate::aliases(const QString &optionName) const
     since the output is either discarded or not accessible.
 
     On Windows, QCommandLineParser uses message boxes to display usage information
-    and errors if no console window can be obtained.
+    and errors if no console window can be obtained. These message boxes can be omitted by setting
+    the \c QT_COMMAND_LINE_PARSER_NO_GUI_MESSAGE_BOXES environment variable.
 
     For other platforms, it is recommended to display help texts and error messages
     using a QMessageBox. To preserve the formatting of the help text, rich text
@@ -334,7 +335,7 @@ bool QCommandLineParser::addOption(const QCommandLineOption &option)
     if (!optionNames.isEmpty()) {
         for (const QString &name : optionNames) {
             if (d->nameHash.contains(name)) {
-                qWarning() << "QCommandLineParser: already having an option named" << name;
+                qWarning("QCommandLineParser: option already added: \"%ls\"", qUtf16Printable(name));
                 return false;
             }
         }
@@ -514,8 +515,6 @@ QString QCommandLineParser::errorText() const
     return QString();
 }
 
-enum MessageType { UsageMessage, ErrorMessage };
-
 #if defined(Q_OS_WIN) && !defined(QT_BOOTSTRAPPED)
 // Return whether to use a message box. Use handles if a console can be obtained
 // or we are run with redirected handles (for example, by QProcess).
@@ -531,12 +530,44 @@ static inline bool displayMessageBox()
 }
 #endif // Q_OS_WIN && !QT_BOOTSTRAPPED
 
-static void showParserMessage(const QString &message, MessageType type)
+/*!
+    \enum QCommandLineParser::MessageType
+    \since 6.9
+
+    The enum is used to specify the type of the message and how it will be shown
+    to the users.
+
+    \value Information Used to show information messages. The message
+           will be printed to \c {stdout}.
+    \value Error Used to show error messages. The message will be printed
+           to \c {stderr}.
+
+    \sa showMessageAndExit()
+*/
+
+/*!
+    \since 6.9
+
+    Displays a \a message, and exits the application with the given \a exitCode.
+
+    The \a message will usually be printed directly to \c{stdout} or \c{stderr} according
+    to the given \a type, or the message may be shown in a message box under Windows when
+    necessary, with an information icon or error icon according to the given \a type
+    (set the \c{QT_COMMAND_LINE_PARSER_NO_GUI_MESSAGE_BOXES} environment variable if
+    you don't want the message box).
+
+    It's the same message display method used by showHelp, showVersion and the builtin
+    options (\c{--version} if addVersionOption was called and \c{--help} / \c{--help-all}
+    if addHelpOption was called).
+
+    \sa addVersionOption(), showHelp(), showVersion(), QCommandLineParser::MessageType
+*/
+[[noreturn]] void QCommandLineParser::showMessageAndExit(MessageType type, const QString &message, int exitCode)
 {
 #if defined(Q_OS_WIN) && !defined(QT_BOOTSTRAPPED)
     if (displayMessageBox()) {
         const UINT flags = MB_OK | MB_TOPMOST | MB_SETFOREGROUND
-            | (type == UsageMessage ? MB_ICONINFORMATION : MB_ICONERROR);
+            | (type == MessageType::Information ? MB_ICONINFORMATION : MB_ICONERROR);
         QString title;
         if (QCoreApplication::instance())
             title = QCoreApplication::instance()->property("applicationDisplayName").toString();
@@ -544,10 +575,13 @@ static void showParserMessage(const QString &message, MessageType type)
             title = QCoreApplication::applicationName();
         MessageBoxW(0, reinterpret_cast<const wchar_t *>(message.utf16()),
                     reinterpret_cast<const wchar_t *>(title.utf16()), flags);
-        return;
+        qt_call_post_routines();
+        ::exit(exitCode);
     }
 #endif // Q_OS_WIN && !QT_BOOTSTRAPPED
-    fputs(qPrintable(message), type == UsageMessage ? stdout : stderr);
+    fputs(qPrintable(message), type == MessageType::Information ? stdout : stderr);
+    qt_call_post_routines();
+    ::exit(exitCode);
 }
 
 /*!
@@ -567,9 +601,9 @@ static void showParserMessage(const QString &message, MessageType type)
 void QCommandLineParser::process(const QStringList &arguments)
 {
     if (!d->parse(arguments)) {
-        showParserMessage(QCoreApplication::applicationName() + ": "_L1 + errorText() + u'\n', ErrorMessage);
-        qt_call_post_routines();
-        ::exit(EXIT_FAILURE);
+        showMessageAndExit(MessageType::Error,
+                           QCoreApplication::applicationName() + ": "_L1 + errorText() + u'\n',
+                           EXIT_FAILURE);
     }
 
     if (d->builtinVersionOption && isSet(QStringLiteral("version")))
@@ -636,7 +670,12 @@ bool QCommandLineParserPrivate::parseOptionValue(const QString &optionName, cons
     if (nameHashIt != nameHash.constEnd()) {
         const qsizetype assignPos = argument.indexOf(assignChar);
         const NameHash_t::mapped_type optionOffset = *nameHashIt;
-        const bool withValue = !commandLineOptionList.at(optionOffset).valueName().isEmpty();
+        const QCommandLineOption &option = commandLineOptionList.at(optionOffset);
+        if (option.flags() & QCommandLineOption::IgnoreOptionsAfter) {
+            *argumentIterator = argsEnd;
+            return true;
+        }
+        const bool withValue = !option.valueName().isEmpty();
         if (withValue) {
             if (assignPos == -1) {
                 ++(*argumentIterator);
@@ -997,11 +1036,10 @@ QStringList QCommandLineParser::unknownOptionNames() const
 */
 Q_NORETURN void QCommandLineParser::showVersion()
 {
-    showParserMessage(QCoreApplication::applicationName() + u' '
-                      + QCoreApplication::applicationVersion() + u'\n',
-                      UsageMessage);
-    qt_call_post_routines();
-    ::exit(EXIT_SUCCESS);
+    showMessageAndExit(MessageType::Information,
+                       QCoreApplication::applicationName() + u' '
+                       + QCoreApplication::applicationVersion() + u'\n',
+                       EXIT_SUCCESS);
 }
 
 /*!
@@ -1013,7 +1051,7 @@ Q_NORETURN void QCommandLineParser::showVersion()
     user requested to see the help, and to any other value in case of
     an error.
 
-    \sa helpText()
+    \sa helpText(), showMessageAndExit()
 */
 Q_NORETURN void QCommandLineParser::showHelp(int exitCode)
 {
@@ -1022,9 +1060,9 @@ Q_NORETURN void QCommandLineParser::showHelp(int exitCode)
 
 Q_NORETURN void QCommandLineParserPrivate::showHelp(int exitCode, bool includeQtOptions)
 {
-    showParserMessage(helpText(includeQtOptions), UsageMessage);
-    qt_call_post_routines();
-    ::exit(exitCode);
+    QCommandLineParser::showMessageAndExit(QCommandLineParser::MessageType::Information,
+                                           helpText(includeQtOptions),
+                                           exitCode);
 }
 
 /*!
@@ -1121,6 +1159,7 @@ QString QCommandLineParserPrivate::helpText(bool includeQtOptions) const
     text += nl;
     if (!options.isEmpty())
         text += QCommandLineParser::tr("Options:") + nl;
+
     QStringList optionNameList;
     optionNameList.reserve(options.size());
     qsizetype longestOptionNameString = 0;
@@ -1141,6 +1180,10 @@ QString QCommandLineParserPrivate::helpText(bool includeQtOptions) const
         optionNameList.append(optionNamesString);
         longestOptionNameString = qMax(longestOptionNameString, optionNamesString.size());
     }
+
+    for (const PositionalArgumentDefinition &arg : positionalArgumentDefinitions)
+        longestOptionNameString = qMax(longestOptionNameString, arg.name.size());
+
     ++longestOptionNameString;
     const int optionNameMaxWidth = qMin(50, int(longestOptionNameString));
     auto optionNameIterator = optionNameList.cbegin();

@@ -1,5 +1,6 @@
 // Copyright (C) 2016 The Qt Company Ltd.
 // SPDX-License-Identifier: LicenseRef-Qt-Commercial OR LGPL-3.0-only OR GPL-2.0-only OR GPL-3.0-only
+// Qt-Security score:significant reason:default
 
 #include "qsidebar_p.h"
 
@@ -49,12 +50,21 @@ QUrlModel::~QUrlModel()
         disconnect(conn);
 }
 
+constexpr char uriListMimeType[] = "text/uri-list";
+
+#if QT_CONFIG(draganddrop)
+static bool hasSupportedFormat(const QMimeData *data)
+{
+    return data->hasFormat(QLatin1StringView(uriListMimeType));
+}
+#endif // QT_CONFIG(draganddrop)
+
 /*!
     \reimp
 */
 QStringList QUrlModel::mimeTypes() const
 {
-    return QStringList("text/uri-list"_L1);
+    return QStringList(QLatin1StringView(uriListMimeType));
 }
 
 /*!
@@ -99,7 +109,7 @@ QMimeData *QUrlModel::mimeData(const QModelIndexList &indexes) const
 */
 bool QUrlModel::canDrop(QDragEnterEvent *event)
 {
-    if (!event->mimeData()->formats().contains(mimeTypes().constFirst()))
+    if (!hasSupportedFormat(event->mimeData()))
         return false;
 
     const QList<QUrl> list = event->mimeData()->urls();
@@ -117,7 +127,7 @@ bool QUrlModel::canDrop(QDragEnterEvent *event)
 bool QUrlModel::dropMimeData(const QMimeData *data, Qt::DropAction action,
                                  int row, int column, const QModelIndex &parent)
 {
-    if (!data->formats().contains(mimeTypes().constFirst()))
+    if (!hasSupportedFormat(data))
         return false;
     Q_UNUSED(action);
     Q_UNUSED(column);
@@ -188,8 +198,11 @@ void QUrlModel::setUrl(const QModelIndex &index, const QUrl &url, const QModelIn
         // Make sure that we have at least 32x32 images
             const QSize size = newIcon.actualSize(QSize(32,32));
             if (size.width() < 32) {
-                QPixmap smallPixmap = newIcon.pixmap(QSize(32, 32));
-                newIcon.addPixmap(smallPixmap.scaledToWidth(32, Qt::SmoothTransformation));
+                const auto widget = qobject_cast<QWidget *>(parent());
+                const auto dpr = widget ? widget->devicePixelRatio() : qApp->devicePixelRatio();
+                const auto smallPixmap = newIcon.pixmap(QSize(32, 32), dpr);
+                const auto newPixmap = smallPixmap.scaledToWidth(32 * dpr, Qt::SmoothTransformation);
+                newIcon.addPixmap(newPixmap);
             }
         }
 
@@ -364,9 +377,11 @@ void QSidebar::setModelAndUrls(QFileSystemModel *model, const QList<QUrl> &newUr
 #if QT_CONFIG(draganddrop)
     setDragDropMode(QAbstractItemView::DragDrop);
 #endif
+#if QT_CONFIG(menu)
     setContextMenuPolicy(Qt::CustomContextMenu);
     connect(this, &QSidebar::customContextMenuRequested,
             this, &QSidebar::showContextMenu);
+#endif
     urlModel->setUrls(newUrls);
     setCurrentIndex(this->model()->index(0,0));
 }

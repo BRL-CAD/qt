@@ -4,11 +4,14 @@
 #ifndef QCOREEVENT_H
 #define QCOREEVENT_H
 
+#include <QtCore/qbasictimer.h>
 #include <QtCore/qnamespace.h>
 #include <QtCore/qbytearray.h>
 #include <QtCore/qobjectdefs.h>
 
 QT_BEGIN_NAMESPACE
+
+template <typename Event> class QEventStorage;
 
 #define Q_EVENT_DISABLE_COPY(Class) \
 protected: \
@@ -18,6 +21,7 @@ protected: \
     Class &operator=(Class &&) = delete
 
 #define Q_DECL_EVENT_COMMON(Class) \
+        friend class QEventStorage<Class>; \
     protected: \
         Class(const Class &); \
         Class(Class &&) = delete; \
@@ -291,6 +295,8 @@ public:
         ParentWindowAboutToChange = 225,
         ParentWindowChange = 226,
 
+        SafeAreaMarginsChange = 227,
+
         // 512 reserved for Qt Jambi's MetaCall event
         // 513 reserved for Qt Jambi's DeleteOnMainThread event
 
@@ -319,11 +325,11 @@ public:
     virtual QEvent *clone() const;
 
 protected:
-    struct InputEventTag { explicit InputEventTag() = default; };
+    QT_DEFINE_TAG_STRUCT(InputEventTag);
     QEvent(Type type, InputEventTag) : QEvent(type) { m_inputEvent = true; }
-    struct PointerEventTag { explicit PointerEventTag() = default; };
+    QT_DEFINE_TAG_STRUCT(PointerEventTag);
     QEvent(Type type, PointerEventTag) : QEvent(type, InputEventTag{}) { m_pointerEvent = true; }
-    struct SinglePointEventTag { explicit SinglePointEventTag() = default; };
+    QT_DEFINE_TAG_STRUCT(SinglePointEventTag);
     QEvent(Type type, SinglePointEventTag) : QEvent(type, PointerEventTag{}) { m_singlePointEvent = true; }
     quint16 t;
 
@@ -354,6 +360,8 @@ private:
     friend class QApplication;
     friend class QGraphicsScenePrivate;
     // from QtTest:
+    // QtWebEngine event handling requires forwarding events as spontaneous.
+    // Impersonated QSpontaneKeyEvent in QtWebEngine to handle such cases.
     friend class QSpontaneKeyEvent;
     // needs this:
     Q_ALWAYS_INLINE
@@ -365,10 +373,15 @@ class Q_CORE_EXPORT QTimerEvent : public QEvent
     Q_DECL_EVENT_COMMON(QTimerEvent)
 public:
     explicit QTimerEvent(int timerId);
-    int timerId() const { return id; }
+    explicit QTimerEvent(Qt::TimerId timerId);
+
+    int timerId() const { return qToUnderlying(id()); }
+    Qt::TimerId id() const { return m_id; }
+    bool matches(const QBasicTimer &timer) const noexcept
+    { return m_id == timer.id(); }
 
 protected:
-    int id;
+    Qt::TimerId m_id;
 };
 
 class QObject;

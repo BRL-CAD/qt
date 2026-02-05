@@ -35,7 +35,7 @@ static constexpr bool IncludeValidityChecks = true;
 #  define QELFPARSER_DEBUG
 #endif
 #if defined(QELFPARSER_DEBUG)
-static Q_LOGGING_CATEGORY(lcElfParser, "qt.core.plugin.elfparser")
+Q_STATIC_LOGGING_CATEGORY(lcElfParser, "qt.core.plugin.elfparser")
 #  define qEDebug       qCDebug(lcElfParser) << reinterpret_cast<const char16_t *>(error.errMsg->constData()) << ':'
 #else
 #  define qEDebug       if (false) {} else QNoDebug()
@@ -699,7 +699,7 @@ static QLibraryScanResult scanSections(QByteArrayView data, const ErrorMaker &er
         // sections aren't allowed to extend past the end of the file, unless
         // they are NOBITS sections
         if (shdr->sh_type == SHT_NOBITS)
-            continue;;
+            continue;
         if (T::Off end; qAddOverflow(shdr->sh_offset, shdr->sh_size, &end)
                 || end > size_t(data.size())) {
             return error(QLibrary::tr("section contents extend past the end of the file"));

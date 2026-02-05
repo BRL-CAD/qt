@@ -1,5 +1,6 @@
 // Copyright (C) 2020 The Qt Company Ltd.
 // SPDX-License-Identifier: LicenseRef-Qt-Commercial OR LGPL-3.0-only OR GPL-2.0-only OR GPL-3.0-only
+// Qt-Security score:critical reason:data-parser
 
 #include "qwindowsfontdatabasebase_p.h"
 #include "qwindowsfontdatabase_p.h"
@@ -16,6 +17,8 @@
 #  include <d2d1.h>
 #  include "qwindowsfontenginedirectwrite_p.h"
 #endif
+
+#include <utility> // for std::pair
 
 QT_BEGIN_NAMESPACE
 
@@ -351,7 +354,7 @@ namespace {
         return E_NOTIMPL;
     }
 
-    class DirectWriteFontFileLoader: public IDWriteFontFileLoader
+    class DirectWriteFontFileLoader: public IDWriteLocalFontFileLoader
     {
     public:
         DirectWriteFontFileLoader() : m_referenceCount(0) {}
@@ -359,11 +362,58 @@ namespace {
         {
         }
 
-        inline void addKey(const QByteArray &fontData)
+        inline void addKey(const QByteArray &fontData, const QString &filename)
         {
             if (!m_fontDatas.contains(fontData.data()))
-                m_fontDatas.insert(fontData.data(), fontData);
+                m_fontDatas.insert(fontData.data(), {fontData, filename});
         }
+
+        HRESULT STDMETHODCALLTYPE GetFilePathLengthFromKey(void const* fontFileReferenceKey,
+                                                           UINT32 fontFileReferenceKeySize,
+                                                           UINT32* filePathLength) override
+        {
+            Q_UNUSED(fontFileReferenceKeySize);
+            const void *key = *reinterpret_cast<void * const *>(fontFileReferenceKey);
+            auto it = m_fontDatas.constFind(key);
+            if (it == m_fontDatas.constEnd())
+                return E_FAIL;
+
+            *filePathLength = it.value().second.size();
+            return 0;
+        }
+
+        HRESULT STDMETHODCALLTYPE GetFilePathFromKey(void const* fontFileReferenceKey,
+                                                     UINT32 fontFileReferenceKeySize,
+                                                     WCHAR* filePath,
+                                                     UINT32 filePathSize) override
+        {
+            Q_UNUSED(fontFileReferenceKeySize);
+            const void *key = *reinterpret_cast<void * const *>(fontFileReferenceKey);
+            const auto it = m_fontDatas.constFind(key);
+            if (it == m_fontDatas.constEnd())
+                return E_FAIL;
+
+            const QString &path = it.value().second;
+            if (filePathSize < path.size() + 1)
+                return E_FAIL;
+
+            const qsizetype length = path.toWCharArray(filePath);
+            filePath[length] = '\0';
+
+            return 0;
+        }
+
+        HRESULT STDMETHODCALLTYPE GetLastWriteTimeFromKey(void const* fontFileReferenceKey,
+                                                          UINT32 fontFileReferenceKeySize,
+                                                          FILETIME* lastWriteTime) override
+        {
+            Q_UNUSED(fontFileReferenceKey);
+            Q_UNUSED(fontFileReferenceKeySize);
+            Q_UNUSED(lastWriteTime);
+            // We never call this, so just fail
+            return E_FAIL;
+        }
+
 
         inline void removeKey(const void *key)
         {
@@ -385,13 +435,15 @@ namespace {
 
     private:
         ULONG m_referenceCount;
-        QHash<const void *, QByteArray> m_fontDatas;
+        QHash<const void *, std::pair<QByteArray, QString> > m_fontDatas;
     };
 
     HRESULT STDMETHODCALLTYPE DirectWriteFontFileLoader::QueryInterface(const IID &iid,
                                                                         void **object)
     {
-        if (iid == IID_IUnknown || iid == __uuidof(IDWriteFontFileLoader)) {
+        if (iid == IID_IUnknown
+            || iid == __uuidof(IDWriteFontFileLoader)
+            || iid == __uuidof(IDWriteLocalFontFileLoader)) {
             *object = this;
             AddRef();
             return S_OK;
@@ -432,7 +484,7 @@ namespace {
         if (it == m_fontDatas.constEnd())
             return E_FAIL;
 
-        QByteArray fontData = it.value();
+        QByteArray fontData = it.value().first;
         DirectWriteFontFileStream *stream = new DirectWriteFontFileStream(fontData);
         stream->AddRef();
         *fontFileStream = stream;
@@ -468,10 +520,10 @@ public:
             m_directWriteFactory->Release();
     }
 
-    void addKey(const QByteArray &fontData)
+    void addKey(const QByteArray &fontData, const QString &filename)
     {
         if (m_directWriteFontFileLoader != nullptr)
-            m_directWriteFontFileLoader->addKey(fontData);
+            m_directWriteFontFileLoader->addKey(fontData, filename);
     }
 
     void removeKey(const void *key)
@@ -565,16 +617,27 @@ void QWindowsFontDatabaseBase::createDirectWriteFactory(IDWriteFactory **factory
     IUnknown *result = nullptr;
 
 #  if QT_CONFIG(directwrite3)
-    DWriteCreateFactory(DWRITE_FACTORY_TYPE_SHARED, __uuidof(IDWriteFactory5), &result);
-
-    if (result == nullptr)
-        DWriteCreateFactory(DWRITE_FACTORY_TYPE_SHARED, __uuidof(IDWriteFactory3), &result);
-#  endif
-
-    if (result == nullptr)
-        DWriteCreateFactory(DWRITE_FACTORY_TYPE_SHARED, __uuidof(IDWriteFactory2), &result);
+    qCDebug(lcQpaFonts) << "Trying to create IDWriteFactory6";
+    DWriteCreateFactory(DWRITE_FACTORY_TYPE_SHARED, __uuidof(IDWriteFactory6), &result);
 
     if (result == nullptr) {
+        qCDebug(lcQpaFonts) << "Trying to create IDWriteFactory5";
+        DWriteCreateFactory(DWRITE_FACTORY_TYPE_SHARED, __uuidof(IDWriteFactory5), &result);
+    }
+
+    if (result == nullptr) {
+        qCDebug(lcQpaFonts) << "Trying to create IDWriteFactory3";
+        DWriteCreateFactory(DWRITE_FACTORY_TYPE_SHARED, __uuidof(IDWriteFactory3), &result);
+    }
+#  endif
+
+    if (result == nullptr) {
+        qCDebug(lcQpaFonts) << "Trying to create IDWriteFactory2";
+        DWriteCreateFactory(DWRITE_FACTORY_TYPE_SHARED, __uuidof(IDWriteFactory2), &result);
+    }
+
+    if (result == nullptr) {
+        qCDebug(lcQpaFonts) << "Trying to create plain IDWriteFactory";
         if (FAILED(DWriteCreateFactory(DWRITE_FACTORY_TYPE_SHARED, __uuidof(IDWriteFactory), &result))) {
             qErrnoWarning("DWriteCreateFactory failed");
             return;
@@ -720,13 +783,14 @@ void QWindowsFontDatabaseBase::invalidate()
 #if QT_CONFIG(directwrite) && QT_CONFIG(direct2d)
 IDWriteFontFace *QWindowsFontDatabaseBase::createDirectWriteFace(const QByteArray &fontData)
 {
-    QList<IDWriteFontFace *> faces = createDirectWriteFaces(fontData, false);
+    QList<IDWriteFontFace *> faces = createDirectWriteFaces(fontData, QString{}, false);
     Q_ASSERT(faces.size() <= 1);
 
     return faces.isEmpty() ? nullptr : faces.first();
 }
 
 QList<IDWriteFontFace *> QWindowsFontDatabaseBase::createDirectWriteFaces(const QByteArray &fontData,
+                                                                          const QString &filename,
                                                                           bool queryVariations) const
 {
     QList<IDWriteFontFace *> ret;
@@ -739,7 +803,7 @@ QList<IDWriteFontFace *> QWindowsFontDatabaseBase::createDirectWriteFaces(const 
     if (m_fontFileLoader == nullptr)
         m_fontFileLoader.reset(new QCustomFontFileLoader(fontEngineData->directWriteFactory));
 
-    m_fontFileLoader->addKey(fontData);
+    m_fontFileLoader->addKey(fontData, filename);
 
     IDWriteFontFile *fontFile = nullptr;
     const void *key = fontData.data();
@@ -860,6 +924,14 @@ QFontEngine *QWindowsFontDatabaseBase::fontEngine(const QByteArray &fontData, qr
 #endif
 
     return fontEngine;
+}
+
+QStringList QWindowsFontDatabaseBase::familiesForScript(QFontDatabasePrivate::ExtendedScript script)
+{
+    if (script == QFontDatabasePrivate::Script_Emoji)
+        return QStringList{} << QStringLiteral("Segoe UI Emoji");
+    else
+        return QStringList{};
 }
 
 QString QWindowsFontDatabaseBase::familyForStyleHint(QFont::StyleHint styleHint)

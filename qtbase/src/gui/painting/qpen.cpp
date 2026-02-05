@@ -56,8 +56,6 @@ QT_BEGIN_NAMESPACE
     For more information about painting in general, see the \l{Paint
     System} documentation.
 
-    \tableofcontents
-
     \section1 Pen Style
 
     Qt provides several built-in styles represented by the
@@ -160,7 +158,8 @@ QT_BEGIN_NAMESPACE
 
     The default is Qt::BevelJoin.
 
-    \image qpen-miterlimit.png
+    \image qpen-miterlimit.png {Illustration showing how miterLimit controls
+           the length of the sharp corner for miterJoin}
 
     When the Qt::MiterJoin style is applied, it is possible to use the
     setMiterLimit() function to specify how far the miter join can
@@ -201,8 +200,8 @@ QPenPrivate::QPenPrivate(const QBrush &_brush, qreal _width, Qt::PenStyle penSty
     joinStyle = _joinStyle;
 }
 
-static const Qt::PenCapStyle qpen_default_cap = Qt::SquareCap;
-static const Qt::PenJoinStyle qpen_default_join = Qt::BevelJoin;
+static constexpr Qt::PenCapStyle qpen_default_cap = Qt::SquareCap;
+static constexpr Qt::PenJoinStyle qpen_default_join = Qt::BevelJoin;
 
 class QPenDataHolder
 {
@@ -343,10 +342,49 @@ QPen &QPen::operator=(const QPen &p) noexcept
 /*!
     \fn void QPen::swap(QPen &other)
     \since 4.8
-
-    Swaps pen \a other with this pen. This operation is very
-    fast and never fails.
+    \memberswap{pen}
 */
+
+/*!
+    \overload
+    \since 6.9
+
+    Makes this pen a solid pen with the given color, and default
+    cap and join styles, and returns a reference to \e this pen.
+*/
+QPen &QPen::operator=(QColor color)
+{
+    detach();
+    d->brush = color;
+    d->width = 1;
+    d->style = Qt::SolidLine;
+    d->capStyle = qpen_default_cap;
+    d->joinStyle = qpen_default_join;
+
+    return *this;
+}
+
+/*!
+    \overload
+    \since 6.9
+
+    Makes this pen a solid, black pen with default cap and join styles,
+    and returns a reference to \e this pen.
+*/
+QPen &QPen::operator=(Qt::PenStyle style)
+{
+    detach();
+    if (style == Qt::NoPen) {
+        d = nullPenInstance()->pen;
+    } else {
+        d->brush = Qt::black;
+        d->width = 1;
+        d->style = style;
+        d->capStyle = qpen_default_cap;
+        d->joinStyle = qpen_default_join;
+    }
+    return *this;
+}
 
 /*!
    Returns the pen as a QVariant.
@@ -773,7 +811,16 @@ void QPen::setCosmetic(bool cosmetic)
     d->cosmetic = cosmetic;
 }
 
-
+/*!
+    \internal
+*/
+bool QPen::isSolidDefaultLine() const noexcept
+{
+    return d->style == Qt::SolidLine && d->width == 1
+        && d->capStyle == qpen_default_cap && d->joinStyle == qpen_default_join
+        && qFuzzyCompare(d->dashOffset, 0) && qFuzzyCompare(d->miterLimit, 2)
+        && d->cosmetic == false;
+}
 
 /*!
     \fn bool QPen::operator!=(const QPen &pen) const
@@ -810,6 +857,23 @@ bool QPen::operator==(const QPen &p) const
             && p.d->cosmetic == d->cosmetic);
 }
 
+/*!
+    \internal
+*/
+bool QPen::doCompareEqualColor(QColor rhs) const noexcept
+{
+    return d->brush == rhs && isSolidDefaultLine();
+}
+
+/*!
+    \internal
+*/
+bool QPen::doCompareEqualStyle(Qt::PenStyle rhs) const
+{
+    if (rhs == Qt::NoPen)
+        return style() == Qt::NoPen;
+    return *this == QPen(rhs); // ### optimize (allocates)
+}
 
 /*!
     \fn bool QPen::isDetached()
@@ -951,20 +1015,10 @@ QDataStream &operator>>(QDataStream &s, QPen &p)
 #ifndef QT_NO_DEBUG_STREAM
 QDebug operator<<(QDebug dbg, const QPen &p)
 {
-    const char *PEN_STYLES[] = {
-        "NoPen",
-        "SolidLine",
-        "DashLine",
-        "DotLine",
-        "DashDotLine",
-        "DashDotDotLine",
-        "CustomDashLine"
-    };
-
     QDebugStateSaver saver(dbg);
     dbg.nospace() << "QPen(" << p.width() << ',' << p.brush()
-                  << ',' << PEN_STYLES[p.style()] << ',' << int(p.capStyle())
-                  << ',' << int(p.joinStyle()) << ',' << p.dashPattern()
+                  << ',' << p.style() << ',' << p.capStyle()
+                  << ',' << p.joinStyle() << ',' << p.dashPattern()
                   << ',' << p.dashOffset()
                   << ',' << p.miterLimit() << ')';
     return dbg;

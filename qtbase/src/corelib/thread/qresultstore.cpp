@@ -1,5 +1,6 @@
 // Copyright (C) 2020 The Qt Company Ltd.
 // SPDX-License-Identifier: LicenseRef-Qt-Commercial OR LGPL-3.0-only OR GPL-2.0-only OR GPL-3.0-only
+// Qt-Security score:significant reason:default
 
 #include "qresultstore.h"
 
@@ -86,16 +87,6 @@ void ResultIteratorBase::batchedAdvance()
 {
     ++mapIterator;
     m_vectorIndex = 0;
-}
-
-bool ResultIteratorBase::operator==(const ResultIteratorBase &other) const
-{
-    return (mapIterator == other.mapIterator && m_vectorIndex == other.m_vectorIndex);
-}
-
-bool ResultIteratorBase::operator!=(const ResultIteratorBase &other) const
-{
-    return !operator==(other);
 }
 
 bool ResultIteratorBase::isVector() const

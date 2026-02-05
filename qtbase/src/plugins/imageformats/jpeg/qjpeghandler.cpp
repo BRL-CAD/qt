@@ -1,5 +1,6 @@
 // Copyright (C) 2016 The Qt Company Ltd.
 // SPDX-License-Identifier: LicenseRef-Qt-Commercial OR LGPL-3.0-only OR GPL-2.0-only OR GPL-3.0-only
+// Qt-Security score:critical reason:data-parser
 
 #include "qjpeghandler_p.h"
 
@@ -172,8 +173,13 @@ inline static bool read_jpeg_format(QImage::Format &format, j_decompress_ptr cin
         format = QImage::Format_Grayscale8;
         break;
     case 3:
-    case 4:
         format = QImage::Format_RGB32;
+        break;
+    case 4:
+        if (cinfo->out_color_space == JCS_CMYK)
+            format = QImage::Format_CMYK8888;
+        else
+            format = QImage::Format_RGB32;
         break;
     default:
         result = false;
@@ -192,8 +198,13 @@ static bool ensureValidImage(QImage *dest, struct jpeg_decompress_struct *info,
         format = QImage::Format_Grayscale8;
         break;
     case 3:
-    case 4:
         format = QImage::Format_RGB32;
+        break;
+    case 4:
+        if (info->out_color_space == JCS_CMYK)
+            format = QImage::Format_CMYK8888;
+        else
+            format = QImage::Format_RGB32;
         break;
     default:
         return false; // unsupported format
@@ -206,7 +217,7 @@ static bool read_jpeg_image(QImage *outImage,
                             QSize scaledSize, QRect scaledClipRect,
                             QRect clipRect, int quality,
                             Rgb888ToRgb32Converter converter,
-                            j_decompress_ptr info, struct my_error_mgr* err  )
+                            j_decompress_ptr info, struct my_error_mgr* err, bool invertCMYK)
 {
     if (!setjmp(err->setjmp_buffer)) {
         // -1 means default quality.
@@ -348,14 +359,15 @@ static bool read_jpeg_image(QImage *outImage,
                     QRgb *out = (QRgb*)outImage->scanLine(y);
                     converter(out, in, clip.width());
                 } else if (info->out_color_space == JCS_CMYK) {
-                    // Convert CMYK->RGB.
                     uchar *in = rows[0] + clip.x() * 4;
-                    QRgb *out = (QRgb*)outImage->scanLine(y);
-                    for (int i = 0; i < clip.width(); ++i) {
-                        int k = in[3];
-                        *out++ = qRgb(k * in[0] / 255, k * in[1] / 255,
-                                      k * in[2] / 255);
-                        in += 4;
+                    quint32 *out = (quint32*)outImage->scanLine(y);
+                    if (invertCMYK) {
+                        for (int i = 0; i < clip.width(); ++i) {
+                            *out++ = 0xffffffffu - (in[0] | in[1] << 8 | in[2] << 16 | in[3] << 24);
+                            in += 4;
+                        }
+                    } else {
+                        memcpy(out, in, clip.width() * 4);
                     }
                 } else if (info->output_components == 1) {
                     // Grayscale.
@@ -493,7 +505,8 @@ static bool do_write_jpeg_image(struct jpeg_compress_struct &cinfo,
                                 int sourceQuality,
                                 const QString &description,
                                 bool optimize,
-                                bool progressive)
+                                bool progressive,
+                                bool invertCMYK)
 {
     bool success = false;
     const QList<QRgb> cmap = image.colorTable();
@@ -538,6 +551,10 @@ static bool do_write_jpeg_image(struct jpeg_compress_struct &cinfo,
             cinfo.input_components = 1;
             cinfo.in_color_space = JCS_GRAYSCALE;
             break;
+        case QImage::Format_CMYK8888:
+            cinfo.input_components = 4;
+            cinfo.in_color_space = JCS_CMYK;
+            break;
         default:
             cinfo.input_components = 3;
             cinfo.in_color_space = JCS_RGB;
@@ -567,10 +584,17 @@ static bool do_write_jpeg_image(struct jpeg_compress_struct &cinfo,
 
         int quality = sourceQuality >= 0 ? qMin(int(sourceQuality),100) : 75;
         jpeg_set_quality(&cinfo, quality, TRUE /* limit to baseline-JPEG values */);
+
+        // If the quality exceeds a certain threshold (such as 90), disable chroma subsampling
+        if (quality > 90) {
+            cinfo.comp_info[0].v_samp_factor = 1;
+            cinfo.comp_info[0].h_samp_factor = 1;
+        }
+
         jpeg_start_compress(&cinfo, TRUE);
 
         set_text(image, &cinfo, description);
-        if (cinfo.in_color_space == JCS_RGB)
+        if (cinfo.in_color_space == JCS_RGB || cinfo.in_color_space == JCS_CMYK)
             write_icc_profile(image, &cinfo);
 
         row_pointer[0] = new uchar[cinfo.image_width*cinfo.input_components];
@@ -654,6 +678,17 @@ static bool do_write_jpeg_image(struct jpeg_compress_struct &cinfo,
                     }
                 }
                 break;
+            case QImage::Format_CMYK8888: {
+                auto *cmykIn = reinterpret_cast<const quint32 *>(image.constScanLine(cinfo.next_scanline));
+                auto *cmykOut = reinterpret_cast<quint32 *>(row);
+                if (invertCMYK) {
+                    for (int i = 0; i < w; ++i)
+                        cmykOut[i] = 0xffffffffu - cmykIn[i];
+                } else {
+                    memcpy(cmykOut, cmykIn, w * 4);
+                }
+                break;
+            }
             default:
                 {
                     // (Testing shows that this way is actually faster than converting to RGB888 + memcpy)
@@ -689,7 +724,8 @@ static bool write_jpeg_image(const QImage &image,
                              int sourceQuality,
                              const QString &description,
                              bool optimize,
-                             bool progressive)
+                             bool progressive,
+                             bool invertCMYK)
 {
     // protect these objects from the setjmp/longjmp pair inside
     // do_write_jpeg_image (by making them non-local).
@@ -700,7 +736,7 @@ static bool write_jpeg_image(const QImage &image,
     const bool success = do_write_jpeg_image(cinfo, row_pointer,
                                              image, device,
                                              sourceQuality, description,
-                                             optimize, progressive);
+                                             optimize, progressive, invertCMYK);
 
     delete [] row_pointer[0];
     return success;
@@ -745,6 +781,21 @@ public:
     QStringList readTexts;
     QByteArray iccProfile;
 
+    // Photoshop historically invertes the quantities in CMYK JPEG files:
+    // 0 means 100% ink, 255 means no ink. Every reader does the same,
+    // for compatibility reasons.
+    // Use such an interpretation by default, but also offer the alternative
+    // of not inverting the channels.
+    // This is just a "fancy" API; it could be reduced to a boolean setting
+    // for CMYK files.
+    enum class SubType {
+        Automatic,
+        Inverted_CMYK,
+        CMYK,
+        NSubTypes
+    };
+    SubType subType = SubType::Automatic;
+
     struct jpeg_decompress_struct info;
     struct my_jpeg_source_mgr * iod_src;
     struct my_error_mgr err;
@@ -758,6 +809,14 @@ public:
 
     QJpegHandler *q;
 };
+
+static const char SupportedJPEGSubtypes[][14] = {
+    "Automatic",
+    "Inverted_CMYK",
+    "CMYK"
+};
+
+static_assert(std::size(SupportedJPEGSubtypes) == size_t(QJpegHandlerPrivate::SubType::NSubTypes));
 
 static bool readExifHeader(QDataStream &stream)
 {
@@ -851,8 +910,7 @@ static int getExifOrientation(QByteArray &exifData)
         }
 
         // read offset to next IFD
-        stream >> offset;
-        if (stream.status() != QDataStream::Ok)
+        if (!(stream >> offset))
             return -1;
         if (offset == 0) // this is the last IFD
             return 0;   // No Exif orientation was found
@@ -975,7 +1033,8 @@ bool QJpegHandlerPrivate::read(QImage *image)
 
     if (state == ReadHeader)
     {
-        bool success = read_jpeg_image(image, scaledSize, scaledClipRect, clipRect, quality, rgb888ToRgb32ConverterPtr, &info, &err);
+        const bool invertCMYK = subType != QJpegHandlerPrivate::SubType::CMYK;
+        bool success = read_jpeg_image(image, scaledSize, scaledClipRect, clipRect, quality, rgb888ToRgb32ConverterPtr, &info, &err, invertCMYK);
         if (success) {
             for (int i = 0; i < readTexts.size()-1; i+=2)
                 image->setText(readTexts.at(i), readTexts.at(i+1));
@@ -1061,13 +1120,14 @@ extern void qt_imageTransform(QImage &src, QImageIOHandler::Transformations orie
 
 bool QJpegHandler::write(const QImage &image)
 {
+    const bool invertCMYK = d->subType != QJpegHandlerPrivate::SubType::CMYK;
     if (d->transformation != QImageIOHandler::TransformationNone) {
         // We don't support writing EXIF headers so apply the transform to the data.
         QImage img = image;
         qt_imageTransform(img, d->transformation);
-        return write_jpeg_image(img, device(), d->quality, d->description, d->optimize, d->progressive);
+        return write_jpeg_image(img, device(), d->quality, d->description, d->optimize, d->progressive, invertCMYK);
     }
-    return write_jpeg_image(image, device(), d->quality, d->description, d->optimize, d->progressive);
+    return write_jpeg_image(image, device(), d->quality, d->description, d->optimize, d->progressive, invertCMYK);
 }
 
 bool QJpegHandler::supportsOption(ImageOption option) const
@@ -1078,6 +1138,8 @@ bool QJpegHandler::supportsOption(ImageOption option) const
         || option == ClipRect
         || option == Description
         || option == Size
+        || option == SubType
+        || option == SupportedSubTypes
         || option == ImageFormat
         || option == OptimizedWrite
         || option == ProgressiveScanWrite
@@ -1101,6 +1163,13 @@ QVariant QJpegHandler::option(ImageOption option) const
     case Size:
         d->readJpegHeader(device());
         return d->size;
+    case SubType:
+        return QByteArray(SupportedJPEGSubtypes[int(d->subType)]);
+    case SupportedSubTypes: {
+        QByteArrayList list(std::begin(SupportedJPEGSubtypes),
+                            std::end(SupportedJPEGSubtypes));
+        return QVariant::fromValue(list);
+    }
     case ImageFormat:
         d->readJpegHeader(device());
         return d->format;
@@ -1136,6 +1205,16 @@ void QJpegHandler::setOption(ImageOption option, const QVariant &value)
     case Description:
         d->description = value.toString();
         break;
+    case SubType: {
+        const QByteArray subType = value.toByteArray();
+        for (size_t i = 0; i < std::size(SupportedJPEGSubtypes); ++i) {
+            if (subType == SupportedJPEGSubtypes[i]) {
+                d->subType = QJpegHandlerPrivate::SubType(i);
+                break;
+            }
+        }
+        break;
+    }
     case OptimizedWrite:
         d->optimize = value.toBool();
         break;

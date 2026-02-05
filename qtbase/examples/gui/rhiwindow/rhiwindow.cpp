@@ -146,7 +146,7 @@ void RhiWindow::init()
     }
 #endif
 
-#if defined(Q_OS_MACOS) || defined(Q_OS_IOS)
+#if QT_CONFIG(metal)
     if (m_graphicsApi == QRhi::Metal) {
         QRhiMetalInitParams params;
         m_rhi.reset(QRhi::create(QRhi::Metal, &params));
@@ -298,7 +298,7 @@ void HelloWindow::ensureFullscreenTexture(const QSize &pixelSize, QRhiResourceUp
     painter.end();
 
     if (m_rhi->isYUpInNDC())
-        image = image.mirrored();
+        image.flip();
 
 //! [ensure-texture-2]
     u->uploadTexture(m_texture.get(), image);

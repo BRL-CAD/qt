@@ -43,6 +43,8 @@
     qCDebug(lcQpaKeys).nospace() << "Inserting \"" << text << "\""
         << ", replacing range " << replacementRange;
 
+    NSString *string = [self stringForText:text];
+
     if (m_composingText.isEmpty()) {
         // The input method may have transformed the incoming key event
         // to text that doesn't match what the original key event would
@@ -54,7 +56,7 @@
                            || currentEvent.type == NSEventTypeKeyUp
                                 ? currentEvent.characters : nil;
 
-        if ([text isEqualToString:eventText]) {
+        if ([string isEqualToString:eventText]) {
             // We do not send input method events for simple text input,
             // and instead let handleKeyEvent send the key event.
             qCDebug(lcQpaKeys) << "Ignoring text insertion for simple text";
@@ -66,8 +68,7 @@
     if (queryInputMethod(self.focusObject)) {
         QInputMethodEvent inputMethodEvent;
 
-        const bool isAttributedString = [text isKindOfClass:NSAttributedString.class];
-        QString commitString = QString::fromNSString(isAttributedString ? [text string] : text);
+        QString commitString = QString::fromNSString(string);
 
         // Ensure we have a valid replacement range
         replacementRange = [self sanitizeReplacementRange:replacementRange];
@@ -130,8 +131,8 @@
     newlineEvent.key = isEnter ? Qt::Key_Enter : Qt::Key_Return;
     newlineEvent.text = isEnter ? QLatin1Char(kEnterCharCode)
                                 : QLatin1Char(kReturnCharCode);
-    newlineEvent.nativeVirtualKey = isEnter ? kVK_ANSI_KeypadEnter
-                                            : kVK_Return;
+    newlineEvent.nativeVirtualKey = isEnter ? quint32(kVK_ANSI_KeypadEnter)
+                                            : quint32(kVK_Return);
 
     qCDebug(lcQpaKeys) << "Inserting newline via" << newlineEvent;
     newlineEvent.sendWindowSystemEvent(m_platformWindow->window());
@@ -166,7 +167,7 @@
         << ", replacing range " << replacementRange;
 
     const bool isAttributedString = [text isKindOfClass:NSAttributedString.class];
-    QString preeditString = QString::fromNSString(isAttributedString ? [text string] : text);
+    QString preeditString = QString::fromNSString([self stringForText:text]);
 
     QList<QInputMethodEvent::Attribute> preeditAttributes;
 
@@ -483,6 +484,18 @@
     }
 }
 
+/*
+    Returns the first logical boundary rectangle for characters in the given range,
+    in screen coordinates.
+
+    The "first" in the name refers to the rectangle enclosing the first line when
+    the range encompasses multiple lines of text. In that case, actualRange should
+    be set to the range covered by the first rect, so all line fragments can
+    be queried by invoking this method repeatedly.
+
+    If the length of range is 0 (as it would be if there is nothing selected at
+    the insertion point), then the rectangle coincides with the insertion point.
+*/
 - (NSRect)firstRectForCharacterRange:(NSRange)range actualRange:(NSRangePointer)actualRange
 {
     Q_UNUSED(range);
@@ -490,6 +503,8 @@
 
     QWindow *window = m_platformWindow ? m_platformWindow->window() : nullptr;
     if (window && queryInputMethod(window->focusObject())) {
+        if (range.length) // FIXME: Handle the case when range is non-zero
+            qCWarning(lcQpaKeys) << "Can't satisfy firstRectForCharacterRange for" << range;
         QRect cursorRect = qApp->inputMethod()->cursorRectangle().toRect();
         cursorRect.moveBottomLeft(window->mapToGlobal(cursorRect.bottomLeft()));
         return QCocoaScreen::mapToNative(cursorRect);
@@ -553,10 +568,15 @@
     // the range ourselves, based on the current state of the input context.
 
     const auto markedRange = [self markedRange];
-    if (markedRange.location != NSNotFound)
+    const auto selectedRange = [self selectedRange];
+
+    if (markedRange.length)
         return markedRange;
+    else if (selectedRange.length)
+        return selectedRange;
     else
-        return [self selectedRange];
+        return markedRange; // Represents cursor position when length is 0
+
 }
 
 /*
@@ -565,30 +585,56 @@
 
     The two APIs have different semantics.
 */
-- (std::pair<long long, long long>)inputMethodRangeForRange:(NSRange)range
+- (std::pair<long long, long long>)inputMethodRangeForRange:(NSRange)replacementRange
 {
-    long long replaceFrom = range.location;
-    long long replaceLength = range.length;
+    long long replaceFrom = replacementRange.location;
+    long long replaceLength = replacementRange.length;
 
     const auto markedRange = [self markedRange];
     const auto selectedRange = [self selectedRange];
 
-    // The QInputMethodEvent replacement start is relative to the start
-    // of the marked text (the location of the preedit string).
-    if (markedRange.location != NSNotFound)
+    if (markedRange.length && selectedRange.length) {
+        // We assume below that we have either marked text or selected text
+        qCWarning(lcQpaKeys) << "Got both markedRange" << markedRange
+                             << "and selectedRange" << selectedRange;
+    }
+
+    if (markedRange.length) {
+        // The replacement length of QInputMethodEvent already includes
+        // the preedit string, as the documentation says that "When doing
+        // replacement, the area of the preedit string is ignored".
+        replaceLength -= markedRange.length;
+
+        // The QInputMethodEvent replacement start is relative to the start
+        // of the marked text (the location of the preedit string).
         replaceFrom -= markedRange.location;
-    else
+    } else if (selectedRange.length) {
+        if (!NSEqualRanges(NSIntersectionRange(replacementRange, selectedRange), selectedRange)) {
+            qCWarning(lcQpaKeys) << "Replacement range" << replacementRange
+                                 << "is a subset of selection" << selectedRange;
+            // FIXME: To support this case we would need to extract parts of the
+            // selection into the committed text. But for now we ignore it, as we
+            // don't know if it happens in practice.
+        }
+
+        // Our input method protocol specifies that the entire selection
+        // should be removed as the first step, and the replacement length
+        // of the QInputMethodEvent refers to any additional text that should
+        // be removed/replaced.
+        replaceLength -= selectedRange.length;
+
+        // Once the selection has been removed the cursor position will be
+        // at the leftmost point of the selection, regardless of whether the
+        // cursor was at the start or end of the selection. The replacement
+        // start of QInputMethodEvent should be relative to this position.
+        replaceFrom -= selectedRange.location;
+    } else if (markedRange.location != NSNotFound) {
+        // The QInputMethodEvent replacement start is relative to the cursor
+        // position.
+        replaceFrom -= markedRange.location;
+    } else{
         replaceFrom = 0;
-
-    // The replacement length of QInputMethodEvent already includes
-    // the selection, as the documentation says that "If the widget
-    // has selected text, the selected text should get removed."
-    replaceLength -= selectedRange.length;
-
-    // The replacement length of QInputMethodEvent already includes
-    // the preedit string, as the documentation says that "When doing
-    // replacement, the area of the preedit string is ignored".
-    replaceLength -= markedRange.length;
+    }
 
     // What we're left with is any _additional_ replacement.
     // Make sure it's valid before passing it on.
@@ -597,4 +643,191 @@
     return {replaceFrom, replaceLength};
 }
 
+- (NSString*)stringForText:(id)text
+{
+    return [text isKindOfClass:NSAttributedString.class] ? [text string] : text;
+}
+
 @end
+
+@implementation QNSView (ServicesMenu)
+
+// Support for reading and writing from service menu pasteboards. If the text
+// input client supports returning the selection as a QMimeData we can convert
+// that to rich text. Otherwise we fall back to plain text, which means that we
+// lose any styling the selection might have when fed through a service that
+// changes the text.
+
+- (id)validRequestorForSendType:(NSPasteboardType)sendType returnType:(NSPasteboardType)returnType
+{
+    if (auto queryResult = queryInputMethod(self.focusObject, Qt::ImReadOnly | Qt::ImCurrentSelection)) {
+        bool canWriteToPasteboard = false;
+        bool canReadFromPastboard = false;
+
+        auto currentSelection = queryResult.value(Qt::ImCurrentSelection);
+        if (auto *mimeData = currentSelection.value<QMimeData*>()) {
+            // If the client reports the selection as mime-data we assume
+            // it can also insert mime-data via QInputMethodEvent::MimeData
+            auto scope = QUtiMimeConverter::HandlerScopeFlag::Clipboard;
+            auto availableConverters = QMacMimeRegistry::all(scope);
+            auto sendUti = [self utiForPasteboardType:sendType];
+            auto returnUti = [self utiForPasteboardType:returnType];
+            const auto mimeFormats = mimeData->formats();
+            for (const auto *c : availableConverters) {
+                if (mimeFormats.contains(c->mimeForUti(sendUti)))
+                    canWriteToPasteboard = true;
+                if (mimeFormats.contains(c->mimeForUti(returnUti)))
+                    canReadFromPastboard = true;
+                if (canWriteToPasteboard && canReadFromPastboard)
+                    break; // No need to continue looking
+            }
+        } else {
+            canWriteToPasteboard = [sendType isEqualToString:NSPasteboardTypeString]
+                && !currentSelection.toString().isEmpty();
+            canReadFromPastboard = [returnType isEqualToString:NSPasteboardTypeString]
+                && !queryResult.value(Qt::ImReadOnly).toBool();
+        }
+
+        if (!((sendType && !canWriteToPasteboard) || (returnType && !canReadFromPastboard))) {
+            qCDebug(lcQpaServices) << "Accepting service interaction for send" << sendType << "and receive" << returnType;
+            return self;
+        }
+    }
+
+    return [super validRequestorForSendType:sendType returnType:returnType];
+}
+
+- (BOOL)writeSelectionToPasteboard:(NSPasteboard *)pasteboard types:(NSArray<NSPasteboardType> *)types
+{
+    bool didWrite = false;
+
+    if (auto queryResult = queryInputMethod(self.focusObject, Qt::ImCurrentSelection)) {
+        auto currentSelection = queryResult.value(Qt::ImCurrentSelection);
+        if (auto *mimeData = currentSelection.value<QMimeData*>()) {
+            auto mimeFormats = mimeData->formats();
+            auto scope = QUtiMimeConverter::HandlerScopeFlag::Clipboard;
+            auto availableConverters = QMacMimeRegistry::all(scope);
+            for (NSPasteboardType type in types) {
+                auto uti = [self utiForPasteboardType:type];
+                if (uti.isEmpty()) {
+                    qCWarning(lcQpaServices) << "Did not find UTI for type" << type;
+                    continue;
+                }
+                for (const auto *converter : availableConverters) {
+                    auto mime = converter->mimeForUti(uti);
+                    if (mimeFormats.contains(mime)) {
+                        auto utiDataList = converter->convertFromMime(mime,
+                            mimeData->data(mime), uti);
+                        if (utiDataList.isEmpty())
+                            continue;
+                        auto utiData = utiDataList.first();
+                        qCDebug(lcQpaServices) << "Writing" << utiData << "to service pasteboard"
+                            << "with UTI" << uti << "for type" << type << "based on mime" << mime;
+                        didWrite |= [pasteboard setData:utiData.toNSData() forType:type];
+                        break;
+                    }
+                }
+            }
+        }
+
+        // Try plain text fallback if we didn't have QMimeData, or didn't write anything
+        if (!didWrite && ([types containsObject:NSPasteboardTypeString]
+            || QT_IGNORE_DEPRECATIONS([types containsObject:NSStringPboardType]))) {
+            auto selectedText = currentSelection.toString();
+            qCDebug(lcQpaServices) << "Writing" << selectedText << "to service pasteboard"
+                << "as pain text" << "for type" << NSPasteboardTypeString;
+            didWrite |= [pasteboard writeObjects:@[ selectedText.toNSString() ]];
+        }
+    }
+
+    return didWrite;
+}
+
+- (BOOL)readSelectionFromPasteboard:(NSPasteboard *)pasteboard
+{
+    if (queryInputMethod(self.focusObject)) {
+        auto scope = QUtiMimeConverter::HandlerScopeFlag::Clipboard;
+        QMacPasteboard macPasteboard(CFStringRef(pasteboard.name), scope);
+        auto *mimeData = macPasteboard.mimeData();
+        if (mimeData->formats().isEmpty()) {
+            qCWarning(lcQpaServices) << "Failed to resolve mime data from" << pasteboard.types;
+            return NO;
+        }
+
+        qCDebug(lcQpaServices) << "Replacing selected range" << [self selectedRange]
+            << "with mime data" << [&]() {
+                QMap<QString, QByteArray> formatMap;
+                for (const auto &format : mimeData->formats())
+                    formatMap.insert(format, mimeData->data(format));
+                return formatMap;
+            }() << "from service pasteboard" << pasteboard.name;
+
+        QList<QInputMethodEvent::Attribute> attributes;
+        attributes << QInputMethodEvent::Attribute(
+            QInputMethodEvent::MimeData,
+            0, 0, QVariant::fromValue(mimeData));
+
+        QInputMethodEvent inputMethodEvent(QString(), attributes);
+        // Pass the plain text data as the commit string, for clients
+        // that don't know how to handle the new MimeData attribute.
+        // This also ensures that we clear the existing selected text.
+        inputMethodEvent.setCommitString(mimeData->text());
+        QCoreApplication::sendEvent(self.focusObject, &inputMethodEvent);
+        return YES;
+    } else {
+        return NO;
+    }
+}
+
+- (QString)utiForPasteboardType:(NSPasteboardType)pasteboardType
+{
+    if (!pasteboardType)
+        return QString();
+
+    UTType *uttype = [UTType typeWithIdentifier:pasteboardType];
+    if (!uttype) {
+        // Although NSPasteboard types are declared as obsolete
+        // we still get callbacks for these types. As these types
+        // are not UTIs, we need to resolve the underlying UTI
+        // ourselves.
+        uttype = [UTType typeWithTag:pasteboardType
+            tagClass:QT_IGNORE_DEPRECATIONS((NSString*)kUTTagClassNSPboardType)
+            conformingToType:nil];
+    }
+    return QString::fromNSString(uttype.identifier);
+}
+
+@end
+
+#if QT_MACOS_PLATFORM_SDK_EQUAL_OR_ABOVE(150000)
+@implementation QNSView (ContentSelectionInfo)
+
+/*
+    This method is used by AppKit for positioning of context menus in
+    response to the context menu keyboard hotkey, and for placement of
+    the Writing Tools popup.
+*/
+- (NSRect)selectionAnchorRect
+{
+    if (queryInputMethod(self.focusObject)) {
+        // We don't have a way of querying the selection rectangle via
+        // the input method protocol (yet), so we use crude heuristics.
+        const auto *inputMethod = qApp->inputMethod();
+        auto cursorRect = inputMethod->cursorRectangle();
+        auto anchorRect = inputMethod->anchorRectangle();
+        auto selectionRect = cursorRect.united(anchorRect);
+        if (cursorRect.top() != anchorRect.top()) {
+            // Multi line selection. Assume the selections extends to
+            // the entire width of the input item. This does not account
+            // for center-aligned text and a bunch of other cases. FIXME
+            auto itemClipRect = inputMethod->inputItemClipRectangle();
+            selectionRect.setLeft(itemClipRect.left());
+            selectionRect.setRight(itemClipRect.right());
+        }
+        return selectionRect.toCGRect();
+    } else {
+        return NSZeroRect;
+    }
+}
+@end
+#endif // macOS 15 SDK

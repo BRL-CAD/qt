@@ -130,6 +130,9 @@
     per-function basis.
 
     For iterating over the items, see \l {Iterating over Containers}.
+    For using QList with functions from \c {<algorithm>} header, such as
+    \c {std::sort()}, \c {std::reverse()}, and \c {std::count_if()},
+    see \l {Qt containers and std algorithms}.
 
     In addition to QList, Qt also provides QVarLengthArray, a very
     low-level class with little functionality that is optimized for
@@ -247,6 +250,31 @@
     \sa resize()
 */
 
+/*! \fn template <typename T> QList<T>::QList(qsizetype size, Qt::Initialization)
+    \since 6.8
+
+    Constructs a list with an initial size of \a size elements.
+
+    QList will make an attempt at \b{not initializing} the elements.
+
+//! [qlist-uninitialized-strategy]
+    Specifically:
+
+    \list
+
+    \li if \c{T} has a constructor that accepts \c{Qt::Uninitialized},
+    that constructor will be used to initialize the elements;
+
+    \li otherwise, each element is default constructed. For
+    trivially constructible types (such as \c{int}, \c{float}, etc.)
+    this is equivalent to not initializing them.
+
+    \endlist
+//! [qlist-uninitialized-strategy]
+
+    \sa resizeForOverwrite()
+*/
+
 /*! \fn template <typename T> QList<T>::QList(qsizetype size, parameter_type value)
 
     Constructs a list with an initial size of \a size elements.
@@ -279,11 +307,11 @@
 
     Constructs a list with the contents in the iterator range [\a first, \a last).
 
-    \note This constructor only participates in overload resolution if
+    The value type of \c InputIterator must be convertible to \c T.
+
+    \constraints
     \c InputIterator meets the requirements of a
     \l {https://en.cppreference.com/w/cpp/named_req/InputIterator} {LegacyInputIterator}.
-
-    The value type of \c InputIterator must be convertible to \c T.
 */
 
 /*! \fn template <typename T> QList<T>::~QList()
@@ -314,9 +342,7 @@
 
 /*! \fn template <typename T> void QList<T>::swap(QList<T> &other)
     \since 4.8
-
-    Swaps list \a other with this list. This operation is very fast and
-    never fails.
+    \memberswap{list}
 */
 
 /*! \fn template <typename T> void QList<T>::swapItemsAt(qsizetype i, qsizetype j)
@@ -401,14 +427,24 @@
 */
 
 /*!
+    \fn template <typename T> auto QList<T>::operator<=>(const QList<T> &lhs, const QList<T> &rhs)
+    \since 6.9
+
+    Compares the contents of \a lhs and \a rhs
+    \l {https://en.cppreference.com/w/cpp/algorithm/lexicographical_compare_three_way}
+    {lexicographically}. Returns the result of the strongest applicable category
+    type, that is \c {decltype(lhs[0] <=> rhs[0])} if \c {operator<=>()} is
+    available for type \c {T}; otherwise \c {std::weak_ordering}.
+
+    \note This operator is only available in C++20 mode, and when the underlying
+    type \c T models the \c {std::three_way_comparable} concept
+    or provides \c {operator<()}.
+*/
+
+/*!
     \fn template <typename T> size_t qHash(const QList<T> &key, size_t seed = 0)
     \since 5.6
-    \relates QList
-
-    Returns the hash value for \a key,
-    using \a seed to seed the calculation.
-
-    This function requires qHash() to be overloaded for the value type \c T.
+    \qhasholdT{QList}{T}
 */
 
 /*! \fn template <typename T> qsizetype QList<T>::size() const
@@ -442,6 +478,17 @@
     preserving the capacity.
 
     \sa size()
+*/
+
+/*! \fn template <typename T> void QList<T>::resizeForOverwrite(qsizetype size)
+    \since 6.8
+
+    Sets the size of the list to \a size. If \a size is less than the
+    current size, elements are removed from the end. If \a size is
+    greater than the current size, elements are added to the end; QList
+    will make an attempt at \b{not initializing} these new elements.
+
+    \include qlist.qdoc qlist-uninitialized-strategy
 */
 
 /*! \fn template <typename T> qsizetype QList<T>::capacity() const
@@ -861,6 +908,15 @@
     \since 5.6
 
     Moves the item at index position \a from to index position \a to.
+
+    \c from and \c to must be within bounds.
+
+    For example, to move the first item to the end of the list:
+    \code
+    QList<int> list = {1, 2, 3};
+    list.move(0, list.size() - 1);
+    qDebug() << list; // Prints "QList(2, 3, 1)"
+    \endcode
 */
 
 /*! \fn template <typename T> void QList<T>::removeFirst()
@@ -1293,6 +1349,15 @@
     returns \c false.
 */
 
+/*! \fn template <typename T> qsizetype QList<T>::max_size() const
+    \fn template <typename T> qsizetype QList<T>::maxSize()
+    \since 6.8
+
+    It returns the maximum number of elements that the list can
+    theoretically hold. In practice, the number can be much smaller,
+    limited by the amount of memory available to the system.
+*/
+
 /*! \fn template <typename T> QList<T> &QList<T>::operator+=(const QList<T> &other)
 
     Appends the items of the \a other list to this list and
@@ -1562,12 +1627,12 @@
     This function will only allocate memory if the number of elements in the
     range exceeds the capacity of this list or this list is shared.
 
-    \note This function overload only participates in overload resolution if
-    \c InputIterator meets the requirements of a
-    \l {https://en.cppreference.com/w/cpp/named_req/InputIterator} {LegacyInputIterator}.
-
     \note The behavior is undefined if either argument is an iterator into
     *this.
+
+    \constraints
+    \c InputIterator meets the requirements of a
+    \l {https://en.cppreference.com/w/cpp/named_req/InputIterator} {LegacyInputIterator}.
 */
 
 /*! \fn template <typename T> QList<T>& QList<T>::assign(std::initializer_list<T> l)
@@ -1581,4 +1646,13 @@
 
     This function only allocates memory if the number of elements in \a l
     exceeds the capacity of this list or this list is shared.
+*/
+
+/*!
+    \fn template <typename T> QList<T>::DataPointer &QList<T>::data_ptr() &;
+    \fn template <typename T> const QList<T>::DataPointer &QList<T>::data_ptr() const &;
+    \fn template <typename T> QList<T>::DataPointer QList<T>::data_ptr() &&;
+
+    \internal
+    \since 6.10
 */

@@ -192,19 +192,19 @@ QSize QSize::scaled(const QSize &s, Qt::AspectRatioMode mode) const noexcept
         return s;
     } else {
         bool useHeight;
-        qint64 rw = qint64(s.ht) * qint64(wd) / qint64(ht);
+        qint64 rw = qint64(s.height()) * qint64(width()) / qint64(height());
 
         if (mode == Qt::KeepAspectRatio) {
-            useHeight = (rw <= s.wd);
+            useHeight = (rw <= s.width());
         } else { // mode == Qt::KeepAspectRatioByExpanding
-            useHeight = (rw >= s.wd);
+            useHeight = (rw >= s.width());
         }
 
         if (useHeight) {
-            return QSize(rw, s.ht);
+            return QSize(int(rw), s.height());
         } else {
-            return QSize(s.wd,
-                         qint32(qint64(s.wd) * qint64(ht) / qint64(wd)));
+            return QSize(s.width(),
+                         qint32(qint64(s.width()) * qint64(height()) / qint64(width())));
         }
     }
 }
@@ -266,15 +266,15 @@ QSize QSize::scaled(const QSize &s, Qt::AspectRatioMode mode) const noexcept
 */
 
 /*!
-    \fn bool QSize::operator==(const QSize &s1, const QSize &s2)
+    \fn bool QSize::operator==(const QSize &lhs, const QSize &rhs)
 
-    Returns \c true if \a s1 and \a s2 are equal; otherwise returns \c false.
+    Returns \c true if \a lhs and \a rhs are equal; otherwise returns \c false.
 */
 
 /*!
-    \fn bool QSize::operator!=(const QSize &s1, const QSize &s2)
+    \fn bool QSize::operator!=(const QSize &lhs, const QSize &rhs)
 
-    Returns \c true if \a s1 and \a s2 are different; otherwise returns \c false.
+    Returns \c true if \a lhs and \a rhs are different; otherwise returns \c false.
 */
 
 /*!
@@ -714,9 +714,9 @@ QSizeF QSizeF::scaled(const QSizeF &s, Qt::AspectRatioMode mode) const noexcept
 */
 
 /*!
-    \fn bool QSizeF::operator==(const QSizeF &s1, const QSizeF &s2)
+    \fn bool QSizeF::operator==(const QSizeF &lhs, const QSizeF &rhs)
 
-    Returns \c true if \a s1 and \a s2 are approximately equal; otherwise
+    Returns \c true if \a lhs and \a rhs are approximately equal; otherwise
     returns false.
 
     \warning This function does not check for strict equality; instead,
@@ -726,9 +726,9 @@ QSizeF QSizeF::scaled(const QSizeF &s, Qt::AspectRatioMode mode) const noexcept
 */
 
 /*!
-    \fn bool QSizeF::operator!=(const QSizeF &s1, const QSizeF &s2)
+    \fn bool QSizeF::operator!=(const QSizeF &lhs, const QSizeF &rhs)
 
-    Returns \c true if \a s1 and \a s2 are sufficiently different; otherwise
+    Returns \c true if \a lhs and \a rhs are sufficiently different; otherwise
     returns \c false.
 
     \warning This function does not check for strict inequality; instead,
@@ -808,7 +808,24 @@ QSizeF QSizeF::scaled(const QSizeF &s, Qt::AspectRatioMode mode) const noexcept
     \sa expandedTo(), scale()
 */
 
+/*!
+    \fn bool QSizeF::qFuzzyCompare(const QSizeF &lhs, const QSizeF &rhs)
+    \since 6.8
 
+    Returns \c true if the size \a lhs is approximately equal to the
+    size \a rhs; otherwise returns \c false.
+
+    The sizes are considered approximately equal if their width and
+    height are approximately equal.
+*/
+
+/*!
+    \fn bool QSizeF::qFuzzyIsNull(const QSizeF &size)
+    \since 6.8
+
+    Returns \c true if both width and height of the size \a size
+    are approximately equal to zero.
+*/
 
 /*****************************************************************************
   QSizeF stream functions

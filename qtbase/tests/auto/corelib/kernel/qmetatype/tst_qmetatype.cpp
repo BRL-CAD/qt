@@ -358,28 +358,6 @@ void tst_QMetaType::registerGadget(const char *name, const QList<GadgetPropertyT
     s_managedTypes[gadgetTypeId] = qMakePair(dynamicGadgetProperties, std::shared_ptr<QMetaObject>{meta, [](QMetaObject *ptr){ ::free(ptr); }});
 }
 
-void tst_QMetaType::defined()
-{
-    QCOMPARE(int(QMetaTypeId2<QString>::Defined), 1);
-    QCOMPARE(int(QMetaTypeId2<Foo>::Defined), 0);
-    QCOMPARE(int(QMetaTypeId2<void*>::Defined), 1);
-    QCOMPARE(int(QMetaTypeId2<int*>::Defined), 0);
-    QCOMPARE(int(QMetaTypeId2<CustomQObject::CustomQEnum>::Defined), 1);
-    QCOMPARE(int(QMetaTypeId2<CustomGadget>::Defined), 1);
-    QCOMPARE(int(QMetaTypeId2<CustomGadget*>::Defined), 1);
-    QVERIFY(!QMetaTypeId2<GadgetDerived>::Defined);
-    QVERIFY(!QMetaTypeId2<GadgetDerived*>::Defined);
-    QVERIFY(int(QMetaTypeId2<CustomQObject*>::Defined));
-    QVERIFY(!QMetaTypeId2<CustomQObject>::Defined);
-    QVERIFY(!QMetaTypeId2<CustomNonQObject>::Defined);
-    QVERIFY(!QMetaTypeId2<CustomNonQObject*>::Defined);
-    QVERIFY(!QMetaTypeId2<CustomGadget_NonDefaultConstructible>::Defined);
-
-    // registered with Q_DECLARE_METATYPE
-    QVERIFY(QMetaTypeId2<GadgetDerivedAndTyped<int>>::Defined);
-    QVERIFY(QMetaTypeId2<GadgetDerivedAndTyped<int>*>::Defined);
-}
-
 struct Bar
 {
     Bar()
@@ -1220,7 +1198,7 @@ void tst_QMetaType::flagsBinaryCompatibility6_0_data()
     QTest::addColumn<quint32>("flags");
 
     QFile file(QFINDTESTDATA("typeFlags.bin"));
-    file.open(QIODevice::ReadOnly);
+    QVERIFY(file.open(QIODevice::ReadOnly));
     QList<quint32> buffer;
     QDataStream ds(&file);
     ds >> buffer;
@@ -1705,7 +1683,8 @@ void tst_QMetaType::selfCompare()
     case QMetaType::MetaTypeName:
 FOR_EACH_PRIMITIVE_METATYPE(ADD_METATYPE_CASE)
 #undef ADD_METATYPE_CASE
-        QCOMPARE(memcmp(v1, v2, t.sizeOf()), 0);
+        if (type != QMetaType::Void)
+            QCOMPARE(memcmp(v1, v2, t.sizeOf()), 0);
     }
 }
 
@@ -1858,6 +1837,14 @@ void tst_QMetaType::isEnum()
 
     int type6 = ::qMetaTypeId<isEnumTest_Enum1>();
     QVERIFY((QMetaType(type6).flags() & QMetaType::IsEnumeration) == QMetaType::IsEnumeration);
+
+    // QFlags are considered enums
+    QCOMPARE(QMetaType::fromType<QFlags<isEnumTest_Enum0>>().flags() & QMetaType::IsEnumeration,
+             QMetaType::IsEnumeration);
+    QCOMPARE(QMetaType::fromType<QFlags<isEnumTest_Enum1>>().flags() & QMetaType::IsEnumeration,
+             QMetaType::IsEnumeration);
+    QCOMPARE(QMetaType::fromType<QFlags<isEnumTest_Struct0::A>>().flags() & QMetaType::IsEnumeration,
+             QMetaType::IsEnumeration);
 }
 
 enum E1 : unsigned char {};
@@ -1870,12 +1857,13 @@ namespace myflags {
 
     enum  Flag1 : int { A, B };
     enum  Flag2 : short { X, Y };
+    enum  Flag3 : qlonglong { T, W = Q_INT64_C(0x1'0000'0002) };
 
     Q_DECLARE_FLAGS(Flags1, myflags::Flag1);
     Q_FLAG_NS(Flags1)
     Q_DECLARE_FLAGS(Flags2, myflags::Flag2);
     Q_FLAG_NS(Flags2)
-
+    Q_DECLARE_FLAGS(Flags3, myflags::Flag3)
 }
 
 template <typename T>
@@ -1895,14 +1883,16 @@ void tst_QMetaType::underlyingType_data()
                            << QMetaType::fromType<getUnderlyingTypeNormalized<isEnumTest_Enum1>>();
     QTest::newRow("uchar") << QMetaType::fromType<E1>()
                            << QMetaType::fromType<getUnderlyingTypeNormalized<E1>>();
-    QTest::newRow("long") << QMetaType::fromType<E2>()
-                          << QMetaType::fromType<getUnderlyingTypeNormalized<E2>>();
+    QTest::newRow("qlonglong") << QMetaType::fromType<E2>()
+                               << QMetaType::fromType<getUnderlyingTypeNormalized<E2>>();
     QTest::newRow("class_ushort") << QMetaType::fromType<E3>()
                                   << QMetaType::fromType<getUnderlyingTypeNormalized<E3>>();
     QTest::newRow("flags_int") << QMetaType::fromType<myflags::Flags1>()
                                << QMetaType::fromType<int>();
     QTest::newRow("flags_short")  << QMetaType::fromType<myflags::Flags2>()
                                   << QMetaType::fromType<int>(); // sic, not short!
+    QTest::newRow("flags_qlonglong")  << QMetaType::fromType<myflags::Flags3>()
+                                      << QMetaType::fromType<qlonglong>();
 }
 
 void tst_QMetaType::underlyingType()

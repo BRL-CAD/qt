@@ -83,19 +83,19 @@ set REDO_FILE_PATH=%TOPQTDIR%\config.redo.last
 set REDO_TMP_FILE_PATH=%TOPQTDIR%\config.redo.in
 set FRESH_REQUESTED_ARG=
 if not defined redoing (
-    :: The '.' in 'echo.%*' ensures we don't print "echo is off" when no arguments are passed
-    :: https://devblogs.microsoft.com/oldnewthing/20170802-00/?p=96735
-    :: The space before the '>' makes sure that when we have a digit at the end of the args, we
-    :: don't accidentally concatenate it with the '>' resulting in '0>' or '2>' which redirects
-    :: into the file from a stream different than stdout, leading to broken or empty content.
+    rem "The '.' in 'echo.%*' ensures we don't print "echo is off" when no arguments are passed"
+    rem "https://devblogs.microsoft.com/oldnewthing/20170802-00/?p=96735"
+    rem "The space before the '>' makes sure that when we have a digit at the end of the args, we"
+    rem "don't accidentally concatenate it with the '>' resulting in '0>' or '2>' which redirects"
+    rem "into the file from a stream different than stdout, leading to broken or empty content."
     echo.%* >"%OPT_TMP_FILE_PATH%"
 
-    cmake -DIN_FILE="%OPT_TMP_FILE_PATH%" -DOUT_FILE="%OPT_FILE_PATH%" -DIGNORE_ARGS=-top-level -P "%QTSRC%\cmake\QtWriteArgsFile.cmake"
+    call cmake -DIN_FILE="%OPT_TMP_FILE_PATH%" -DOUT_FILE="%OPT_FILE_PATH%" -DIGNORE_ARGS=-top-level -P "%QTSRC%\cmake\QtWriteArgsFile.cmake"
 ) else (
     echo. 2> "%OPT_TMP_FILE_PATH%"
     for /F "usebackq tokens=*" %%A in ("%OPT_FILE_PATH%") do echo "%%A" >> "%OPT_TMP_FILE_PATH%"
 
-    cmake -DIN_FILE="%OPT_TMP_FILE_PATH%" -DREDO_FILE="%REDO_TMP_FILE_PATH%" -DOUT_FILE="%REDO_FILE_PATH%" -DIGNORE_ARGS="-top-level;-redo;--redo" -P "%QTSRC%\cmake\QtWriteArgsFile.cmake"
+    call cmake -DIN_FILE="%OPT_TMP_FILE_PATH%" -DREDO_FILE="%REDO_TMP_FILE_PATH%" -DOUT_FILE="%REDO_FILE_PATH%" -DIGNORE_ARGS="-top-level;-redo;--redo" -P "%QTSRC%\cmake\QtWriteArgsFile.cmake"
 
     set OPT_FILE_PATH=%REDO_FILE_PATH%
     set FRESH_REQUESTED_ARG=-DFRESH_REQUESTED=TRUE
@@ -104,4 +104,4 @@ if not defined redoing (
 rem Launch CMake-based configure
 set TOP_LEVEL_ARG=
 if %TOPLEVEL% == true set TOP_LEVEL_ARG=-DTOP_LEVEL=TRUE
-cmake -DOPTFILE="%OPT_FILE_PATH%" %TOP_LEVEL_ARG% %FRESH_REQUESTED_ARG% -P "%QTSRC%\cmake\QtProcessConfigureArgs.cmake"
+call cmake -DOPTFILE="%OPT_FILE_PATH%" %TOP_LEVEL_ARG% %FRESH_REQUESTED_ARG% -P "%QTSRC%\cmake\QtProcessConfigureArgs.cmake"

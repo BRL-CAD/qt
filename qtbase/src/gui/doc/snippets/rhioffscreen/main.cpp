@@ -18,7 +18,7 @@ int main(int argc, char **argv)
 #if defined(Q_OS_WIN)
     QRhiD3D12InitParams params;
     rhi.reset(QRhi::create(QRhi::D3D12, &params));
-#elif defined(Q_OS_MACOS) || defined(Q_OS_IOS)
+#elif QT_CONFIG(metal)
     QRhiMetalInitParams params;
     rhi.reset(QRhi::create(QRhi::Metal, &params));
 #elif QT_CONFIG(vulkan)
@@ -142,7 +142,7 @@ int main(int argc, char **argv)
                      readbackResult.pixelSize.height(),
                      QImage::Format_RGBA8888_Premultiplied);
         if (rhi->isYUpInFramebuffer())
-            image = image.mirrored();
+            image.flip();
         image.save(QString::asprintf("frame%d.png", frame));
     }
 

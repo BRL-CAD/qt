@@ -1,5 +1,6 @@
 // Copyright (C) 2016 The Qt Company Ltd.
 // SPDX-License-Identifier: LicenseRef-Qt-Commercial OR LGPL-3.0-only OR GPL-2.0-only OR GPL-3.0-only
+// Qt-Security score:significant reason:default
 
 #include "qdbusreply.h"
 #include "qdbusmetatype.h"
@@ -41,13 +42,6 @@ using namespace Qt::StringLiterals;
 */
 
 /*!
-    \fn template<typename T> QDBusReply<T>::QDBusReply(const QDBusReply &other)
-    \since 5.15
-
-    Constructs a copy of \a other.
-*/
-
-/*!
     \fn template<typename T> QDBusReply<T>::QDBusReply(const QDBusMessage &reply)
     Automatically construct a QDBusReply object from the reply message \a reply, extracting the
     first return value from it if it is a success reply.
@@ -72,11 +66,6 @@ using namespace Qt::StringLiterals;
 /*!
     \fn template <typename T> QDBusReply<T>::QDBusReply(const QDBusError &error)
     Constructs an error reply from the D-Bus error code given by \a error.
-*/
-
-/*!
-    \fn template <typename T> QDBusReply<T>::operator=(const QDBusReply &other)
-    Makes this object be a copy of the object \a other.
 */
 
 /*!
@@ -133,11 +122,6 @@ using namespace Qt::StringLiterals;
     not be a valid error code (QDBusError::isValid() will return false).
 
     \sa isValid()
-*/
-
-/*!
-    \fn template <typename T> const QDBusError& QDBusReply<T>::error()
-    \overload
 */
 
 /*!

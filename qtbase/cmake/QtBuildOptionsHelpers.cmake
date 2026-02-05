@@ -262,13 +262,15 @@ macro(qt_internal_setup_build_tests)
 
     option(QT_BUILD_MANUAL_TESTS "Build Qt manual tests" OFF)
 
-    if(WASM)
-        option(QT_BUILD_MINIMAL_STATIC_TESTS "Build minimal subset of tests for static Qt builds"
-            ON)
+    if(WASM AND _qt_batch_tests)
+        set(_qt_wasm_and_batch_tests ON)
     else()
-        option(QT_BUILD_MINIMAL_STATIC_TESTS "Build minimal subset of tests for static Qt builds"
-            OFF)
+        set(_qt_wasm_and_batch_tests OFF)
     endif()
+
+    option(QT_BUILD_MINIMAL_STATIC_TESTS "Build minimal subset of tests for static Qt builds" ${_qt_wasm_and_batch_tests})
+
+    option(QT_BUILD_WASM_BATCHED_TESTS "Build subset of tests for wasm batched tests" ${_qt_wasm_and_batch_tests})
 
     option(QT_BUILD_MINIMAL_ANDROID_MULTI_ABI_TESTS
         "Build minimal subset of tests for Android multi-ABI Qt builds" OFF)
@@ -296,6 +298,55 @@ macro(qt_internal_setup_build_tools)
     option(QT_BUILD_TOOLS_BY_DEFAULT "Should tools be built as part of the default 'all' target."
            "${_qt_build_tools_by_default_default}")
     unset(_qt_build_tools_by_default_default)
+endmacro()
+
+# A heuristic to determine that the currently processed project is a cmake build test project.
+function(qt_internal_current_project_is_cmake_build_test_project out_var)
+    set(current_dir "${CMAKE_CURRENT_SOURCE_DIR}")
+
+    set(result FALSE)
+
+    if(current_dir MATCHES "tests/auto/cmake")
+        set(result TRUE)
+    endif()
+
+    set(${out_var} "${result}" PARENT_SCOPE)
+endfunction()
+
+function(qt_internal_compute_sbom_default out_var)
+    # Default to generating the SBOM, except for:
+    # - developer-builds
+    # - no-prefix builds.
+    # - standalone tests or examples
+    # - cmake build tests
+    # Regular developers of Qt (which would pass -developer-build) likely don't need SBOMs.
+    # -no-prefix builds don't make much sense for SBOMs because the installed file checksums
+    # will be missing, and thus the SBOMs will not be complete / valid.
+    # Honor any explicitly or previously set value.
+    qt_internal_current_project_is_cmake_build_test_project(is_cmake_build_test)
+
+    if(FEATURE_developer_build
+            OR QT_FEATURE_developer_build
+            OR FEATURE_no_prefix
+            OR QT_FEATURE_no_prefix
+            OR QT_BUILD_STANDALONE_EXAMPLES
+            OR QT_BUILD_STANDALONE_TESTS
+            OR QT_INTERNAL_BUILD_STANDALONE_PARTS
+            OR is_cmake_build_test
+        )
+        set(enable_sbom OFF)
+    else()
+        set(enable_sbom ON)
+    endif()
+    set(${out_var} "${enable_sbom}" PARENT_SCOPE)
+endfunction()
+
+macro(qt_internal_setup_sbom)
+    qt_internal_compute_sbom_default(_qt_generate_sbom_default)
+
+    _qt_internal_setup_sbom(
+        GENERATE_SBOM_DEFAULT "${_qt_generate_sbom_default}"
+    )
 endmacro()
 
 macro(qt_internal_setup_build_examples)
@@ -348,6 +399,20 @@ macro(qt_internal_set_qt_host_path)
         "Installed Qt host directory path, used for cross compiling.")
 endmacro()
 
+macro(qt_internal_setup_build_docs)
+    option(QT_BUILD_DOCS "Generate Qt documentation targets" ON)
+endmacro()
+
+macro(qt_internal_setup_build_java_docs_on_host)
+    option(QT_BUILD_HOST_JAVA_DOCS "Generate Java documentation targets on host" OFF)
+    if(QT_BUILD_HOST_JAVA_DOCS)
+        find_package(Java)
+        if(Java_FOUND)
+            include(UseJava)
+        endif()
+    endif()
+endmacro()
+
 macro(qt_internal_set_use_ccache)
     option(QT_USE_CCACHE "Enable the use of ccache")
     if(QT_USE_CCACHE)
@@ -366,10 +431,19 @@ endmacro()
 macro(qt_internal_set_unity_build)
     option(QT_UNITY_BUILD "Enable unity (jumbo) build")
     set(QT_UNITY_BUILD_BATCH_SIZE "32" CACHE STRING "Unity build batch size")
-    if(QT_UNITY_BUILD)
-        set(CMAKE_UNITY_BUILD ON)
-        set(CMAKE_UNITY_BUILD_BATCH_SIZE "${QT_UNITY_BUILD_BATCH_SIZE}")
-    endif()
+
+    include(CMakeDependentOption)
+    string(TOLOWER "${PROJECT_NAME}" project_name_lower)
+    cmake_dependent_option(
+        "QT_UNITY_BUILD_PROJECT_${project_name_lower}"
+        "Enable unity builds for project ${PROJECT_NAME}"
+        TRUE
+        QT_UNITY_BUILD
+        FALSE
+    )
+
+    set(CMAKE_UNITY_BUILD "${QT_UNITY_BUILD_PROJECT_${project_name_lower}}")
+    set(CMAKE_UNITY_BUILD_BATCH_SIZE "${QT_UNITY_BUILD_BATCH_SIZE}")
 endmacro()
 
 macro(qt_internal_set_allow_symlink_in_paths)

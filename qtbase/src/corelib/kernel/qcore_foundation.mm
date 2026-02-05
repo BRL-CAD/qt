@@ -10,7 +10,7 @@
 #include <QtCore/qbytearray.h>
 #include <QtCore/qrect.h>
 
-#if QT_CONFIG(timezone) && !defined(QT_NO_SYSTEMLOCALE)
+#if QT_CONFIG(timezone)
 #include <QtCore/qtimezone.h>
 #include <QtCore/private/qtimezoneprivate_p.h>
 #include <QtCore/private/qcore_mac_p.h>
@@ -26,7 +26,9 @@
 QT_BEGIN_NAMESPACE
 
 /*!
-    \brief Constructs a new QByteArray containing a copy of the CFData \a data.
+    \fn QByteArray QByteArray::fromCFData(CFDataRef data)
+
+    Constructs a new QByteArray containing a copy of the CFData \a data.
 
     \since 5.3
     \ingroup platform-type-conversions
@@ -469,7 +471,7 @@ NSDate *QDateTime::toNSDate() const
 
 // ----------------------------------------------------------------------------
 
-#if QT_CONFIG(timezone) && !defined(QT_NO_SYSTEMLOCALE)
+#if QT_CONFIG(timezone)
 /*!
     \brief Constructs a new QTimeZone containing a copy of the CFTimeZone \a timeZone.
 
@@ -646,7 +648,7 @@ CGSize QSizeF::toCGSize() const noexcept
 }
 
 /*!
-    \brief Creates a QRectF from \a size.
+    \brief Creates a QSizeF from \a size.
 
     \since 5.8
     \ingroup platform-type-conversions

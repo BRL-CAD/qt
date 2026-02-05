@@ -230,6 +230,8 @@ Q_TRACE_POINT(qtcore, QEvent_dtor, QEvent *event, QEvent::Type type);
     \value WindowUnblocked                  The window is unblocked after a modal dialog exited.
     \value WinIdChange                      The window system identifier for this native widget has changed.
     \value ZOrderChange                     The widget's z-order has changed. This event is never sent to top level windows.
+    \value [since 6.9] SafeAreaMarginsChange
+                                            The window's safe area margins have changed.
 
     User events should have values between \c User and \c{MaxUser}:
 
@@ -327,7 +329,7 @@ QEvent::QEvent(Type type)
 
 QEvent::~QEvent()
 {
-    if (m_posted && QCoreApplication::instance())
+    if (m_posted && QCoreApplication::instanceExists())
         QCoreApplicationPrivate::removePostedEvent(this);
 }
 
@@ -519,12 +521,12 @@ int QEvent::registerEventType(int hint) noexcept
     started one or more timers. Each timer has a unique identifier. A
     timer is started with QObject::startTimer().
 
-    The QTimer class provides a high-level programming interface that
-    uses signals instead of events. It also provides single-shot timers.
+    The QChronoTimer class provides a high-level programming interface that
+    uses signals instead of events.
 
     The event handler QObject::timerEvent() receives timer events.
 
-    \sa QTimer, QObject::timerEvent(), QObject::startTimer(),
+    \sa QChronoTimer, QObject::timerEvent(), QObject::startTimer(),
     QObject::killTimer()
 */
 
@@ -533,8 +535,20 @@ int QEvent::registerEventType(int hint) noexcept
     \a timerId.
 */
 QTimerEvent::QTimerEvent(int timerId)
-    : QEvent(Timer), id(timerId)
+    : QTimerEvent(Qt::TimerId{timerId})
 {}
+
+/*!
+    \since 6.8
+
+    Constructs a timer event object with the timer identifier set to
+    \a timerId.
+*/
+QTimerEvent::QTimerEvent(Qt::TimerId timerId)
+    : QEvent(Timer), m_id(timerId)
+{
+    static_assert(sizeof(Qt::TimerId) == sizeof(int));
+}
 
 Q_IMPL_EVENT_COMMON(QTimerEvent)
 
@@ -543,6 +557,23 @@ Q_IMPL_EVENT_COMMON(QTimerEvent)
 
     Returns the unique timer identifier, which is the same identifier
     as returned from QObject::startTimer().
+*/
+
+/*!
+    \fn Qt::TimerId QTimerEvent::id() const
+    \since 6.8
+
+    Returns the Qt::TimerId of the timer associated with this event, which
+    is the same identifier returned by QObject::startTimer() cast to
+    Qt::TimerId.
+*/
+
+/*!
+    \fn QTimerEvent::matches(const QBasicTimer &timer) const
+    \since 6.9
+
+    Returns \c true if this timer event and \a timer have the same ID,
+    otherwise returns \c false.
 */
 
 /*!
@@ -642,10 +673,10 @@ Q_IMPL_EVENT_COMMON(QDynamicPropertyChangeEvent)
 */
 
 /*!
-    Constructs a deferred delete event with an initial loopLevel() of zero.
+    Constructs a deferred delete event with the given loop and scope level.
 */
-QDeferredDeleteEvent::QDeferredDeleteEvent()
-    : QEvent(QEvent::DeferredDelete)
+QDeferredDeleteEvent::QDeferredDeleteEvent(int loopLevel, int scopeLevel)
+    : QEvent(QEvent::DeferredDelete), m_loopLevel(loopLevel), m_scopeLevel(scopeLevel)
 { }
 
 Q_IMPL_EVENT_COMMON(QDeferredDeleteEvent)

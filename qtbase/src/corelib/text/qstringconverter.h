@@ -1,5 +1,6 @@
 // Copyright (C) 2020 The Qt Company Ltd.
 // SPDX-License-Identifier: LicenseRef-Qt-Commercial OR LGPL-3.0-only OR GPL-2.0-only OR GPL-3.0-only
+// Qt-Security score:critical reason:data-parser
 
 #if 0
 // keep existing syncqt header working after the move of the class
@@ -30,7 +31,7 @@ public:
     constexpr explicit QStringEncoder(Encoding encoding, Flags flags = Flag::Default)
         : QStringConverter(encoding, flags)
     {}
-    explicit QStringEncoder(const char *name, Flags flags = Flag::Default)
+    explicit QStringEncoder(QAnyStringView name, Flags flags = Flag::Default)
         : QStringConverter(name, flags)
     {}
 
@@ -92,7 +93,7 @@ public:
     constexpr QStringDecoder() noexcept
         : QStringConverter()
     {}
-    explicit QStringDecoder(const char *name, Flags f = Flag::Default)
+    explicit QStringDecoder(QAnyStringView name, Flags f = Flag::Default)
         : QStringConverter(name, f)
     {}
 

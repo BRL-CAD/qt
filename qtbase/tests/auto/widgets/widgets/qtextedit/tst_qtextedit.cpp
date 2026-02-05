@@ -38,7 +38,7 @@
 Q_LOGGING_CATEGORY(lcTests, "qt.widgets.tests")
 
 //Used in copyAvailable
-typedef QPair<Qt::Key, Qt::KeyboardModifier> keyPairType;
+using keyPairType = std::pair<Qt::Key, Qt::KeyboardModifier>;
 typedef QList<keyPairType> pairListType;
 Q_DECLARE_METATYPE(keyPairType);
 
@@ -1281,71 +1281,79 @@ void tst_QTextEdit::copyAvailable_data()
     QTest::addColumn<QList<bool> >("copyAvailable");
     QTest::addColumn<QString>("function");
 
-    pairListType keystrokes;
     QList<bool> copyAvailable;
-
-    keystrokes << qMakePair(Qt::Key_B, Qt::NoModifier) <<  qMakePair(Qt::Key_B, Qt::NoModifier)
-               << qMakePair(Qt::Key_Left, Qt::ShiftModifier);
+    pairListType keystrokes = {{Qt::Key_B, Qt::NoModifier},
+                               {Qt::Key_B, Qt::NoModifier},
+                               {Qt::Key_Left, Qt::ShiftModifier}};
     copyAvailable << true ;
     QTest::newRow(QString("Case1 B,B, <- + shift | signals: true").toLatin1())
         << keystrokes << copyAvailable << QString();
 
-    keystrokes.clear();
     copyAvailable.clear();
 
-    keystrokes << qMakePair(Qt::Key_T, Qt::NoModifier) << qMakePair(Qt::Key_A, Qt::NoModifier)
-               <<  qMakePair(Qt::Key_A, Qt::NoModifier) << qMakePair(Qt::Key_Left, Qt::ShiftModifier);
+    keystrokes = {{Qt::Key_T, Qt::NoModifier},
+                  {Qt::Key_A, Qt::NoModifier},
+                  {Qt::Key_A, Qt::NoModifier},
+                  {Qt::Key_Left, Qt::ShiftModifier}};
     copyAvailable << true << false;
     QTest::newRow(QString("Case2 T,A,A, <- + shift, cut() | signals: true, false").toLatin1())
         << keystrokes << copyAvailable << QString("cut");
 
-    keystrokes.clear();
     copyAvailable.clear();
 
-    keystrokes << qMakePair(Qt::Key_T, Qt::NoModifier) << qMakePair(Qt::Key_A, Qt::NoModifier)
-               <<  qMakePair(Qt::Key_A, Qt::NoModifier) << qMakePair(Qt::Key_Left, Qt::ShiftModifier)
-               << qMakePair(Qt::Key_Left, Qt::ShiftModifier)  << qMakePair(Qt::Key_Left, Qt::ShiftModifier);
+    keystrokes = {{Qt::Key_T, Qt::NoModifier},
+                  {Qt::Key_A, Qt::NoModifier},
+                  {Qt::Key_A, Qt::NoModifier},
+                  {Qt::Key_Left, Qt::ShiftModifier},
+                  {Qt::Key_Left, Qt::ShiftModifier},
+                  {Qt::Key_Left, Qt::ShiftModifier}};
     copyAvailable << true;
     QTest::newRow(QString("Case3 T,A,A, <- + shift, <- + shift, <- + shift, copy() | signals: true").toLatin1())
         << keystrokes << copyAvailable << QString("copy");
 
-    keystrokes.clear();
     copyAvailable.clear();
 
-    keystrokes << qMakePair(Qt::Key_T, Qt::NoModifier) << qMakePair(Qt::Key_A, Qt::NoModifier)
-               <<  qMakePair(Qt::Key_A, Qt::NoModifier) << qMakePair(Qt::Key_Left, Qt::ShiftModifier)
-               << qMakePair(Qt::Key_Left, Qt::ShiftModifier)  << qMakePair(Qt::Key_Left, Qt::ShiftModifier)
-               << qMakePair(Qt::Key_X, Qt::ControlModifier);
+    keystrokes = {{Qt::Key_T, Qt::NoModifier},
+                  {Qt::Key_A, Qt::NoModifier},
+                  {Qt::Key_A, Qt::NoModifier},
+                  {Qt::Key_Left, Qt::ShiftModifier},
+                  {Qt::Key_Left, Qt::ShiftModifier},
+                  {Qt::Key_Left, Qt::ShiftModifier},
+                  {Qt::Key_X, Qt::ControlModifier}};
     copyAvailable << true << false;
     QTest::newRow(QString("Case4 T,A,A, <- + shift, <- + shift, <- + shift, ctrl + x, paste() | signals: true, false").toLatin1())
         << keystrokes << copyAvailable << QString("paste");
 
-    keystrokes.clear();
     copyAvailable.clear();
 
-    keystrokes << qMakePair(Qt::Key_B, Qt::NoModifier) <<  qMakePair(Qt::Key_B, Qt::NoModifier)
-               << qMakePair(Qt::Key_Left, Qt::ShiftModifier) << qMakePair(Qt::Key_Left, Qt::NoModifier);
+    keystrokes = {{Qt::Key_B, Qt::NoModifier},
+                  {Qt::Key_B, Qt::NoModifier},
+                  {Qt::Key_Left, Qt::ShiftModifier},
+                  {Qt::Key_Left, Qt::NoModifier}};
     copyAvailable << true << false;
     QTest::newRow(QString("Case5 B,B, <- + shift, <- | signals: true, false").toLatin1())
         << keystrokes << copyAvailable << QString();
 
-    keystrokes.clear();
     copyAvailable.clear();
 
-    keystrokes << qMakePair(Qt::Key_B, Qt::NoModifier) <<  qMakePair(Qt::Key_A, Qt::NoModifier)
-               << qMakePair(Qt::Key_Left, Qt::ShiftModifier) << qMakePair(Qt::Key_Left, Qt::NoModifier)
-               << qMakePair(Qt::Key_Right, Qt::ShiftModifier);
+    keystrokes = {{Qt::Key_B, Qt::NoModifier},
+                  {Qt::Key_A, Qt::NoModifier},
+                  {Qt::Key_Left, Qt::ShiftModifier},
+                  {Qt::Key_Left, Qt::NoModifier},
+                  {Qt::Key_Right, Qt::ShiftModifier}};
     copyAvailable << true << false << true << false;
     QTest::newRow(QString("Case6 B,A, <- + shift, ->, <- + shift | signals: true, false, true, false").toLatin1())
         << keystrokes << copyAvailable << QString("cut");
 
-    keystrokes.clear();
     copyAvailable.clear();
 
-    keystrokes << qMakePair(Qt::Key_T, Qt::NoModifier) << qMakePair(Qt::Key_A, Qt::NoModifier)
-               <<  qMakePair(Qt::Key_A, Qt::NoModifier) << qMakePair(Qt::Key_Left, Qt::ShiftModifier)
-               << qMakePair(Qt::Key_Left, Qt::ShiftModifier)  << qMakePair(Qt::Key_Left, Qt::ShiftModifier)
-               << qMakePair(Qt::Key_X, Qt::ControlModifier);
+    keystrokes = {{Qt::Key_T, Qt::NoModifier},
+                  {Qt::Key_A, Qt::NoModifier},
+                  {Qt::Key_A, Qt::NoModifier},
+                  {Qt::Key_Left, Qt::ShiftModifier},
+                  {Qt::Key_Left, Qt::ShiftModifier},
+                  {Qt::Key_Left, Qt::ShiftModifier},
+                  {Qt::Key_X, Qt::ControlModifier}};
     copyAvailable << true << false << true;
     QTest::newRow(QString("Case7 T,A,A, <- + shift, <- + shift, <- + shift, ctrl + x, undo() | signals: true, false, true").toLatin1())
         << keystrokes << copyAvailable << QString("undo");
@@ -2256,13 +2264,6 @@ void tst_QTextEdit::setDocumentPreservesPalette()
 }
 #endif
 
-class PublicTextEdit : public QTextEdit
-{
-public:
-    void publicInsertFromMimeData(const QMimeData *source)
-    { insertFromMimeData(source); }
-};
-
 void tst_QTextEdit::pasteFromQt3RichText()
 {
     QByteArray richtext("<!--StartFragment--><p>  QTextEdit is an  ");
@@ -2270,7 +2271,7 @@ void tst_QTextEdit::pasteFromQt3RichText()
     QMimeData mimeData;
     mimeData.setData("application/x-qrichtext", richtext);
 
-    static_cast<PublicTextEdit *>(ed)->publicInsertFromMimeData(&mimeData);
+    ed->insertFromMimeData(&mimeData);
 
     QCOMPARE(ed->toPlainText(), QString::fromLatin1("  QTextEdit is an  "));
     ed->clear();
@@ -2278,7 +2279,7 @@ void tst_QTextEdit::pasteFromQt3RichText()
     richtext = "<!--StartFragment-->  QTextEdit is an  ";
     mimeData.setData("application/x-qrichtext", richtext);
 
-    static_cast<PublicTextEdit *>(ed)->publicInsertFromMimeData(&mimeData);
+    ed->insertFromMimeData(&mimeData);
 
     QCOMPARE(ed->toPlainText(), QString::fromLatin1("  QTextEdit is an  "));
 }
@@ -2290,7 +2291,7 @@ void tst_QTextEdit::pasteFromMarkdown()
     QMimeData mimeData;
     mimeData.setData("text/markdown", richtext);
 
-    static_cast<PublicTextEdit *>(ed)->publicInsertFromMimeData(&mimeData);
+    ed->insertFromMimeData(&mimeData);
 
     QCOMPARE(ed->toPlainText(), "This text is rich");
 #if QT_CONFIG(textmarkdownwriter)
@@ -2328,7 +2329,7 @@ void tst_QTextEdit::noWrapBackgrounds()
     topLevel.show();
 
     const QImage img = edit.viewport()->grab().toImage();
-    QCOMPARE(img, img.mirrored(true, false));
+    QCOMPARE(img, img.flipped(Qt::Horizontal));
 }
 
 void tst_QTextEdit::preserveCharFormatAfterUnchangingSetPosition()
@@ -2545,7 +2546,6 @@ void tst_QTextEdit::inputMethodEvent()
 
     // test that input method gets chance to commit preedit when removing focus
     ed->setText("");
-    QApplicationPrivate::setActiveWindow(ed);
     QTRY_VERIFY(QApplication::focusWindow());
     QCOMPARE(qApp->focusObject(), ed);
 
@@ -2771,26 +2771,26 @@ namespace {
 
         void drawTextItem(const QPointF &, const QTextItem &textItem) override
         {
-            itemFonts.append(qMakePair(textItem.text(), textItem.font()));
+            itemFonts.append({textItem.text(), textItem.font()});
         }
 
         Type type() const override { return User; }
 
 
-        QList<QPair<QString, QFont> > itemFonts;
+        QList<std::pair<QString, QFont> > itemFonts;
     };
 
     class MyPaintDevice : public QPaintDevice
     {
     public:
-        MyPaintDevice() : m_paintEngine(new MyPaintEngine)
+        MyPaintDevice() : m_paintEngine(std::make_unique<MyPaintEngine>())
         {
         }
 
 
         QPaintEngine *paintEngine () const override
         {
-            return m_paintEngine;
+            return m_paintEngine.get();
         }
 
         int metric (QPaintDevice::PaintDeviceMetric metric) const override {
@@ -2810,12 +2810,14 @@ namespace {
                 return 72;
             case QPaintDevice::PdmDevicePixelRatio:
             case QPaintDevice::PdmDevicePixelRatioScaled:
+            case QPaintDevice::PdmDevicePixelRatioF_EncodedA:
+            case QPaintDevice::PdmDevicePixelRatioF_EncodedB:
                 ; // fall through
             }
             return 0;
         }
 
-        MyPaintEngine *m_paintEngine;
+        std::unique_ptr<MyPaintEngine> m_paintEngine;
     };
 }
 

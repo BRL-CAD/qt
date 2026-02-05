@@ -1,5 +1,6 @@
 // Copyright (C) 2016 The Qt Company Ltd.
 // SPDX-License-Identifier: LicenseRef-Qt-Commercial OR LGPL-3.0-only OR GPL-2.0-only OR GPL-3.0-only
+// Qt-Security score:significant reason:default
 
 #include "qnetworkreplyfileimpl_p.h"
 
@@ -85,9 +86,9 @@ QNetworkReplyFileImpl::QNetworkReplyFileImpl(QNetworkAccessManager *manager, con
 
     if (req.attribute(QNetworkRequest::BackgroundRequestAttribute).toBool()) { // Asynchronous open
         auto realFile = new QNetworkFile(fileName);
-        connect(realFile, &QNetworkFile::headerRead, this, &QNetworkReplyFileImpl::setHeader,
+        connect(realFile, &QNetworkFile::headerRead, this, &QNetworkReplyFileImpl::setWellKnownHeader,
                 Qt::QueuedConnection);
-        connect(realFile, &QNetworkFile::error, this, &QNetworkReplyFileImpl::setError,
+        connect(realFile, &QNetworkFile::networkError, this, &QNetworkReplyFileImpl::setError,
                 Qt::QueuedConnection);
         connect(realFile, SIGNAL(finished(bool)), SLOT(fileOpenFinished(bool)),
                 Qt::QueuedConnection);
@@ -128,8 +129,12 @@ QNetworkReplyFileImpl::QNetworkReplyFileImpl(QNetworkAccessManager *manager, con
             QMetaObject::invokeMethod(this, "finished", Qt::QueuedConnection);
             return;
         }
-        setHeader(QNetworkRequest::LastModifiedHeader, fi.lastModified());
-        setHeader(QNetworkRequest::ContentLengthHeader, fi.size());
+        auto h = headers();
+        h.replaceOrAppend(QHttpHeaders::WellKnownHeader::LastModified,
+                          QNetworkHeadersPrivate::toHttpDate(fi.lastModified()));
+        h.replaceOrAppend(QHttpHeaders::WellKnownHeader::ContentLength,
+                          QByteArray::number(fi.size()));
+        setHeaders(std::move(h));
 
         QMetaObject::invokeMethod(this, "metaDataChanged", Qt::QueuedConnection);
         QMetaObject::invokeMethod(this, "downloadProgress", Qt::QueuedConnection,
@@ -171,9 +176,9 @@ bool QNetworkReplyFileImpl::isSequential () const
 
 qint64 QNetworkReplyFileImpl::size() const
 {
-    bool ok;
-    int size = header(QNetworkRequest::ContentLengthHeader).toInt(&ok);
-    return ok ? size : 0;
+    const auto totalSizeOpt = QNetworkHeadersPrivate::toInt(
+            headers().value(QHttpHeaders::WellKnownHeader::ContentLength));
+    return totalSizeOpt.value_or(0);
 }
 
 /*!

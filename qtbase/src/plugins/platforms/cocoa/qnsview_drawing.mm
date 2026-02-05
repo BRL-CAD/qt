@@ -3,16 +3,40 @@
 
 // This file is included from qnsview.mm, and only used to organize the code
 
+@implementation QContainerLayer {
+    CALayer *m_contentLayer;
+}
+- (instancetype)initWithContentLayer:(CALayer *)contentLayer
+{
+    if ((self = [super init])) {
+        m_contentLayer = contentLayer;
+        [self addSublayer:contentLayer];
+        contentLayer.autoresizingMask = kCALayerWidthSizable | kCALayerHeightSizable;
+    }
+    return self;
+}
+
+- (CALayer*)contentLayer
+{
+    return m_contentLayer;
+}
+
+- (void)setNeedsDisplay
+{
+    [self setNeedsDisplayInRect:CGRectInfinite];
+}
+
+- (void)setNeedsDisplayInRect:(CGRect)rect
+{
+    [super setNeedsDisplayInRect:rect];
+    [self.contentLayer setNeedsDisplayInRect:rect];
+}
+@end
+
 @implementation QNSView (Drawing)
 
 - (void)initDrawing
 {
-    if (qt_mac_resolveOption(-1, m_platformWindow->window(),
-        "_q_mac_wantsLayer", "QT_MAC_WANTS_LAYER") != -1) {
-        qCWarning(lcQpaDrawing) << "Layer-backing is always enabled."
-            << " QT_MAC_WANTS_LAYER/_q_mac_wantsLayer has no effect.";
-    }
-
     // Pick up and persist requested color space from surface format
     const QSurfaceFormat surfaceFormat = m_platformWindow->format();
     if (QColorSpace colorSpace = surfaceFormat.colorSpace(); colorSpace.isValid()) {
@@ -75,14 +99,22 @@
         // too late at this point and the QWindow will be non-functional,
         // but we can at least print a warning.
         if ([MTLCreateSystemDefaultDevice() autorelease]) {
-            return [CAMetalLayer layer];
+            static bool allowPresentsWithTransaction =
+                !qEnvironmentVariableIsSet("QT_MTL_NO_TRANSACTION");
+            return allowPresentsWithTransaction ?
+                [QMetalLayer layer] : [CAMetalLayer layer];
         } else {
             qCWarning(lcQpaDrawing) << "Failed to create QWindow::MetalSurface."
                 << "Metal is not supported by any of the GPUs in this system.";
         }
     }
 
-    return [super makeBackingLayer];
+    // We handle drawing via displayLayer instead of drawRect or updateLayer,
+    // as the latter two do not work for CAMetalLayer. And we handle content
+    // scale manually for the same reason. Which means we don't really need
+    // NSViewBackingLayer. In fact it just gets in the way, by assuming that
+    // if we don't have a drawRect function we "draw nothing".
+    return [CALayer layer];
 }
 
 /*
@@ -105,6 +137,17 @@
         layer.delegate = self;
     }
 
+    layer.name = @"Qt content layer";
+
+    static const bool containerLayerOptOut = qEnvironmentVariableIsSet("QT_MAC_NO_CONTAINER_LAYER");
+    if (m_platformWindow->window()->surfaceType() != QSurface::OpenGLSurface && !containerLayerOptOut) {
+        qCDebug(lcQpaDrawing) << "Wrapping content layer" << layer << "in container layer";
+        auto *containerLayer = [[[QContainerLayer alloc] initWithContentLayer:layer] autorelease];
+        containerLayer.name = @"Qt container layer";
+        containerLayer.delegate = self;
+        layer = containerLayer;
+    }
+
     [super setLayer:layer];
 
     [self propagateBackingProperties];
@@ -115,7 +158,6 @@
         // where it doesn't.
         layer.backgroundColor = NSColor.magentaColor.CGColor;
     }
-
 }
 
 // ----------------------- Layer updates -----------------------
@@ -140,11 +182,22 @@
 {
     qCDebug(lcQpaDrawing) << "Backing properties changed for" << self;
 
+    if (!m_platformWindow)
+        return;
+
     [self propagateBackingProperties];
 
     // Ideally we would plumb this situation through QPA in a way that lets
     // clients invalidate their own caches, recreate QBackingStore, etc.
-    // For now we trigger an expose, and let QCocoaBackingStore deal with
+
+    // QPA supports DPR (scale) change notifications. We are not sure
+    // based on this event that it is the scale that has changed (it
+    // could be the color space), however QPA will determine if it has
+    // actually changed.
+    QWindowSystemInterface::handleWindowDevicePixelRatioChanged
+        <QWindowSystemInterface::SynchronousDelivery>(m_platformWindow->window());
+
+    // Trigger an expose, and let QCocoaBackingStore deal with
     // buffer invalidation internally.
     [self setNeedsDisplay:YES];
 }
@@ -162,11 +215,12 @@
     // to NO. In this case the window will have a backingScaleFactor of 2,
     // but the QWindow will have a devicePixelRatio of 1.
     auto devicePixelRatio = m_platformWindow->devicePixelRatio();
-    qCDebug(lcQpaDrawing) << "Updating" << self.layer << "content scale to" << devicePixelRatio;
-    self.layer.contentsScale = devicePixelRatio;
+    auto *contentLayer = m_platformWindow->contentLayer();
+    qCDebug(lcQpaDrawing) << "Updating" << contentLayer << "content scale to" << devicePixelRatio;
+    contentLayer.contentsScale = devicePixelRatio;
 
-    if ([self.layer isKindOfClass:CAMetalLayer.class]) {
-        CAMetalLayer *metalLayer = static_cast<CAMetalLayer *>(self.layer);
+    if ([contentLayer isKindOfClass:CAMetalLayer.class]) {
+        CAMetalLayer *metalLayer = static_cast<CAMetalLayer *>(contentLayer);
         metalLayer.colorspace = self.colorSpace.CGColorSpace;
         qCDebug(lcQpaDrawing) << "Set" << metalLayer << "color space to" << metalLayer.colorspace;
     }
@@ -189,26 +243,17 @@
 // ----------------------- Draw callbacks -----------------------
 
 /*
-    This method is called by AppKit for the non-layer case, where we are
-    drawing into the NSWindow's surface.
-*/
-- (void)drawRect:(NSRect)dirtyBoundingRect
-{
-    Q_UNUSED(dirtyBoundingRect);
-    // As we are layer backed we shouldn't really end up here, but AppKit will
-    // in some cases call this method just because we implement it.
-    // FIXME: Remove drawRect and switch from displayLayer to updateLayer
-    qCWarning(lcQpaDrawing) << "[QNSView drawRect] called for layer backed view";
-}
-
-/*
-    This method is called by AppKit when we are layer-backed, where
-    we are drawing into the layer.
+    We set our view up as the layer's delegate, which means we get
+    first dibs on displaying the layer, without needing to go through
+    updateLayer or drawRect.
 */
 - (void)displayLayer:(CALayer *)layer
 {
-    Q_ASSERT_X(self.layer && layer == self.layer, "QNSView",
-        "The displayLayer code path should only be hit for our own layer");
+    if (auto *containerLayer = qt_objc_cast<QContainerLayer*>(layer)) {
+        qCDebug(lcQpaDrawing) << "Skipping display of" << containerLayer
+            << "as display is handled by content layer" << containerLayer.contentLayer;
+        return;
+    }
 
     if (!m_platformWindow)
         return;
@@ -222,8 +267,50 @@
         return;
     }
 
-    qCDebug(lcQpaDrawing) << "[QNSView displayLayer]" << m_platformWindow->window();
-    m_platformWindow->handleExposeEvent(QRectF::fromCGRect(self.bounds).toRect());
+    const auto handleExposeEvent = [&]{
+        const auto bounds = QRectF::fromCGRect(self.bounds).toRect();
+        qCDebug(lcQpaDrawing) << "[QNSView displayLayer]" << m_platformWindow->window() << bounds;
+        m_platformWindow->handleExposeEvent(bounds);
+    };
+
+    if (auto *qtMetalLayer = qt_objc_cast<QMetalLayer*>(layer)) {
+        const bool presentedWithTransaction = qtMetalLayer.presentsWithTransaction;
+        qtMetalLayer.presentsWithTransaction = YES;
+
+        handleExposeEvent();
+
+        {
+            // Clearing the mainThreadPresentation below will auto-release the
+            // block held by the property, which in turn holds on to drawables,
+            // so we want to clean up as soon as possible, to prevent stalling
+            // when requesting new drawables. But merely referencing the block
+            // below for the nil-check will make another auto-released copy of
+            // the block, so the scope of the auto-release pool needs to include
+            // that check as well.
+            QMacAutoReleasePool pool;
+
+            // If the expose event resulted in a secondary thread requesting that its
+            // drawable should be presented on the main thread with transaction, do so.
+            if (auto mainThreadPresentation = qtMetalLayer.mainThreadPresentation) {
+                mainThreadPresentation();
+                qtMetalLayer.mainThreadPresentation = nil;
+            }
+        }
+
+        qtMetalLayer.presentsWithTransaction = presentedWithTransaction;
+
+        // We're done presenting, but we must wait to unlock the display lock
+        // until the display cycle finishes, as otherwise the render thread may
+        // step in and present before the transaction commits. The display lock
+        // is recursive, so setNeedsDisplay can be safely called in the meantime
+        // without any issue.
+        QMetaObject::invokeMethod(m_platformWindow, [qtMetalLayer]{
+            qCDebug(lcMetalLayer) << "Unlocking" << qtMetalLayer << "after finishing display-cycle";
+            qtMetalLayer.displayLock.unlock();
+        }, Qt::QueuedConnection);
+    } else {
+        handleExposeEvent();
+    }
 }
 
 @end

@@ -9,7 +9,8 @@ QT_BEGIN_NAMESPACE
 
 /*!
     \class QRhiNullInitParams
-    \inmodule QtGui
+    \inmodule QtGuiPrivate
+    \inheaderfile rhi/qrhi.h
     \since 6.6
     \brief Null backend specific initialization parameters.
 
@@ -31,7 +32,8 @@ QT_BEGIN_NAMESPACE
 
 /*!
     \class QRhiNullNativeHandles
-    \inmodule QtGui
+    \inmodule QtGuiPrivate
+    \inheaderfile rhi/qrhi.h
     \since 6.6
     \brief Empty.
 
@@ -58,6 +60,12 @@ void QRhiNull::destroy()
 QList<int> QRhiNull::supportedSampleCounts() const
 {
     return { 1 };
+}
+
+QList<QSize> QRhiNull::supportedShadingRates(int sampleCount) const
+{
+    Q_UNUSED(sampleCount);
+    return { QSize(1, 1) };
 }
 
 QRhiSwapChain *QRhiNull::createSwapChain()
@@ -139,6 +147,8 @@ int QRhiNull::resourceLimit(QRhi::ResourceLimit limit) const
         return 32;
     case QRhi::MaxVertexOutputs:
         return 32;
+    case QRhi::ShadingRateImageTileSize:
+        return 0;
     }
 
     Q_UNREACHABLE_RETURN(0);
@@ -165,6 +175,11 @@ bool QRhiNull::makeThreadLocalNativeContextCurrent()
 {
     // not applicable
     return false;
+}
+
+void QRhiNull::setQueueSubmitParams(QRhiNativeHandles *)
+{
+    // not applicable
 }
 
 void QRhiNull::releaseCachedResources()
@@ -212,6 +227,11 @@ QRhiTextureRenderTarget *QRhiNull::createTextureRenderTarget(const QRhiTextureRe
                                                              QRhiTextureRenderTarget::Flags flags)
 {
     return new QNullTextureRenderTarget(this, desc, flags);
+}
+
+QRhiShadingRateMap *QRhiNull::createShadingRateMap()
+{
+    return nullptr;
 }
 
 QRhiGraphicsPipeline *QRhiNull::createGraphicsPipeline()
@@ -280,6 +300,12 @@ void QRhiNull::setStencilRef(QRhiCommandBuffer *cb, quint32 refValue)
 {
     Q_UNUSED(cb);
     Q_UNUSED(refValue);
+}
+
+void QRhiNull::setShadingRate(QRhiCommandBuffer *cb, const QSize &coarsePixelSize)
+{
+    Q_UNUSED(cb);
+    Q_UNUSED(coarsePixelSize);
 }
 
 void QRhiNull::draw(QRhiCommandBuffer *cb, quint32 vertexCount,
@@ -489,11 +515,17 @@ void QRhiNull::resourceUpdate(QRhiCommandBuffer *cb, QRhiResourceUpdateBatch *re
             QNullTexture *texD = QRHI_RES(QNullTexture, u.rb.texture());
             if (texD) {
                 result->format = texD->format();
-                result->pixelSize = q->sizeForMipLevel(u.rb.level(), texD->pixelSize());
+                if (u.rb.rect().isValid())
+                    result->pixelSize = u.rb.rect().size();
+                else
+                    result->pixelSize = q->sizeForMipLevel(u.rb.level(), texD->pixelSize());
             } else {
                 Q_ASSERT(currentSwapChain);
                 result->format = QRhiTexture::RGBA8;
-                result->pixelSize = currentSwapChain->currentPixelSize();
+                if (u.rb.rect().isValid())
+                    result->pixelSize = u.rb.rect().size();
+                else
+                    result->pixelSize = currentSwapChain->currentPixelSize();
             }
             quint32 bytesPerLine = 0;
             quint32 byteSize = 0;

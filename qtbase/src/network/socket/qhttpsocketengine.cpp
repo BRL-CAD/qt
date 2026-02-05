@@ -1,5 +1,6 @@
 // Copyright (C) 2016 The Qt Company Ltd.
 // SPDX-License-Identifier: LicenseRef-Qt-Commercial OR LGPL-3.0-only OR GPL-2.0-only OR GPL-3.0-only
+// Qt-Security score:critical reason:network-protocol
 
 #include "qhttpsocketengine_p.h"
 #include "qtcpsocket.h"
@@ -467,11 +468,14 @@ void QHttpSocketEngine::slotSocketConnected()
     data += " HTTP/1.1\r\n";
     data += "Proxy-Connection: keep-alive\r\n";
     data += "Host: " + peerAddress + "\r\n";
-    if (!d->proxy.hasRawHeader("User-Agent"))
+    const auto headers = d->proxy.headers();
+    if (!headers.contains(QHttpHeaders::WellKnownHeader::UserAgent))
         data += "User-Agent: Mozilla/5.0\r\n";
-    const auto headers = d->proxy.rawHeaderList();
-    for (const QByteArray &header : headers)
-        data += header + ": " + d->proxy.rawHeader(header) + "\r\n";
+    for (qsizetype i = 0; i < headers.size(); ++i) {
+        const auto name = headers.nameAt(i);
+        data += QByteArrayView(name.data(), name.size()) + ": "
+                + headers.valueAt(i) + "\r\n";
+    }
     QAuthenticatorPrivate *priv = QAuthenticatorPrivate::getPrivate(d->authenticator);
     //qDebug() << "slotSocketConnected: priv=" << priv << (priv ? (int)priv->method : -1);
     if (priv && priv->method != QAuthenticatorPrivate::None) {
@@ -553,7 +557,8 @@ void QHttpSocketEngine::slotSocketReadNotification()
             d->authenticator.detach();
         priv = QAuthenticatorPrivate::getPrivate(d->authenticator);
 
-        priv->parseHttpResponse(d->reply->header(), true, d->proxy.hostName());
+        const auto headers = d->reply->header();
+        priv->parseHttpResponse(headers, true, d->proxy.hostName());
 
         if (priv->phase == QAuthenticatorPrivate::Invalid) {
             // problem parsing the reply

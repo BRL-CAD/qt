@@ -1,5 +1,6 @@
 // Copyright (C) 2020 Intel Corporation.
 // SPDX-License-Identifier: LicenseRef-Qt-Commercial OR LGPL-3.0-only OR GPL-2.0-only OR GPL-3.0-only
+// Qt-Security score:critical reason:data-parser
 
 #ifndef QCBORVALUE_P_H
 #define QCBORVALUE_P_H
@@ -29,6 +30,11 @@
 QT_BEGIN_NAMESPACE
 
 namespace QtCbor {
+enum class Comparison {
+    ForEquality,
+    ForOrdering,
+};
+
 struct Undefined {};
 struct Element
 {
@@ -84,7 +90,8 @@ struct ByteData
     QStringView asStringView() const{ return QStringView(utf16(), len / 2); }
     QString asQStringRaw() const    { return QString::fromRawData(utf16(), len / 2); }
 };
-static_assert(std::is_trivial<ByteData>::value);
+static_assert(std::is_trivially_default_constructible<ByteData>::value);
+static_assert(std::is_trivially_copyable<ByteData>::value);
 static_assert(std::is_standard_layout<ByteData>::value);
 } // namespace QtCbor
 
@@ -96,6 +103,12 @@ class QCborContainerPrivate : public QSharedData
     ~QCborContainerPrivate();
 
 public:
+    QCborContainerPrivate() = default;
+    QCborContainerPrivate(const QCborContainerPrivate &) = default;
+    QCborContainerPrivate(QCborContainerPrivate &&) = default;
+    QCborContainerPrivate &operator=(const QCborContainerPrivate &) = delete;
+    QCborContainerPrivate &operator=(QCborContainerPrivate &&) = delete;
+
     enum ContainerDisposition { CopyContainer, MoveContainer };
 
     QByteArray::size_type usedData = 0;
@@ -190,7 +203,7 @@ public:
     }
     void insertAt(qsizetype idx, const QCborValue &value, ContainerDisposition disp = CopyContainer)
     {
-        replaceAt_internal(*elements.insert(elements.begin() + int(idx), {}), value, disp);
+        replaceAt_internal(*elements.insert(idx, {}), value, disp);
     }
 
     void append(QtCbor::Undefined)
@@ -223,13 +236,14 @@ public:
     void append(QLatin1StringView s)
     {
         if (!QtPrivate::isAscii(s))
-            return append(QString(s));
+            return appendNonAsciiString(QString(s));
 
         // US-ASCII is a subset of UTF-8, so we can keep in 8-bit
         appendByteData(s.latin1(), s.size(), QCborValue::String,
                        QtCbor::Element::StringIsAscii);
     }
     void appendAsciiString(QStringView s);
+    void appendNonAsciiString(QStringView s);
 
     void append(const QString &s)
     {
@@ -241,12 +255,17 @@ public:
         if (QtPrivate::isAscii(s))
             appendAsciiString(s);
         else
-            appendByteData(reinterpret_cast<const char *>(s.utf16()), s.size() * 2,
-                           QCborValue::String, QtCbor::Element::StringIsUtf16);
+            appendNonAsciiString(s);
     }
     void append(const QCborValue &v)
     {
         insertAt(elements.size(), v);
+    }
+    void append(QCborValue &&v)
+    {
+        insertAt(elements.size(), v, MoveContainer);
+        v.container = nullptr;
+        v.t = QCborValue::Undefined;
     }
 
     QByteArray byteArrayAt(qsizetype idx) const
@@ -268,6 +287,18 @@ public:
         if (e.flags & QtCbor::Element::StringIsAscii)
             return data->asLatin1();
         return data->toUtf8String();
+    }
+    QAnyStringView anyStringViewAt(qsizetype idx) const
+    {
+        const auto &e = elements.at(idx);
+        const auto data = byteData(e);
+        if (!data)
+            return nullptr;
+        if (e.flags & QtCbor::Element::StringIsUtf16)
+            return data->asStringView();
+        if (e.flags & QtCbor::Element::StringIsAscii)
+            return data->asLatin1();
+        return data->asUtf8StringView();
     }
 
     static void resetValue(QCborValue &v)
@@ -346,7 +377,7 @@ public:
     }
 
     template<typename String>
-    int stringCompareElement(const QtCbor::Element &e, String s) const
+    int stringCompareElement(const QtCbor::Element &e, String s, QtCbor::Comparison mode) const
     {
         if (e.type != QCborValue::String)
             return int(e.type) - int(QCborValue::String);
@@ -355,15 +386,18 @@ public:
         if (!b)
             return s.isEmpty() ? 0 : -1;
 
-        if (e.flags & QtCbor::Element::StringIsUtf16)
-            return QtPrivate::compareStrings(b->asStringView(), s);
+        if (e.flags & QtCbor::Element::StringIsUtf16) {
+            if (mode == QtCbor::Comparison::ForEquality)
+                return b->asStringView() == s ? 0 : 1;
+            return b->asStringView().compare(s);
+        }
         return compareUtf8(b, s);
     }
 
     template<typename String>
     bool stringEqualsElement(const QtCbor::Element &e, String s) const
     {
-        return stringCompareElement(e, s) == 0;
+        return stringCompareElement(e, s, QtCbor::Comparison::ForEquality) == 0;
     }
 
     template<typename String>
@@ -373,12 +407,13 @@ public:
     }
 
     static int compareElement_helper(const QCborContainerPrivate *c1, QtCbor::Element e1,
-                                     const QCborContainerPrivate *c2, QtCbor::Element e2);
-    int compareElement(qsizetype idx, const QCborValue &value) const
+                                     const QCborContainerPrivate *c2, QtCbor::Element e2,
+                                     QtCbor::Comparison mode) noexcept;
+    int compareElement(qsizetype idx, const QCborValue &value, QtCbor::Comparison mode) const
     {
         auto &e1 = elements.at(idx);
         auto e2 = elementFromValue(value);
-        return compareElement_helper(this, e1, value.container, e2);
+        return compareElement_helper(this, e1, value.container, e2, mode);
     }
 
     void removeAt(qsizetype idx)
@@ -395,7 +430,7 @@ public:
             const auto &e = elements.at(i);
             bool equals;
             if constexpr (std::is_same_v<std::decay_t<KeyType>, QCborValue>) {
-                equals = (compareElement(i, key) == 0);
+                equals = (compareElement(i, key, QtCbor::Comparison::ForEquality) == 0);
             } else if constexpr (std::is_integral_v<KeyType>) {
                 equals = (e.type == QCborValue::Integer && e.value == key);
             } else {

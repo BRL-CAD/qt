@@ -1,5 +1,6 @@
 // Copyright (C) 2021 The Qt Company Ltd.
 // SPDX-License-Identifier: LicenseRef-Qt-Commercial OR LGPL-3.0-only OR GPL-2.0-only OR GPL-3.0-only
+// Qt-Security score:critical reason:data-parser
 
 #include <QtNetwork/private/qsslcertificate_p.h>
 #include <QtNetwork/private/qssl_p.h>
@@ -118,7 +119,7 @@ QList<QSslCertificate> X509CertificateGeneric::certificatesFromPem(const QByteAr
 
         QByteArray decoded = QByteArray::fromBase64(
             QByteArray::fromRawData(pem.data() + startPos, endPos - startPos));
-        certificates << certificatesFromDer(decoded, 1);;
+        certificates << certificatesFromDer(decoded, 1);
     }
 
     return certificates;

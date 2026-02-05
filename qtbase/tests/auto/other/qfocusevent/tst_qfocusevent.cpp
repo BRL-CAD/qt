@@ -310,9 +310,6 @@ void tst_QFocusEvent::checkReason_ActiveWindow()
     QDialog* d = new QDialog( testFocusWidget );
     d->show();
     QVERIFY(QTest::qWaitForWindowExposed(d));
-
-    d->activateWindow(); // ### CDE
-    QApplicationPrivate::setActiveWindow(d);
     QVERIFY(QTest::qWaitForWindowActive(d));
 
     QTRY_VERIFY(childFocusWidgetOne->focusOutEventRecieved);
@@ -367,7 +364,6 @@ void tst_QFocusEvent::checkReason_ActiveWindow()
 
     Window window;
     window.show();
-    window.requestActivate();
     QVERIFY(QTest::qWaitForWindowActive(&window));
 
     if (windowActivationReasonFail)
@@ -377,7 +373,6 @@ void tst_QFocusEvent::checkReason_ActiveWindow()
 
     Window window2;
     window2.show();
-    window2.requestActivate();
     QVERIFY(QTest::qWaitForWindowActive(&window2));
 
     if (windowActivationReasonFail)

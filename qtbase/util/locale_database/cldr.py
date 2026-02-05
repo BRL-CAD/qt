@@ -10,17 +10,19 @@ The former should normally be all you need to access.
 See individual classes for further detail.
 """
 
-from typing import Iterable, TextIO
+from typing import Callable, Iterable, Iterator, TextIO
 from xml.dom import minidom
 from weakref import WeakValueDictionary as CacheDict
 from pathlib import Path
+from datetime import datetime, timedelta
 
 from ldml import Error, Node, XmlScanner, Supplement, LocaleScanner
 from localetools import names_clash
 from qlocalexml import Locale
 
 class CldrReader (object):
-    def __init__(self, root: Path, grumble = lambda msg: None, whitter = lambda msg: None):
+    def __init__(self, root: Path, grumble: Callable[[str], int] = lambda msg: 0,
+                 whitter: Callable[[str], int] = lambda msg: 0) -> None:
         """Set up a reader object for reading CLDR data.
 
         Single parameter, root, is the file-system path to the root of
@@ -36,8 +38,11 @@ class CldrReader (object):
         self.root = CldrAccess(root)
         self.whitter, self.grumble = whitter, grumble
         self.root.checkEnumData(grumble)
+        # TODO: can we do anything but ignore with the namings here ?
+        self.__bcp47Alias, _ = self.root.bcp47Aliases()
 
-    def likelySubTags(self):
+    def likelySubTags(self) -> Iterator[tuple[tuple[int, int, int, int],
+                                              tuple[int, int, int, int]]]:
         """Generator for likely subtag information.
 
         Yields pairs (have, give) of 4-tuples; if what you have
@@ -48,8 +53,8 @@ class CldrReader (object):
         skips = []
         for got, use in self.root.likelySubTags():
             try:
-                have = self.__parseTags(got)
-                give = self.__parseTags(use)
+                have: tuple[int, int, int, int] = self.__parseTags(got)
+                give: tuple[int, int, int, int] = self.__parseTags(use)
             except Error as e:
                 if ((use.startswith(got) or got.startswith('und_'))
                     and e.message.startswith('Unknown ') and ' code ' in e.message):
@@ -57,14 +62,12 @@ class CldrReader (object):
                 else:
                     self.grumble(f'Skipping likelySubtag "{got}" -> "{use}" ({e})\n')
                 continue
-            if all(code.startswith('Any') and code[3].isupper() for code in have[:-1]):
-                continue
 
             give = (give[0],
                     # Substitute according to http://www.unicode.org/reports/tr35/#Likely_Subtags
-                    have[1] if give[1] == 'AnyScript' else give[1],
-                    have[2] if give[2] == 'AnyTerritory' else give[2],
-                    give[3]) # AnyVariant similarly ?
+                    give[1] or have[1],
+                    give[2] or have[2],
+                    give[3] or have[3])
 
             yield have, give
 
@@ -74,13 +77,102 @@ class CldrReader (object):
             # more out.
             pass # self.__wrapped(self.whitter, 'Skipping likelySubtags (for unknown codes): ', skips)
 
-    def readLocales(self, calendars = ('gregorian',)):
-        locales = tuple(self.__allLocales(calendars))
-        return dict(((k.language_id, k.script_id, k.territory_id, k.variant_code),
-                     k) for k in locales)
+    def zoneData(self) -> tuple[dict[str, str],
+                                dict[str, str],
+                                dict[tuple[str, str], str],
+                                dict[str, dict[str, str]],
+                                dict[str, tuple[tuple[int, int, str], ...]],
+                                dict[str, str]]:
+        """Locale-independent timezone data.
 
-    def __allLocales(self, calendars):
-        def skip(locale, reason):
+        Returns a tuple (alias, defaults, winIds, metamap, zones,
+        territorial) in which:
+
+          * alias is a mapping from aliases for IANA zone IDs, that
+            have the form of IANA IDs, to actual current IANA IDs; in
+            particular, this maps each CLDR zone ID to its
+            corresponding IANA ID.
+          * defaults maps each Windows name for a zone to the IANA ID
+            to use for it by default (when no territory is specified,
+            or when no entry in winIds matches the given Windows name
+            and territory).
+          * winIds is a mapping {(winId, land): ianaList} from Windows
+            name and territory code to the space-joined list of IANA
+            IDs associated with the Windows name in the given
+            territory.
+          * metamap maps each metazone name to a mapping territory code to
+            (single) IANA ID.
+          * zones maps each IANA ID to its history of metazone association, in
+            th form of a tuple of triples (from, to, meta), where each of from
+            and to is a quint32 epoch minute and meta is a metazone name.
+          * territorial maps territory codes to IANA IDs (only a very small
+            minority of territories are represented).
+
+        and reports on any territories found in CLDR timezone data
+        that are not mentioned in enumdata.territory_map, on any
+        Windows IDs given in zonedata.windowsIdList that are no longer
+        covered by the CLDR data."""
+        alias: dict[str, str] = self.__bcp47Alias
+        # defaults is a dict[str, str] and winIds is a list[tuple[str, str, str]]
+        defaults, winIds = self.root.readWindowsTimeZones(alias)
+        # metamap is a dict[str, dict[str, str]],
+        # zones is dict[str, tuple[tuple[int, int, str], ...]], territorial is a dict[str, str]
+        metamap, zones, territorial = self.root.readMetaZoneMap(alias)
+
+        from zonedata import windowsIdList
+        winUnused: set[str] = set(n for n, o in windowsIdList).difference(
+            set(defaults).union(w for w, t, ids in winIds))
+        if winUnused:
+            joined = "\n\t".join(winUnused)
+            self.whitter.write(
+                f'No Windows ID in\n\t{joined}\nis still in use.\n'
+                'They could be removed at the next major version.\n')
+
+        # Check for duplicate entries in winIds:
+        last: tuple[str, str, str] = ('', '', '')
+        winDup: dict[tuple[str, str], list[str]] = {}
+        for triple in sorted(winIds):
+            if triple[:2] == last[:2]:
+                winDup.setdefault(triple[:2], []).append(triple[-1])
+            last = triple
+        if winDup:
+            joined = '\n\t'.join(f'{t}, {w}: ", ".join(ids)'
+                                 for (w, t), ids in winDup.items())
+            self.whitter.write(
+                f'Duplicated (territory, Windows ID) entries:\n\t{joined}\n')
+            winIds = [trip for trip in winIds if trip[:2] not in winDup]
+            for (w, t), seq in winDup.items():
+                ianaList = []
+                for ids in seq:
+                    for iana in ids.split():
+                        if iana not in ianaList:
+                            ianaList.append(iana)
+                winIds.append((w, t, ' '.join(ianaList)))
+
+        from enumdata import territory_map
+        unLand: set[str] = set(t for w, t, ids in winIds).union(territorial)
+        for bok in metamap.values():
+            unLand = unLand.union(bok)
+        unLand = unLand.difference(v[1] for k, v in territory_map.items())
+        if unLand:
+            self.grumble.write(
+                'Unknown territory codes in timezone data: '
+                f'{", ".join(unLand)}\n'
+                'Skipping Windows zone mappings for these territories\n')
+            winIds = [(w, t, ids) for w, t, ids in winIds if t not in unLand]
+
+        # Convert list of triples to mapping:
+        winIds: dict[tuple[str, str], str] = {(w, t): ids for w, t, ids in winIds}
+
+        return alias, defaults, winIds, metamap, zones, territorial
+
+    def readLocales(self, calendars: Iterable[str] = ('gregorian',)
+                    ) -> dict[tuple[int, int, int, int], Locale]:
+        return {(k.language_id, k.script_id, k.territory_id, k.variant_id): k
+                for k in self.__allLocales(calendars)}
+
+    def __allLocales(self, calendars: list[str]) -> Iterator[Locale]:
+        def skip(locale: str, reason: str) -> str:
             return f'Skipping defaultContent locale "{locale}" ({reason})\n'
 
         for locale in self.root.defaultContentLocales:
@@ -122,22 +214,22 @@ class CldrReader (object):
 
     import textwrap
     @staticmethod
-    def __wrapped(writer, prefix, tokens, wrap = textwrap.wrap):
+    def __wrapped(writer, prefix, tokens, wrap = textwrap.wrap) -> None:
         writer('\n'.join(wrap(prefix + ', '.join(tokens),
                               subsequent_indent=' ', width=80)) + '\n')
     del textwrap
 
-    def __parseTags(self, locale):
-        tags = self.__splitLocale(locale)
-        language = next(tags)
+    def __parseTags(self, locale: str) -> tuple[int, int, int, int]:
+        tags: Iterator[str] = self.__splitLocale(locale)
+        language: str = next(tags)
         script = territory = variant = ''
         try:
             script, territory, variant = tags
         except ValueError:
             pass
-        return tuple(p[1] for p in self.root.codesToIdName(language, script, territory, variant))
+        return tuple(p[0] for p in self.root.codesToIdName(language, script, territory, variant))
 
-    def __splitLocale(self, name):
+    def __splitLocale(self, name: str) ->  Iterator[str]:
         """Generate (language, script, territory, variant) from a locale name
 
         Ignores any trailing fields (with a warning), leaves script (a
@@ -146,11 +238,11 @@ class CldrReader (object):
         empty if unspecified.  Only generates one entry if name is a
         single tag (i.e. contains no underscores).  Always yields 1 or
         4 values, never 2 or 3."""
-        tags = iter(name.split('_'))
+        tags: Iterator[str] = iter(name.split('_'))
         yield next(tags) # Language
 
         try:
-            tag = next(tags)
+            tag: str = next(tags)
         except StopIteration:
             return
 
@@ -187,14 +279,15 @@ class CldrReader (object):
         if rest:
             self.grumble(f'Ignoring unparsed cruft {"_".join(rest)} in {name}\n')
 
-    def __getLocaleData(self, scan, calendars, language, script, territory, variant):
+    def __getLocaleData(self, scan: LocaleScanner, calendars: list[str], language: str,
+                        script: str, territory: str, variant: str) -> Locale:
         ids, names = zip(*self.root.codesToIdName(language, script, territory, variant))
         assert ids[0] > 0 and ids[2] > 0, (language, script, territory, variant)
         locale = Locale(
             language = names[0], language_code = language, language_id = ids[0],
             script = names[1], script_code = script, script_id = ids[1],
             territory = names[2], territory_code = territory, territory_id = ids[2],
-            variant_code = variant)
+            variant_code = variant, variant_id = ids[3])
 
         firstDay, weStart, weEnd = self.root.weekData(territory)
         assert all(day in ('mon', 'tue', 'wed', 'thu', 'fri', 'sat', 'sun')
@@ -210,11 +303,14 @@ class CldrReader (object):
                       currencyRounding = int(rounding))
 
         locale.update(scan.currencyData(iso))
-        locale.update(scan.numericData(self.root.numberSystem, self.whitter))
+        locale.update(scan.numericData(self.root.numberSystem))
         locale.update(scan.textPatternData())
         locale.update(scan.endonyms(language, script, territory, variant))
         locale.update(scan.unitData()) # byte, kB, MB, GB, ..., KiB, MiB, GiB, ...
         locale.update(scan.calendarNames(calendars)) # Names of days and months
+
+        # Naming of timezones:
+        locale.update(scan.timeZoneNames(self.__bcp47Alias))
 
         return locale
 
@@ -223,7 +319,7 @@ class CldrReader (object):
 # the cache. If a process were to instantiate this class with distinct
 # roots, each cache would be filled by the first to need it !
 class CldrAccess (object):
-    def __init__(self, root: Path):
+    def __init__(self, root: Path) -> None:
         """Set up a master object for accessing CLDR data.
 
         Single parameter, root, is the file-system path to the root of
@@ -231,20 +327,20 @@ class CldrAccess (object):
         contain dtd/, main/ and supplemental/ sub-directories."""
         self.root = root
 
-    def xml(self, relative_path: str):
+    def xml(self, relative_path: str) -> XmlScanner:
         """Load a single XML file and return its root element as an XmlScanner.
 
         The path is interpreted relative to self.root"""
         return XmlScanner(Node(self.__xml(relative_path)))
 
-    def supplement(self, name):
+    def supplement(self, name: str) -> Supplement:
         """Loads supplemental data as a Supplement object.
 
         The name should be that of a file in common/supplemental/, without path.
         """
         return Supplement(Node(self.__xml(f'common/supplemental/{name}')))
 
-    def locale(self, name):
+    def locale(self, name: str) -> LocaleScanner:
         """Loads all data for a locale as a LocaleScanner object.
 
         The name should be a locale name; adding suffix '.xml' to it
@@ -254,7 +350,8 @@ class CldrAccess (object):
         inheritance, where relevant."""
         return LocaleScanner(name, self.__localeRoots(name), self.__rootLocale)
 
-    def englishNaming(self, tag): # see QLocaleXmlWriter.enumData()
+    # see QLocaleXmlWriter.enumData()
+    def englishNaming(self, tag: str) -> Callable[[str, str], str]:
         return self.__codeMap(tag).get
 
     @property
@@ -268,22 +365,22 @@ class CldrAccess (object):
                 yield path.stem
 
     @property
-    def defaultContentLocales(self):
+    def defaultContentLocales(self) -> Iterator[str]:
         """Generator for the default content locales."""
         for name, attrs in self.supplement('supplementalMetadata.xml').find('metadata/defaultContent'):
             try:
-                locales = attrs['locales']
+                locales: str = attrs['locales']
             except KeyError:
                 pass
             else:
                 for locale in locales.split():
                     yield locale
 
-    def likelySubTags(self):
+    def likelySubTags(self) -> Iterator[tuple[str, str]]:
         for ignore, attrs in self.supplement('likelySubtags.xml').find('likelySubtags'):
             yield attrs['from'], attrs['to']
 
-    def numberSystem(self, system):
+    def numberSystem(self, system: str) -> dict[str, str]:
         """Get a description of a numbering system.
 
         Returns a mapping, with keys 'digits', 'type' and 'id'; the
@@ -294,7 +391,7 @@ class CldrAccess (object):
         except KeyError:
             raise Error(f'Unsupported number system: {system}')
 
-    def weekData(self, territory):
+    def weekData(self, territory: str) -> tuple[str, str, str]:
         """Data on the weekly cycle.
 
         Returns a triple (W, S, E) of en's short names for week-days;
@@ -307,7 +404,7 @@ class CldrAccess (object):
         except KeyError:
             return self.__weekData['001']
 
-    def currencyData(self, territory):
+    def currencyData(self, territory: str) -> tuple[str, int, int]:
         """Returns currency data for the given territory code.
 
         Return value is a tuple (ISO4217 code, digit count, rounding
@@ -319,7 +416,9 @@ class CldrAccess (object):
         except KeyError:
             return '', 2, 1
 
-    def codesToIdName(self, language, script, territory, variant = ''):
+    def codesToIdName(self, language: str, script: str, territory: str, variant: str = ''
+                     ) -> tuple[tuple[int, str], tuple[int, str],
+                                tuple[int, str], tuple[int, str]]:
         """Maps each code to the appropriate ID and name.
 
         Returns a 4-tuple of (ID, name) pairs corresponding to the
@@ -331,7 +430,7 @@ class CldrAccess (object):
         Until we implement variant support (QTBUG-81051), the fourth
         member of the returned tuple is always 0 paired with a string
         that should not be used."""
-        enum = self.__enumMap
+        enum: Callable[[str], dict[str, tuple[int, str]]] = self.__enumMap
         try:
             return (enum('language')[language],
                     enum('script')[script],
@@ -342,8 +441,9 @@ class CldrAccess (object):
 
         parts, values = [], [language, script, territory, variant]
         for index, key in enumerate(('language', 'script', 'territory', 'variant')):
-            naming, enums = self.__codeMap(key), enum(key)
-            value = values[index]
+            naming: dict[str, str] = self.__codeMap(key)
+            enums: dict[str, tuple[int, str]]  = enum(key)
+            value: str = values[index]
             if value not in enums:
                 text = f'{key} code {value}'
                 name = naming.get(value)
@@ -352,34 +452,39 @@ class CldrAccess (object):
                 parts.append(text)
         if len(parts) > 1:
             parts[-1] = 'and ' + parts[-1]
-        assert parts
+        else:
+            assert parts
+            if parts[0].startswith('variant'):
+                raise Error(f'No support for {parts[0]}',
+                            language, script, territory, variant)
         raise Error('Unknown ' + ', '.join(parts),
                     language, script, territory, variant)
 
     @staticmethod
-    def __checkEnum(given, proper, scraps):
+    def __checkEnum(given: dict[str, str], proper: dict[str, str], scraps: set[str]
+                    ) -> Iterator[tuple[str, str]]:
         # Each is a { code: full name } mapping
         for code, name in given.items():
-            try: right = proper[code]
+            try: right: str = proper[code]
             except KeyError:
                 # No en.xml name for this code, but supplementalData's
                 # parentLocale may still believe in it:
                 if code not in scraps:
                     yield name, f'[Found no CLDR name for code {code}]'
                 continue
-            cleaned = names_clash(right, name)
+            cleaned: None | str = names_clash(right, name)
             if cleaned:
                 yield name, cleaned
 
-    def checkEnumData(self, grumble):
+    def checkEnumData(self, grumble: Callable[[str], int]) -> None:
         scraps = set()
         for k in self.__parentLocale.keys():
             for f in k.split('_'):
                 scraps.add(f)
         from enumdata import language_map, territory_map, script_map
-        language = dict((v, k) for k, v in language_map.values() if not v.isspace())
-        territory = dict((v, k) for k, v in territory_map.values() if v != 'ZZ')
-        script = dict((v, k) for k, v in script_map.values() if v != 'Zzzz')
+        language = {v: k for k, v in language_map.values() if not v.isspace()}
+        territory = {v: k for k, v in territory_map.values() if v != 'ZZ'}
+        script = {v: k for k, v in script_map.values() if v != 'Zzzz'}
         lang = dict(self.__checkEnum(language, self.__codeMap('language'), scraps))
         land = dict(self.__checkEnum(territory, self.__codeMap('territory'), scraps))
         text = dict(self.__checkEnum(script, self.__codeMap('script'), scraps))
@@ -402,101 +507,313 @@ enumdata.py (keeping the old name as an alias):
                         + '\n')
             grumble('\n')
 
-    def readWindowsTimeZones(self, lookup): # For use by cldr2qtimezone.py
+    def bcp47Aliases(self) -> tuple[dict[str, str], dict[str, str]]:
+        """Reads the mapping from CLDR IDs to IANA IDs
+
+        CLDR identifies timezones in various ways but its standard
+        'name' for them, here described as a CLDR ID, has the form of
+        an IANA ID. CLDR IDs are stable across time, where IANA IDs
+        may be revised over time, for example Asia/Calcutta became
+        Asia/Kolkata. When a new zone is added to CLDR, it gets the
+        then-current IANA ID as its CLDR ID; if it is later
+        superseded, CLDR continues using the old ID, so we need a
+        mapping from that to current IANA IDs. Helpfully, CLDR
+        provides information about aliasing among time-zone IDs.
+
+        The file common/bcp47/timezone.xml has keyword/key/type
+        elements with attributes:
+
+          name -- zone code (ignore)
+          description -- long name for exemplar location, including
+                         territory
+
+        and some of:
+
+          deprecated -- ignore entry if present (has no alias)
+          preferred -- only present if deprecated
+          since -- version at which this entry was added (ignore)
+          alias -- space-joined sequence of IANA-form IDs; first is CLDR ID
+          iana -- if present, repeats the alias entry that's the modern IANA ID
+
+        This returns a pair (alias, naming) wherein: alias is a
+        mapping from IANA-format IDs to actual IANA IDs, that maps
+        each alias to the contemporary ID used by IANA; and naming is
+        a mapping from IANA ID to the description it and its aliases
+        shared in their keyword/key/type entry."""
+        # File has the same form as supplements:
+        root = Supplement(Node(self.__xml('common/bcp47/timezone.xml')))
+
+        # If we ever need a mapping back to CLDR ID, we can make
+        # (description, space-joined-list) the naming values.
+        alias: dict[str, str] = {} # { alias: iana }
+        naming: dict[str, str] = {} # { iana: description }
+        for item, attrs in root.find('keyword/key/type', exclude=('deprecated',)):
+            assert 'description' in attrs, item
+            assert 'alias' in attrs, item
+            names = attrs['alias'].split()
+            assert not any(name in alias for name in names), item
+            # CLDR ID is names[0]; if IANA now uses another name for
+            # it, this is given as the iana attribute.
+            ianaid, fullName = attrs.get('iana', names[0]), attrs['description']
+            alias.update({name: ianaid for name in names})
+            assert not ianaid in naming
+            naming[ianaid] = fullName
+
+        return alias, naming
+
+    def readWindowsTimeZones(self, alias: dict[str, str]) -> tuple[dict[str, str],
+                                                                   list[tuple[str, str, str]]]:
         """Digest CLDR's MS-Win time-zone name mapping.
 
-        MS-Win have their own eccentric names for time-zones.  CLDR
-        helpfully provides a translation to more orthodox names.
+        Single argument, alias, should be the first part of the pair
+        returned by a call to bcp47Aliases(); it shall be used to
+        transform CLDR IDs into IANA IDs.
 
-        Single argument, lookup, is a mapping from known MS-Win names
-        for locales to a unique integer index (starting at 1).
+        MS-Win have their own eccentric names for time-zones. CLDR
+        helpfully provides a translation to more orthodox names,
+        albeit these are CLDR IDs - see bcp47Aliases() - rather than
+        (up to date) IANA IDs. The windowsZones.xml supplement has
+        supplementalData/windowsZones/mapTimezones/mapZone nodes with
+        attributes
 
-        The XML structure we read has the form:
+          territory -- ISO code
+          type -- space-joined sequence of CLDR IDs of zones
+          other -- Windows name of these zones in the given territory
 
- <supplementalData>
-     <windowsZones>
-         <mapTimezones otherVersion="..." typeVersion="...">
-             <!-- (UTC-08:00) Pacific Time (US & Canada) -->
-             <mapZone other="Pacific Standard Time" territory="001" type="America/Los_Angeles"/>
-             <mapZone other="Pacific Standard Time" territory="CA" type="America/Vancouver America/Dawson America/Whitehorse"/>
-             <mapZone other="Pacific Standard Time" territory="US" type="America/Los_Angeles America/Metlakatla"/>
-             <mapZone other="Pacific Standard Time" territory="ZZ" type="PST8PDT"/>
-         </mapTimezones>
-     </windowsZones>
- </supplementalData>
-"""
+        When 'territory' is '001', type is always just a single CLDR
+        zone ID. This is the default zone for the given Windows name.
+
+        For each mapZone node, its type is split on spacing and
+        cleaned up as follows. Those entries that are keys of alias
+        are mapped thereby to their canonical IANA IDs; all others are
+        presumed to be canonical IANA IDs and left unchanged.  Any
+        later duplicates of earlier entries are omitted. The result
+        list of IANA IDs is joined with single spaces between to give
+        a string s.
+
+        Returns a twople (defaults, windows) in which defaults is a
+        mapping, from Windows ID to IANA ID (derived from the mapZone
+        nodes with territory='001'), and windows is a list of triples
+        (Windows ID, territory code, IANA ID list) in which the first
+        two entries are the 'other' and 'territory' fields of a
+        mapZone element and the last is s, its cleaned-up list of IANA
+        IDs."""
+
+        defaults: dict[str, str] = {}
+        windows: list[tuple[str, str, str]] = []
         zones = self.supplement('windowsZones.xml')
-        enum = self.__enumMap('territory')
-        badZones, unLands, defaults, windows = set(), set(), {}, {}
-
         for name, attrs in zones.find('windowsZones/mapTimezones'):
             if name != 'mapZone':
                 continue
 
-            wid, code = attrs['other'], attrs['territory']
-            data = dict(windowsId = wid,
-                        territoryCode = code,
-                        ianaList = ' '.join(attrs['type'].split()))
-
-            try:
-                key = lookup[wid]
-            except KeyError:
-                badZones.add(wid)
-                key = 0
-            data['windowsKey'] = key
+            wid, code, ianas = attrs['other'], attrs['territory'], []
+            for cldr in attrs['type'].split():
+                iana = alias.get(cldr, cldr)
+                if iana not in ianas:
+                    ianas.append(iana)
 
             if code == '001':
-                defaults[key] = data['ianaList']
+                assert len(ianas) == 1, (wid, *ianas)
+                defaults[wid] = ianas[0]
             else:
+                windows.append((wid, code, ' '.join(ianas)))
+
+        # For each Windows ID, its default zone is its zone for at
+        # least some territory:
+        assert all(any(True for w, code, seq in windows
+                       if w == wid and zone in seq.split())
+                   for wid, zone in defaults.items()), (defaults, windows)
+
+        return defaults, windows
+
+    def readMetaZoneMap(self, alias: dict[str, str]
+                        ) -> tuple[dict[str, dict[str, str]],
+                                   dict[str, tuple[tuple[int, int, str], ...]],
+                                   dict[str, str]]:
+        """Digests the metaZones supplemental data.
+
+        Required argument, alias, should be the first of
+        bcp47Aliases()'s pair of returns; it is used to map CLDR IDs
+        to IANA IDs.
+
+        Ignores the metazoneIds, at least for now. Reads mapTimezones
+        as a mapping from metazone to mapping from territory (possibly
+        via CLDR ID) to IANA ID; the entry for territory '001' (world)
+        is the exemplar zone for the metazone. Reads metazoneInfo as a
+        mapping from IANA IDs (possibly given as CLDR IDs) to usage
+        histories. Reads primaryZones as a mapping from territory (via
+        CLDR IDs) to IANA IDs. Returns a triple of these three
+        mappings, in the given order, with the territories mapped to
+        pairs of: an integer value of a corresponding
+        QLocale::Territory and the territory code (a short string).
+
+        The usage history of each zone is a sequence of triples (to,
+        from, metazone) indicating an interval of time, bounded by to
+        and from, during which the zone followed the metazone. A
+        bounding time of None indicates no bound at its end;
+        otherwise, each bound is a "yyyy-MM-dd hh:mm" datetime
+        string. Earlier time intervals are sorted before later;
+        successive intervals usually abut.
+
+        This is the locale-independent data that we need to glue
+        together the ldml.LocaleScanner.timeZoneNames() data per
+        locale."""
+        metaZones = self.supplement('metaZones.xml') # Doesn't appear to use draft attribute
+        # Map CLDR name to IANA name (or use CLDR name if unknown to alias):
+        zoneName: Callable[[str], str] = lambda n, g=alias.get: g(n, n)
+
+        metaMap: dict[str, dict[str, str]] = {} # { meta: { territory code: zoneId } }
+        # Entry with territory 001 is "golden zone" for the metazone.
+        for mapMeta in metaZones.findNodes('metaZones/mapTimezones'):
+            attrs = mapMeta.attributes()
+            if attrs.get('type', '') != 'metazones':
+                continue
+            if attrs.get('typeVersion', '') != '2018e':
+                # We may be able to cope, but someone needs to check
+                raise Error('Version of metazone map type is not 2018e', attrs)
+
+            for node in mapMeta.findAllChildren('mapZone'):
+                attrs: dict[str, str] = node.attributes()
                 try:
-                    cid, name = enum[code]
+                    meta, code, zone = attrs['other'], attrs['territory'], attrs['type']
                 except KeyError:
-                    unLands.append(code)
                     continue
-                data.update(territoryId = cid, territory = name)
-                windows[key, cid] = data
 
-        if unLands:
-            raise Error('Unknown territory codes, please add to enumdata.py: '
-                        + ', '.join(sorted(unLands)))
+                bok: dict[str, str] = metaMap.setdefault(meta, {})
+                assert code not in bok, (meta, code)
+                bok[code] = zoneName(zone)
+        # Territories not named in a metaMap entry fall back on the
+        # value for 001, so every metaMap must have this "golden"
+        # entry:
+        assert all('001' in bok for bok in metaMap.values())
 
-        if badZones:
-            raise Error('Unknown Windows IDs, please add to cldr2qtimezone.py: '
-                        + ', '.join(sorted(badZones)))
+        def scanUses(zone: Node, check=metaMap) -> Iterator[tuple[str|None, str|None, str]]:
+            for node in zone.findAllChildren('usesMetazone'):
+                attrs: dict[str, str] = node.attributes()
+                mzone: str = attrs['mzone']
+                if mzone not in check:
+                    raise Error('Unknown metazone', mzone)
+                # These are UTC date-times.
+                yield attrs.get('from'), attrs.get('to'), mzone
 
-        return self.cldrVersion, defaults, windows
+        def sortKey(triple: tuple[str|None, str|None, str]) -> str | None:
+            start, stop, mzone = triple
+            # The start = None entry should sort first; since its key
+            # is its stop, which is likely the next entry's start, we
+            # append a zero-second field to any non-None start to make
+            # it sort (lexically) after its predecessor's stop value.
+            return f'{start}:00' if start else stop
+            # (If both start and stop are None, there's only one entry
+            # in the list, so the sorting is fatuous and the key
+            # doesn't matter).
+
+        def timeRep(text: str, notime: bool, epoch=datetime(1970, 1, 1, 0, 0)) -> int:
+            """Map a 'yyyy-MM-dd HH:mm' string to epoch minutes.
+
+            If the HH:mm part is omitted, second parameter notime is true to
+            use the end of the day, false for the start. LDML specifies this
+            reading of the pure-date values for start and stop attributes.  If
+            the HH:mm part is 24:00, the end of the day is also used; LDML
+            specifies this but python's datetime.fromisoformat() doesn't like
+            it.
+
+            Since the datetimes are given as UTC and only to minute precision,
+            with only 1440 minutes in a day, 32 bits can represent a span of
+            over 8 thousand years in epoch minutes form. As we use this only
+            for times of changes to metazone status of a zone, all after the
+            epoch, we can use an unsigned 32-bit int to reach year 10136."""
+            try:
+                if len(text) == 10:
+                    if notime:
+                        raise ValueError
+                    # else: fromisoformat reads it as start of day
+                else:
+                    assert len(text) == 16, text
+
+                # If it's given with HH:mm as 24:00, this throws:
+                diff: timedelta = datetime.fromisoformat(text) - epoch
+            except ValueError:
+                diff = datetime.fromisoformat(text[:10]) - epoch
+                diff += diff.__class__(days=1)
+
+            assert diff.days >= 0 and diff.seconds >= 0, (diff, text)
+            mins, secs = divmod(diff.seconds, 60)
+            assert secs == 0, (diff, text)
+            return diff.days * 1440 + mins
+
+        def mapTimes(triple: tuple[str|None, str|None, str],
+                     alpha: int = 0, omega: int = (1<<32) - 1,
+                     torep: Callable[[str, bool, datetime], int] = timeRep
+                     ) -> tuple[int, int, str]:
+            start, stop, mzone = triple
+            start = alpha if start is None else torep(start, False)
+            stop = omega if stop is None else torep(stop, True)
+            # Treat any date after omega - 1 as end of time, as we need omega -
+            # 1 as a sentinel value in the C++ binary chop code.
+            if stop + 1 >= omega:
+                stop = omega
+            return start, stop, mzone
+
+        # zones is { ianaId: ( (from, to, meta), ... ) }
+        zones: dict[str, tuple[tuple[int, int, str], ...]] = {}
+        for metaInfo in metaZones.findNodes('metaZones/metazoneInfo'):
+            for zone in metaInfo.findAllChildren('timezone'):
+                iana: str = zoneName(zone.dom.attributes['type'].value)
+                story = tuple(sorted(scanUses(zone), key=sortKey))
+                # Only {first,last} entry can have None for {from,to}:
+                assert not any(s[0] is None for s in story[1:]), (iana, story)
+                assert not any(s[1] is None for s in story[:-1]), (iana, story)
+                # Each ends when or before the next starts:
+                assert all(old[1] <= new[0]
+                           for old, new in zip(story[:-1], story[1:])), (iana, story)
+                # Now repack story in our compact form:
+                zones[iana] = tuple(mapTimes(x) for x in story)
+
+        # Every mapTimeZones entry should have a reverse entry in
+        # metazoneInfo:
+        assert all(all(any(metaz == s[-1] for s in zones.get(zone, ()))
+                       for zone in bok.values())
+                   for metaz, bok in metaMap.items())
+
+        territorial: dict[str, str] = {} # { territory code: IANA ID }
+        for prime in metaZones.findNodes('primaryZones/primaryZone'):
+            code = prime.attributes()['iso3166']
+            assert code not in territorial, code
+            territorial[code] = zoneName(prime.dom.childNodes[0].wholeText)
+
+        return metaMap, zones, territorial
 
     @property
-    def cldrVersion(self):
+    def cldrVersion(self) -> str:
         # Evaluate so as to ensure __cldrVersion is set:
         self.__unDistinguishedAttributes
         return self.__cldrVersion
 
     # Implementation details
-    def __xml(self, relative_path: str, cache = CacheDict(), read = minidom.parse):
+    def __xml(self, relPath: str, cache = CacheDict(), read = minidom.parse) -> minidom.Element:
         try:
-            doc = cache[relative_path]
+            doc: minidom.Element = cache[relPath]
         except KeyError:
-            cache[relative_path] = doc = read(str(self.root.joinpath(relative_path))).documentElement
+            cache[relPath] = doc = read(str(self.root.joinpath(relPath))).documentElement
         return doc
 
     def __open(self, relative_path: str) -> TextIO:
         return self.root.joinpath(relative_path).open()
 
     @property
-    def __rootLocale(self, cache = []):
+    def __rootLocale(self, cache: list[XmlScanner] = []) -> XmlScanner:
         if not cache:
             cache.append(self.xml('common/main/root.xml'))
         return cache[0]
 
     @property
-    def __supplementalData(self, cache = []):
+    def __supplementalData(self, cache: list[Supplement] = []) -> Supplement:
         if not cache:
             cache.append(self.supplement('supplementalData.xml'))
         return cache[0]
 
     @property
-    def __numberSystems(self, cache = {}):
+    def __numberSystems(self, cache: dict[str, dict[str, str]] = {}) -> dict[str, dict[str, str]]:
         if not cache:
             for ignore, attrs in self.supplement('numberingSystems.xml').find('numberingSystems'):
                 cache[attrs['id']] = attrs
@@ -504,20 +821,22 @@ enumdata.py (keeping the old name as an alias):
         return cache
 
     @property
-    def __weekData(self, cache = {}):
+    def __weekData(self, cache: dict[str, tuple[str, str, str]] = {}
+                   ) -> dict[str, tuple[str, str, str]]:
         if not cache:
+            # firstDay, weStart and weEnd are all dict[str, str]
             firstDay, weStart, weEnd = self.__getWeekData()
             # Massage those into an easily-consulted form:
             # World defaults given for code '001':
             mon, sat, sun = firstDay['001'], weStart['001'], weEnd['001']
-            lands = set(firstDay) | set(weStart) | set(weEnd)
+            lands: set[str] = set(firstDay) | set(weStart) | set(weEnd)
             cache.update((land,
                           (firstDay.get(land, mon), weStart.get(land, sat), weEnd.get(land, sun)))
                          for land in lands)
             assert cache
         return cache
 
-    def __getWeekData(self):
+    def __getWeekData(self) -> Iterator[dict[str, str]]:
         """Scan for data on the weekly cycle.
 
         Yields three mappings from locales to en's short names for
@@ -526,12 +845,12 @@ enumdata.py (keeping the old name as an alias):
         gives the day on which the week starts, the second gives the
         day on which the week-end starts, the third gives the last day
         of the week-end."""
-        source = self.__supplementalData
+        source: Supplement = self.__supplementalData
         for key in ('firstDay', 'weekendStart', 'weekendEnd'):
-            result = {}
+            result: dict[str, str] = {}
             for ignore, attrs in source.find(f'weekData/{key}'):
                 assert ignore == key
-                day = attrs['day']
+                day: str = attrs['day']
                 assert day in ('mon', 'tue', 'wed', 'thu', 'fri', 'sat', 'sun'), day
                 if 'alt' in attrs:
                     continue
@@ -540,11 +859,14 @@ enumdata.py (keeping the old name as an alias):
             yield result
 
     @property
-    def __currencyData(self, cache = {}):
+    def __currencyData(self, cache: dict[str, tuple[str, int, int]] = {}
+                       ) -> dict[str, tuple[str, int, int]]:
         if not cache:
             source = self.__supplementalData
             for elt in source.findNodes('currencyData/region'):
                 iso, digits, rounding = '', 2, 1
+                # TODO: fractions/info[iso4217=DEFAULT] has rounding=0 - why do we differ ?
+                # Also: some fractions/info have cashDigits and cashRounding - should we use them ?
                 try:
                     territory = elt.dom.attributes['iso3166'].nodeValue
                 except KeyError:
@@ -563,15 +885,16 @@ enumdata.py (keeping the old name as an alias):
                 if iso:
                     for tag, data in source.find(
                         f'currencyData/fractions/info[iso4217={iso}]'):
-                        digits = data['digits']
-                        rounding = data['rounding']
+                        digits = int(data['digits'])
+                        rounding = int(data['rounding'])
                 cache[territory] = iso, digits, rounding
             assert cache
 
         return cache
 
     @property
-    def __unDistinguishedAttributes(self, cache = {}):
+    def __unDistinguishedAttributes(self, cache: dict[str, tuple[str, ...]] = {}
+                                    ) -> dict[str, tuple[str, ...]]:
         """Mapping from tag names to lists of attributes.
 
         LDML defines some attributes as 'distinguishing': if a node
@@ -591,7 +914,7 @@ enumdata.py (keeping the old name as an alias):
 
         return cache
 
-    def __scanLdmlDtd(self):
+    def __scanLdmlDtd(self) -> Iterator[tuple[str, tuple[str, ...]]]:
         """Scan the LDML DTD, record CLDR version
 
         Yields (tag, attrs) pairs: on elements with a given tag,
@@ -633,18 +956,19 @@ enumdata.py (keeping the old name as an alias):
             if tag and ignored:
                 yield tag, tuple(ignored)
 
-    def __enumMap(self, key, cache = {}):
+    def __enumMap(self, key: str, cache: dict[str, dict[str, tuple[int, str]]] = {}
+                  ) -> dict[str, tuple[int, str]]:
         if not cache:
             cache['variant'] = {'': (0, 'This should never be seen outside ldml.py')}
-            # They're not actually lists: mappings from numeric value
-            # to pairs of full name and short code. What we want, in
-            # each case, is a mapping from code to the other two.
+            # They're mappings from numeric value to pairs of full
+            # name and short code. What we want, in each case, is a
+            # mapping from code to the other two.
             from enumdata import language_map, script_map, territory_map
             for form, book, empty in (('language', language_map, 'AnyLanguage'),
                                       ('script', script_map, 'AnyScript'),
                                       ('territory', territory_map, 'AnyTerritory')):
-                cache[form] = dict((pair[1], (num, pair[0]))
-                                   for num, pair in book.items() if pair[0] != 'C')
+                cache[form] = {pair[1]: (num, pair[0])
+                               for num, pair in book.items() if pair[0] != 'C'}
                 # (Have to filter out the C locale, as we give it the
                 # same (all space) code as AnyLanguage, whose code
                 # should probably be 'und' instead.)
@@ -656,19 +980,19 @@ enumdata.py (keeping the old name as an alias):
 
         return cache[key]
 
-    def __codeMap(self, key, cache = {},
+    def __codeMap(self, key: str, cache: dict[str, dict[str, str]] = {},
                   # Maps our name for it to CLDR's name:
                   naming = {'language': 'languages', 'script': 'scripts',
-                            'territory': 'territories', 'variant': 'variants'}):
+                            'territory': 'territories', 'variant': 'variants'}) -> dict[str, str]:
         if not cache:
-            root = self.xml('common/main/en.xml').root.findUniqueChild('localeDisplayNames')
+            root: Node = self.xml('common/main/en.xml').root.findUniqueChild('localeDisplayNames')
             for dst, src in naming.items():
                 cache[dst] = dict(self.__codeMapScan(root.findUniqueChild(src)))
             assert cache
 
         return cache[key]
 
-    def __codeMapScan(self, node):
+    def __codeMapScan(self, node: Node) -> Iterator[tuple[str, str]]:
         """Get mapping from codes to element values.
 
         Passed in node is a <languages>, <scripts>, <territories> or
@@ -699,41 +1023,29 @@ enumdata.py (keeping the old name as an alias):
 
     # CLDR uses inheritance between locales to save repetition:
     @property
-    def __parentLocale(self, cache = {}):
+    def __parentLocale(self, cache: dict[str, str] = {}) -> dict[str, str]:
         # see http://www.unicode.org/reports/tr35/#Parent_Locales
         if not cache:
             for tag, attrs in self.__supplementalData.find('parentLocales',
                                                            ('component',)):
-                parent = attrs.get('parent', '')
+                parent: str = attrs.get('parent', '')
                 for child in attrs['locales'].split():
                     cache[child] = parent
             assert cache
 
         return cache
 
-    def __localeAsDoc(self, name: str, aliasFor = None):
-        path = f'common/main/{name}.xml'
-        if self.root.joinpath(path).exists():
-            elt = self.__xml(path)
-            for child in Node(elt).findAllChildren('alias'):
-                try:
-                    alias = child.dom.attributes['source'].nodeValue
-                except (KeyError, AttributeError):
-                    pass
-                else:
-                    return self.__localeAsDoc(alias, aliasFor or name)
-            # No alias child with a source:
-            return elt
-
-        if aliasFor:
-            raise Error(f'Fatal error: found an alias "{aliasFor}" -> "{name}", '
-                        'but found no file for the alias')
-
-    def __scanLocaleRoots(self, name):
+    def __scanLocaleRoots(self, name: str) -> Iterator[Node]:
         while name and name != 'root':
-            doc = self.__localeAsDoc(name)
-            if doc is not None:
-                yield Node(doc, self.__unDistinguishedAttributes)
+            path = f'common/main/{name}.xml'
+            if self.root.joinpath(path).exists():
+                elt: minidom.Element = self.__xml(path) # which has no top-level alias children:
+                assert not any(True
+                               for child in Node(elt).findAllChildren(
+                                       'alias', allDull=True)
+                               ), (f"Locale {name} "
+                                   "has an archaic top-level alias element")
+                yield Node(elt, self.__unDistinguishedAttributes)
 
             try:
                 name = self.__parentLocale[name]
@@ -744,11 +1056,11 @@ enumdata.py (keeping the old name as an alias):
                     break
 
     class __Seq (list): pass # No weakref for tuple and list, but list sub-class is ok.
-    def __localeRoots(self, name, cache = CacheDict()):
+    def __localeRoots(self, name: str, cache = CacheDict()) -> __Seq:
         try:
-            chain = cache[name]
+            chain: CldrAccess.__Seq = cache[name]
         except KeyError:
-            cache[name] = chain = self.__Seq(self.__scanLocaleRoots(name))
+            cache[name] = chain = CldrAccess.__Seq(self.__scanLocaleRoots(name))
         return chain
 
 # Unpolute the namespace: we don't need to export these.

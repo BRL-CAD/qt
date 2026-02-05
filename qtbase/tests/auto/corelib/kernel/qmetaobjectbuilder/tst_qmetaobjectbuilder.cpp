@@ -22,6 +22,7 @@ private slots:
     void variantProperty();
     void notifySignal();
     void enumerator();
+    void enumProperty();
     void classInfo();
     void relatedMetaObject();
     void staticMetacall();
@@ -39,10 +40,13 @@ private slots:
     void classNameFirstInStringData();
 
     void propertyMetaType();
+    void enumCloning();
 
     void cleanupTestCase();
 
     void ownMetaTypeNoProperties();
+
+    // void tooLongParameterNamesList(); // QTBUG-139845
 
 private:
     static bool checkForSideEffects
@@ -75,6 +79,8 @@ class SomethingOfEverything : public QObject
     Q_PROPERTY(QLocale::Language language READ language)
     Q_ENUMS(SomethingEnum)
     Q_FLAGS(SomethingFlag)
+    Q_ENUMS(SomethingEnum64)
+    Q_FLAGS(SomethingFlag64)
 public:
     Q_INVOKABLE SomethingOfEverything() {}
     ~SomethingOfEverything() {}
@@ -85,6 +91,12 @@ public:
         JKL = 10
     };
 
+    enum SomethingEnum64 : qint64
+    {
+        MNO = -1,
+        PQR = 0x1'2345'5678,
+    };
+
     enum SomethingFlagEnum
     {
         XYZ = 1,
@@ -92,7 +104,14 @@ public:
     };
     Q_DECLARE_FLAGS(SomethingFlag, SomethingFlagEnum)
 
-    Q_INVOKABLE Q_SCRIPTABLE void method1() {}
+    enum SomethingFlagEnum64 : quint64
+    {
+        RST = Q_UINT64_C(1) << 31,
+        OPQ = Q_UINT64_C(1) << 63,
+    };
+    Q_DECLARE_FLAGS(SomethingFlag64, SomethingFlagEnum64)
+
+    Q_INVOKABLE Q_SCRIPTABLE void method1() const {}
 
     QString prop() const { return QString(); }
     void setProp(const QString& v) { Q_UNUSED(v); }
@@ -203,6 +222,7 @@ void tst_QMetaObjectBuilder::method()
     QCOMPARE(nullMethod.attributes(), 0);
     QCOMPARE(nullMethod.revision(), 0);
     QCOMPARE(nullMethod.index(), 0);
+    QCOMPARE(nullMethod.isConst(),0);
 
     // Add a method and check its attributes.
     QMetaMethodBuilder method1 = builder.addMethod("foo(const QString&, int)");
@@ -216,6 +236,7 @@ void tst_QMetaObjectBuilder::method()
     QCOMPARE(method1.attributes(), 0);
     QCOMPARE(method1.revision(), 0);
     QCOMPARE(method1.index(), 0);
+    QCOMPARE(method1.isConst(),0);
     QCOMPARE(builder.methodCount(), 1);
 
     // Add another method and check again.
@@ -242,8 +263,9 @@ void tst_QMetaObjectBuilder::method()
     method1.setParameterNames(QList<QByteArray>() << "a" << "b");
     method1.setTag("tag");
     method1.setAccess(QMetaMethod::Private);
-    method1.setAttributes(42);
+    method1.setAttributes(QMetaMethod::Cloned);
     method1.setRevision(123);
+    method1.setConst(true);
 
     // Check that method1 is changed, but method2 is not.
     QCOMPARE(method1.signature(), QByteArray("foo(QString,int)"));
@@ -253,9 +275,10 @@ void tst_QMetaObjectBuilder::method()
     QCOMPARE(method1.parameterNames(), QList<QByteArray>() << "a" << "b");
     QCOMPARE(method1.tag(), QByteArray("tag"));
     QCOMPARE(method1.access(), QMetaMethod::Private);
-    QCOMPARE(method1.attributes(), 42);
+    QCOMPARE(method1.attributes(), QMetaMethod::Cloned);
     QCOMPARE(method1.revision(), 123);
     QCOMPARE(method1.index(), 0);
+    QCOMPARE(method1.isConst(),true);
     QCOMPARE(method2.signature(), QByteArray("bar(QString)"));
     QCOMPARE(method2.methodType(), QMetaMethod::Method);
     QCOMPARE(method2.returnType(), QByteArray("int"));
@@ -273,7 +296,7 @@ void tst_QMetaObjectBuilder::method()
     method2.setParameterNames(QList<QByteArray>() << "c");
     method2.setTag("Q_FOO");
     method2.setAccess(QMetaMethod::Protected);
-    method2.setAttributes(24);
+    method2.setAttributes(QMetaMethod::Scriptable);
     method2.setRevision(321);
 
     // This time check that only method2 changed.
@@ -284,9 +307,10 @@ void tst_QMetaObjectBuilder::method()
     QCOMPARE(method1.parameterNames(), QList<QByteArray>() << "a" << "b");
     QCOMPARE(method1.tag(), QByteArray("tag"));
     QCOMPARE(method1.access(), QMetaMethod::Private);
-    QCOMPARE(method1.attributes(), 42);
+    QCOMPARE(method1.attributes(), QMetaMethod::Cloned);
     QCOMPARE(method1.revision(), 123);
     QCOMPARE(method1.index(), 0);
+    QCOMPARE(method1.isConst(),true);
     QCOMPARE(method2.signature(), QByteArray("bar(QString)"));
     QCOMPARE(method2.methodType(), QMetaMethod::Method);
     QCOMPARE(method2.returnType(), QByteArray("QString"));
@@ -294,7 +318,7 @@ void tst_QMetaObjectBuilder::method()
     QCOMPARE(method2.parameterNames(), QList<QByteArray>() << "c");
     QCOMPARE(method2.tag(), QByteArray("Q_FOO"));
     QCOMPARE(method2.access(), QMetaMethod::Protected);
-    QCOMPARE(method2.attributes(), 24);
+    QCOMPARE(method2.attributes(), QMetaMethod::Scriptable);
     QCOMPARE(method2.revision(), 321);
     QCOMPARE(method2.index(), 1);
     QCOMPARE(builder.methodCount(), 2);
@@ -310,7 +334,7 @@ void tst_QMetaObjectBuilder::method()
     QCOMPARE(method2.parameterNames(), QList<QByteArray>() << "c");
     QCOMPARE(method2.tag(), QByteArray("Q_FOO"));
     QCOMPARE(method2.access(), QMetaMethod::Protected);
-    QCOMPARE(method2.attributes(), 24);
+    QCOMPARE(method2.attributes(), QMetaMethod::Scriptable);
     QCOMPARE(method2.revision(), 321);
     QCOMPARE(method2.index(), 0);
 
@@ -340,6 +364,7 @@ void tst_QMetaObjectBuilder::slot()
     QCOMPARE(method1.access(), QMetaMethod::Public);
     QCOMPARE(method1.attributes(), 0);
     QCOMPARE(method1.index(), 0);
+    QCOMPARE(method1.isConst(),0);
     QCOMPARE(builder.methodCount(), 1);
 
     // Add another slot and check again.
@@ -379,6 +404,7 @@ void tst_QMetaObjectBuilder::signal()
     QCOMPARE(method1.access(), QMetaMethod::Public);
     QCOMPARE(method1.attributes(), 0);
     QCOMPARE(method1.index(), 0);
+    QCOMPARE(method1.isConst(),0);
     QCOMPARE(builder.methodCount(), 1);
 
     // Add another signal and check again.
@@ -445,7 +471,7 @@ void tst_QMetaObjectBuilder::constructor()
     ctor1.setParameterNames(QList<QByteArray>() << "a" << "b");
     ctor1.setTag("tag");
     ctor1.setAccess(QMetaMethod::Private);
-    ctor1.setAttributes(42);
+    ctor1.setAttributes(QMetaMethod::Scriptable);
 
     // Check that ctor1 is changed, but ctor2 is not.
     QCOMPARE(ctor1.signature(), QByteArray("foo(QString,int)"));
@@ -455,7 +481,7 @@ void tst_QMetaObjectBuilder::constructor()
     QCOMPARE(ctor1.parameterNames(), QList<QByteArray>() << "a" << "b");
     QCOMPARE(ctor1.tag(), QByteArray("tag"));
     QCOMPARE(ctor1.access(), QMetaMethod::Private);
-    QCOMPARE(ctor1.attributes(), 42);
+    QCOMPARE(ctor1.attributes(), QMetaMethod::Scriptable);
     QCOMPARE(ctor1.index(), 0);
     QCOMPARE(ctor2.signature(), QByteArray("bar(QString)"));
     QCOMPARE(ctor2.methodType(), QMetaMethod::Constructor);
@@ -473,7 +499,7 @@ void tst_QMetaObjectBuilder::constructor()
     ctor2.setParameterNames(QList<QByteArray>() << "c");
     ctor2.setTag("Q_FOO");
     ctor2.setAccess(QMetaMethod::Protected);
-    ctor2.setAttributes(24);
+    ctor2.setAttributes(QMetaMethod::Compatibility);
 
     // This time check that only ctor2 changed.
     QCOMPARE(ctor1.signature(), QByteArray("foo(QString,int)"));
@@ -483,7 +509,7 @@ void tst_QMetaObjectBuilder::constructor()
     QCOMPARE(ctor1.parameterNames(), QList<QByteArray>() << "a" << "b");
     QCOMPARE(ctor1.tag(), QByteArray("tag"));
     QCOMPARE(ctor1.access(), QMetaMethod::Private);
-    QCOMPARE(ctor1.attributes(), 42);
+    QCOMPARE(ctor1.attributes(), QMetaMethod::Scriptable);
     QCOMPARE(ctor1.index(), 0);
     QCOMPARE(ctor2.signature(), QByteArray("bar(QString)"));
     QCOMPARE(ctor2.methodType(), QMetaMethod::Constructor);
@@ -492,7 +518,7 @@ void tst_QMetaObjectBuilder::constructor()
     QCOMPARE(ctor2.parameterNames(), QList<QByteArray>() << "c");
     QCOMPARE(ctor2.tag(), QByteArray("Q_FOO"));
     QCOMPARE(ctor2.access(), QMetaMethod::Protected);
-    QCOMPARE(ctor2.attributes(), 24);
+    QCOMPARE(ctor2.attributes(), QMetaMethod::Compatibility);
     QCOMPARE(ctor2.index(), 1);
     QCOMPARE(builder.constructorCount(), 2);
 
@@ -507,7 +533,7 @@ void tst_QMetaObjectBuilder::constructor()
     QCOMPARE(ctor2.parameterNames(), QList<QByteArray>() << "c");
     QCOMPARE(ctor2.tag(), QByteArray("Q_FOO"));
     QCOMPARE(ctor2.access(), QMetaMethod::Protected);
-    QCOMPARE(ctor2.attributes(), 24);
+    QCOMPARE(ctor2.attributes(), QMetaMethod::Compatibility);
     QCOMPARE(ctor2.index(), 0);
 
     // Perform index-based lookup again.
@@ -806,6 +832,7 @@ void tst_QMetaObjectBuilder::enumerator()
     QCOMPARE(enum1.name(), QByteArray("foo"));
     QVERIFY(!enum1.isFlag());
     QVERIFY(!enum1.isScoped());
+    QVERIFY(!enum1.is64Bit());
     QCOMPARE(enum1.keyCount(), 0);
     QCOMPARE(enum1.index(), 0);
     QCOMPARE(builder.enumeratorCount(), 1);
@@ -815,6 +842,7 @@ void tst_QMetaObjectBuilder::enumerator()
     QCOMPARE(enum2.name(), QByteArray("bar"));
     QVERIFY(!enum2.isFlag());
     QVERIFY(!enum2.isScoped());
+    QVERIFY(!enum2.is64Bit());
     QCOMPARE(enum2.keyCount(), 0);
     QCOMPARE(enum2.index(), 1);
     QCOMPARE(builder.enumeratorCount(), 2);
@@ -831,9 +859,12 @@ void tst_QMetaObjectBuilder::enumerator()
     enum1.setIsScoped(true);
     enum1.setEnumName(QByteArrayLiteral("fooFlag"));
     enum1.setMetaType(QMetaType(&fooFlagMetaType));
+    QVERIFY(enum1.is64Bit());
+    enum1.setIs64Bit(false);
+    QVERIFY(!enum1.is64Bit());
     QCOMPARE(enum1.addKey("ABC", 0), 0);
     QCOMPARE(enum1.addKey("DEF", 1), 1);
-    QCOMPARE(enum1.addKey("GHI", -1), 2);
+    QCOMPARE(enum1.addKey("GHI", -2), 2);
 
     // Check that enum1 is changed, but enum2 is not.
     QCOMPARE(enum1.name(), QByteArray("foo"));
@@ -849,7 +880,10 @@ void tst_QMetaObjectBuilder::enumerator()
     QCOMPARE(enum1.key(3), QByteArray());
     QCOMPARE(enum1.value(0), 0);
     QCOMPARE(enum1.value(1), 1);
-    QCOMPARE(enum1.value(2), -1);
+    QCOMPARE(enum1.value(2), -2);
+    QCOMPARE(enum1.value64(0), 0);
+    QCOMPARE(enum1.value64(1), 1);
+    QCOMPARE(enum1.value64(2), uint(-2));
     QCOMPARE(enum2.name(), QByteArray("bar"));
     QVERIFY(!enum2.isFlag());
     QVERIFY(!enum2.isScoped());
@@ -859,12 +893,14 @@ void tst_QMetaObjectBuilder::enumerator()
     // Modify the attributes on enum2.
     enum2.setIsFlag(true);
     QCOMPARE(enum2.addKey("XYZ", 10), 0);
-    QCOMPARE(enum2.addKey("UVW", 19), 1);
+    QCOMPARE(enum2.addKey("UVW", quint64(1) << 32), 1);
+    QVERIFY(enum2.is64Bit());
 
     // This time check that only method2 changed.
     QCOMPARE(enum1.name(), QByteArray("foo"));
     QVERIFY(enum1.isFlag());
     QVERIFY(enum1.isScoped());
+    QVERIFY(!enum1.is64Bit());
     QCOMPARE(enum1.keyCount(), 3);
     QCOMPARE(enum1.index(), 0);
     QCOMPARE(enum1.key(0), QByteArray("ABC"));
@@ -873,17 +909,35 @@ void tst_QMetaObjectBuilder::enumerator()
     QCOMPARE(enum1.key(3), QByteArray());
     QCOMPARE(enum1.value(0), 0);
     QCOMPARE(enum1.value(1), 1);
-    QCOMPARE(enum1.value(2), -1);
+    QCOMPARE(enum1.value(2), -2);
+    QCOMPARE(enum1.value64(0), 0);
+    QCOMPARE(enum1.value64(1), 1);
+    QCOMPARE(enum1.value64(2), uint(-2));
     QCOMPARE(enum2.name(), QByteArray("bar"));
     QVERIFY(enum2.isFlag());
     QVERIFY(!enum2.isScoped());
+    QVERIFY(enum2.is64Bit());
     QCOMPARE(enum2.keyCount(), 2);
     QCOMPARE(enum2.index(), 1);
     QCOMPARE(enum2.key(0), QByteArray("XYZ"));
     QCOMPARE(enum2.key(1), QByteArray("UVW"));
     QCOMPARE(enum2.key(2), QByteArray());
     QCOMPARE(enum2.value(0), 10);
-    QCOMPARE(enum2.value(1), 19);
+    QCOMPARE(enum2.value(1), 0);    // truncated!
+    QCOMPARE(enum2.value64(0), 10);
+    QCOMPARE(enum2.value64(1), quint64(1) << 32);
+
+    // Reset enum2 to 32 bits
+    enum2.setIs64Bit(false);
+    QCOMPARE(enum2.value(0), 10);
+    QCOMPARE(enum2.value(1), 0);
+    QCOMPARE(enum2.value64(0), 10);
+    QCOMPARE(enum2.value64(1), 0);
+
+    // Reset back restores it
+    enum2.setIs64Bit(true);
+    QCOMPARE(enum2.value64(0), 10);
+    QCOMPARE(enum2.value64(1), quint64(1) << 32);
 
     // Remove enum1 key
     enum1.removeKey(2);
@@ -898,6 +952,9 @@ void tst_QMetaObjectBuilder::enumerator()
     QCOMPARE(enum1.value(0), 0);
     QCOMPARE(enum1.value(1), 1);
     QCOMPARE(enum1.value(2), -1);
+    QCOMPARE(enum1.value64(0), 0);
+    QCOMPARE(enum1.value64(1), 1);
+    QCOMPARE(enum1.value64(2), std::nullopt);
     QCOMPARE(enum2.name(), QByteArray("bar"));
     QVERIFY(enum2.isFlag());
     QVERIFY(!enum2.isScoped());
@@ -907,7 +964,9 @@ void tst_QMetaObjectBuilder::enumerator()
     QCOMPARE(enum2.key(1), QByteArray("UVW"));
     QCOMPARE(enum2.key(2), QByteArray());
     QCOMPARE(enum2.value(0), 10);
-    QCOMPARE(enum2.value(1), 19);
+    QCOMPARE(enum2.value(1), 0);        // truncated!
+    QCOMPARE(enum2.value64(0), 10);
+    QCOMPARE(enum2.value64(1), quint64(1) << 32);
 
     // Remove enum1 and check that enum2 becomes index 0.
     builder.removeEnumerator(0);
@@ -922,7 +981,9 @@ void tst_QMetaObjectBuilder::enumerator()
     QCOMPARE(enum2.key(1), QByteArray("UVW"));
     QCOMPARE(enum2.key(2), QByteArray());
     QCOMPARE(enum2.value(0), 10);
-    QCOMPARE(enum2.value(1), 19);
+    QCOMPARE(enum2.value(1), 0);        // truncated!
+    QCOMPARE(enum2.value64(0), 10);
+    QCOMPARE(enum2.value64(1), quint64(1) << 32);
 
     // Perform index-based lookup again.
     QCOMPARE(builder.indexOfEnumerator("foo"), -1);
@@ -931,6 +992,26 @@ void tst_QMetaObjectBuilder::enumerator()
 
     // Check that nothing else changed.
     QVERIFY(checkForSideEffects(builder, QMetaObjectBuilder::Enumerators));
+}
+
+void tst_QMetaObjectBuilder::enumProperty()
+{
+    // When adding property with an enumeration type, QMetaProperty::isEnumType()
+    // should return true.
+    QMetaObjectBuilder builder;
+    builder.setSuperClass(QObject::metaObject());
+
+    auto enumMetaType = QMetaType::fromType<Qt::Orientation>();
+    QVERIFY(enumMetaType.isValid());
+
+    builder.addProperty("orientation", "Qt::Orientation", enumMetaType);
+
+    auto *mo = builder.toMetaObject();
+    QVERIFY(mo != nullptr);
+    const int index = mo->indexOfProperty("orientation");
+    QVERIFY(index != -1);
+    QVERIFY(mo->property(index).isEnumType());
+    free(mo);
 }
 
 void tst_QMetaObjectBuilder::classInfo()
@@ -1132,6 +1213,9 @@ static bool sameMethod(const QMetaMethod& method1, const QMetaMethod& method2)
     if (method1.revision() != method2.revision())
         return false;
 
+    if (method1.isConst() != method2.isConst())
+        return false;
+
     return true;
 }
 
@@ -1185,11 +1269,17 @@ static bool sameEnumerator(const QMetaEnum& enum1, const QMetaEnum& enum2)
     for (int index = 0; index < enum1.keyCount(); ++index) {
         if (QByteArray(enum1.key(index)) != QByteArray(enum2.key(index)))
             return false;
-        if (enum1.value(index) != enum2.value(index))
+        if (enum1.value64(index) != enum2.value64(index))
             return false;
     }
 
     if (QByteArray(enum1.scope()) != QByteArray(enum2.scope()))
+        return false;
+
+    if (enum1.isScoped() != enum2.isScoped())
+        return false;
+
+    if (enum1.is64Bit() != enum2.is64Bit())
         return false;
 
     return true;
@@ -1616,7 +1706,7 @@ void tst_QMetaObjectBuilder::usage_templateConnect()
                                 testObject.data(), &TestObject::voidSlotInt));
 
     // Something that isn't a signal
-    QTest::ignoreMessage(QtWarningMsg, "QObject::connect: signal not found in TestObject");
+    QTest::ignoreMessage(QtWarningMsg, "QObject::connect(TestObject, TestObject): signal not found");
     con = QObject::connect(testObject.data(), &TestObject::setIntProp,
                            testObject.data(), &TestObject::intPropChanged);
     QVERIFY(!con);
@@ -1656,6 +1746,56 @@ void tst_QMetaObjectBuilder::propertyMetaType()
     QCOMPARE(metaProp.metaType(), meta);
     free(mo);
 }
+
+void tst_QMetaObjectBuilder::enumCloning()
+{
+    QMetaObjectBuilder builder(&SomethingOfEverything::staticMetaObject);
+    auto smo = SomethingOfEverything::staticMetaObject;
+    auto mo = builder.toMetaObject();
+    auto cleanup = qScopeGuard([&]() { free(mo); });
+    QCOMPARE_EQ(mo->enumeratorCount(), smo.enumeratorCount());
+    for (int enumIndex = 0; enumIndex <  smo.enumeratorCount(); ++enumIndex) {
+        QMetaEnum metaEnumFromBuilder = mo->enumerator(enumIndex);
+        QMetaEnum originalMetaEnum = smo.enumerator(enumIndex);
+        QCOMPARE_EQ(metaEnumFromBuilder.metaType(), originalMetaEnum.metaType());
+        QCOMPARE_EQ(metaEnumFromBuilder.keyCount(), originalMetaEnum.keyCount());
+        for (int k = 0; k < originalMetaEnum.keyCount(); ++k) {
+            QCOMPARE_EQ(QByteArrayView(metaEnumFromBuilder.key(k)), QByteArrayView(originalMetaEnum.key(k)));
+            QCOMPARE_EQ(metaEnumFromBuilder.value(k), originalMetaEnum.value(k));
+            QCOMPARE_EQ(metaEnumFromBuilder.value64(k), originalMetaEnum.value64(k));
+        }
+    }
+}
+
+// Can't use this unittest on the CI because it hits an assert
+// void tst_QMetaObjectBuilder::tooLongParameterNamesList()
+// {
+//     // QTBUG-139845
+//     QMetaObjectBuilder builder;
+//
+//     builder.setSuperClass(&QObject::staticMetaObject);
+//
+//     QMetaMethodBuilder methodBuilder = builder.addSignal("iChanged(int)");
+//     methodBuilder.setParameterNames({"i"});
+//     int icIdx = methodBuilder.index();
+//
+//     methodBuilder = builder.addSignal("fChanged(float)");
+//     methodBuilder.setParameterNames({"f"});
+//     int fcIdx = methodBuilder.index();
+//
+//     methodBuilder = builder.addSlot("pushI(int)");
+//     methodBuilder.setParameterNames({"i"});
+//     builder.addSlot("reset()");
+//     methodBuilder = builder.addSlot("add(int)");
+//     methodBuilder.setParameterNames({"", "i"});
+//
+//     methodBuilder.setReturnType("int");
+//
+//     builder.addProperty("i", "int", icIdx);
+//     builder.addProperty("f", "float", fcIdx);
+//
+//     builder.toMetaObject();
+// }
 
 void tst_QMetaObjectBuilder::ownMetaTypeNoProperties()
 {

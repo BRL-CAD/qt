@@ -1,5 +1,6 @@
 // Copyright (C) 2016 The Qt Company Ltd.
 // SPDX-License-Identifier: LicenseRef-Qt-Commercial OR LGPL-3.0-only OR GPL-2.0-only OR GPL-3.0-only
+// Qt-Security score:significant reason:default
 
 #include "qpagesetupdialog.h"
 #include <private/qpagesetupdialog_p.h>
@@ -100,7 +101,7 @@ void QPageSetupDialog::open(QObject *receiver, const char *member)
     QDialog::open();
 }
 
-#if defined(Q_OS_MAC) || defined(Q_OS_WIN)
+#if defined(Q_OS_MACOS) || defined(Q_OS_WIN)
 /*! \fn void QPageSetupDialog::setVisible(bool visible)
     \reimp
 */

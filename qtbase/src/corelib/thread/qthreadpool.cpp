@@ -1,5 +1,6 @@
 // Copyright (C) 2016 The Qt Company Ltd.
 // SPDX-License-Identifier: LicenseRef-Qt-Commercial OR LGPL-3.0-only OR GPL-2.0-only OR GPL-3.0-only
+// Qt-Security score:significant reason:default
 
 #include "qthreadpool.h"
 #include "qthreadpool_p.h"
@@ -9,7 +10,10 @@
 #include <QtCore/qpointer.h>
 
 #include <algorithm>
+#include <climits> // For INT_MAX
 #include <memory>
+
+using namespace std::chrono_literals;
 
 QT_BEGIN_NAMESPACE
 
@@ -247,6 +251,7 @@ void QThreadPoolPrivate::startThread(QRunnable *runnable)
     if (objectName.isEmpty())
         objectName = u"Thread (pooled)"_s;
     thread->setObjectName(objectName);
+    thread->setServiceLevel(serviceLevel);
     Q_ASSERT(!allThreads.contains(thread.get())); // if this assert hits, we have an ABA problem (deleted threads don't get removed here)
     allThreads.insert(thread.get());
     ++activeThreads;
@@ -258,7 +263,7 @@ void QThreadPoolPrivate::startThread(QRunnable *runnable)
 /*!
     \internal
 
-    Helper function only to be called from waitForDone(int)
+    Helper function only to be called from waitForDone()
 
     Deletes all current threads.
 */
@@ -285,22 +290,17 @@ void QThreadPoolPrivate::reset()
 /*!
     \internal
 
-    Helper function only to be called from waitForDone(int)
+    Helper function only to be called from the public waitForDone()
 */
 bool QThreadPoolPrivate::waitForDone(const QDeadlineTimer &timer)
 {
+    QMutexLocker locker(&mutex);
     while (!(queue.isEmpty() && activeThreads == 0) && !timer.hasExpired())
         noActiveThreads.wait(&mutex, timer);
 
-    return queue.isEmpty() && activeThreads == 0;
-}
-
-bool QThreadPoolPrivate::waitForDone(int msecs)
-{
-    QMutexLocker locker(&mutex);
-    QDeadlineTimer timer(msecs);
-    if (!waitForDone(timer))
+    if (!queue.isEmpty() || activeThreads)
         return false;
+
     reset();
     // New jobs might have started during reset, but return anyway
     // as the active thread and task count did reach 0 once, and
@@ -477,21 +477,6 @@ QThreadPool *QThreadPool::globalInstance()
 }
 
 /*!
-    Returns the QThreadPool instance for Qt Gui.
-    \internal
-*/
-QThreadPool *QThreadPoolPrivate::qtGuiInstance()
-{
-    Q_CONSTINIT static QPointer<QThreadPool> guiInstance;
-    Q_CONSTINIT static QBasicMutex theMutex;
-
-    const QMutexLocker locker(&theMutex);
-    if (guiInstance.isNull() && !QCoreApplication::closingDown())
-        guiInstance = new QThreadPool();
-    return guiInstance;
-}
-
-/*!
     Reserves a thread and uses it to run \a runnable, unless this thread will
     make the current thread count exceed maxThreadCount().  In that case,
     \a runnable is added to a run queue instead. The \a priority argument can
@@ -528,11 +513,11 @@ void QThreadPool::start(QRunnable *runnable, int priority)
     \a callableToRun is added to a run queue instead. The \a priority argument can
     be used to control the run queue's order of execution.
 
-    \note This function participates in overload resolution only if \c Callable
-    is a function or function object which can be called with zero arguments.
-
     \note In Qt version prior to 6.6, this function took std::function<void()>,
     and therefore couldn't handle move-only callables.
+
+    \constraints \c Callable
+    is a function or function object which can be called with zero arguments.
 */
 
 /*!
@@ -574,11 +559,11 @@ bool QThreadPool::tryStart(QRunnable *runnable)
     does nothing and returns \c false.  Otherwise, \a callableToRun is run immediately
     using one available thread and this function returns \c true.
 
-    \note This function participates in overload resolution only if \c Callable
-    is a function or function object which can be called with zero arguments.
-
     \note In Qt version prior to 6.6, this function took std::function<void()>,
     and therefore couldn't handle move-only callables.
+
+    \constraints \c Callable
+    is a function or function object which can be called with zero arguments.
 */
 
 /*! \property QThreadPool::expiryTimeout
@@ -598,18 +583,22 @@ bool QThreadPool::tryStart(QRunnable *runnable)
 
 int QThreadPool::expiryTimeout() const
 {
+    using namespace std::chrono;
     Q_D(const QThreadPool);
     QMutexLocker locker(&d->mutex);
-    return d->expiryTimeout;
+    if (d->expiryTimeout == decltype(d->expiryTimeout)::max())
+        return -1;
+    return duration_cast<milliseconds>(d->expiryTimeout).count();
 }
 
 void QThreadPool::setExpiryTimeout(int expiryTimeout)
 {
     Q_D(QThreadPool);
     QMutexLocker locker(&d->mutex);
-    if (d->expiryTimeout == expiryTimeout)
-        return;
-    d->expiryTimeout = expiryTimeout;
+    if (expiryTimeout < 0)
+        d->expiryTimeout = decltype(d->expiryTimeout)::max();
+    else
+        d->expiryTimeout = expiryTimeout * 1ms;
 }
 
 /*! \property QThreadPool::maxThreadCount
@@ -757,6 +746,38 @@ void QThreadPool::releaseThread()
 }
 
 /*!
+    \since 6.9
+
+    Sets the Quality of Service level of thread objects created after the call
+    to this setter to \a serviceLevel.
+
+    Support is not available on every platform. Consult
+    QThread::setServiceLevel() for details.
+
+    \sa serviceLevel(), QThread::serviceLevel()
+*/
+void QThreadPool::setServiceLevel(QThread::QualityOfService serviceLevel)
+{
+    Q_D(QThreadPool);
+    QMutexLocker locker(&d->mutex);
+    d->serviceLevel = serviceLevel;
+}
+
+/*!
+    \since 6.9
+
+    Returns the current Quality of Service level of the thread.
+
+    \sa setServiceLevel(), QThread::serviceLevel()
+*/
+QThread::QualityOfService QThreadPool::serviceLevel() const
+{
+    Q_D(const QThreadPool);
+    QMutexLocker locker(&d->mutex);
+    return d->serviceLevel;
+}
+
+/*!
     Releases a thread previously reserved with reserveThread() and uses it
     to run \a runnable.
 
@@ -800,23 +821,32 @@ void QThreadPool::startOnReservedThread(QRunnable *runnable)
     Releases a thread previously reserved with reserveThread() and uses it
     to run \a callableToRun.
 
-    \note This function participates in overload resolution only if \c Callable
-    is a function or function object which can be called with zero arguments.
-
     \note In Qt version prior to 6.6, this function took std::function<void()>,
     and therefore couldn't handle move-only callables.
+
+    \constraints \c Callable
+    is a function or function object which can be called with zero arguments.
 */
 
 /*!
+    \fn bool QThreadPool::waitForDone(int msecs)
     Waits up to \a msecs milliseconds for all threads to exit and removes all
     threads from the thread pool. Returns \c true if all threads were removed;
-    otherwise it returns \c false. If \a msecs is -1 (the default), the timeout
-    is ignored (waits for the last thread to exit).
+    otherwise it returns \c false. If \a msecs is -1, this function waits for
+    the last thread to exit.
 */
-bool QThreadPool::waitForDone(int msecs)
+
+/*!
+    \since 6.8
+
+    Waits until \a deadline expires for all threads to exit and removes all
+    threads from the thread pool. Returns \c true if all threads were removed;
+    otherwise it returns \c false.
+*/
+bool QThreadPool::waitForDone(QDeadlineTimer deadline)
 {
     Q_D(QThreadPool);
-    return d->waitForDone(msecs);
+    return d->waitForDone(deadline);
 }
 
 /*!

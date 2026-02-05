@@ -5,6 +5,7 @@
 #define QBASICTIMER_H
 
 #include <QtCore/qglobal.h>
+#include <QtCore/qabstracteventdispatcher.h>
 #include <QtCore/qnamespace.h>
 
 #include <chrono>
@@ -16,29 +17,39 @@ class QObject;
 
 class Q_CORE_EXPORT QBasicTimer
 {
-    int id;
+    Qt::TimerId m_id;
     Q_DISABLE_COPY(QBasicTimer)
 
 public:
-    constexpr QBasicTimer() noexcept : id{0} {}
-    inline ~QBasicTimer() { if (id) stop(); }
+    // use the same duration type
+    using Duration = QAbstractEventDispatcher::Duration;
+
+    constexpr QBasicTimer() noexcept : m_id{Qt::TimerId::Invalid} {}
+    ~QBasicTimer() { if (isActive()) stop(); }
 
     QBasicTimer(QBasicTimer &&other) noexcept
-        : id{std::exchange(other.id, 0)}
+        : m_id{std::exchange(other.m_id, Qt::TimerId::Invalid)}
     {}
 
     QT_MOVE_ASSIGNMENT_OPERATOR_IMPL_VIA_MOVE_AND_SWAP(QBasicTimer)
 
-    void swap(QBasicTimer &other) noexcept { std::swap(id, other.id); }
+    void swap(QBasicTimer &other) noexcept { std::swap(m_id, other.m_id); }
 
-    bool isActive() const noexcept { return id != 0; }
-    int timerId() const noexcept { return id; }
+    bool isActive() const noexcept { return m_id != Qt::TimerId::Invalid; }
+    int timerId() const noexcept { return qToUnderlying(id()); }
+    Qt::TimerId id() const noexcept { return m_id; }
     QT_CORE_INLINE_SINCE(6, 5)
     void start(int msec, QObject *obj);
     QT_CORE_INLINE_SINCE(6, 5)
     void start(int msec, Qt::TimerType timerType, QObject *obj);
+
+#if QT_CORE_REMOVED_SINCE(6, 9)
     void start(std::chrono::milliseconds duration, QObject *obj);
     void start(std::chrono::milliseconds duration, Qt::TimerType timerType, QObject *obj);
+#endif
+    void start(Duration duration, QObject *obj)
+    { start(duration, Qt::CoarseTimer, obj); }
+    void start(Duration duration, Qt::TimerType timerType, QObject *obj);
     void stop();
 };
 Q_DECLARE_TYPEINFO(QBasicTimer, Q_RELOCATABLE_TYPE);

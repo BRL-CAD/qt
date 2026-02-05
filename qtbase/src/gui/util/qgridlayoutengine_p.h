@@ -1,5 +1,6 @@
 // Copyright (C) 2016 The Qt Company Ltd.
 // SPDX-License-Identifier: LicenseRef-Qt-Commercial OR LGPL-3.0-only OR GPL-2.0-only OR GPL-3.0-only
+// Qt-Security score:significant reason:default
 
 #ifndef QGRIDLAYOUTENGINE_P_H
 #define QGRIDLAYOUTENGINE_P_H
@@ -21,9 +22,9 @@
 #include <QtCore/qbitarray.h>
 #include <QtCore/qlist.h>
 #include <QtCore/qmap.h>
-#include <QtCore/qpair.h>
 #include <QtCore/qsize.h>
 #include <QtCore/qrect.h>
+#include <QtCore/qdebug.h>
 
 #include <float.h>
 #include "qlayoutpolicy_p.h"
@@ -72,12 +73,14 @@ class QHVContainer {
 
     static_assert(Qt::Horizontal == 0x1);
     static_assert(Qt::Vertical == 0x2);
-    static constexpr int map(Qt::Orientation o) noexcept
+    static constexpr int map(Qt::Orientation o)
     {
+        Q_ASSERT(o == Qt::Horizontal || o == Qt::Vertical); // Q_PRE
         return int(o) - 1;
     }
-    static constexpr int mapOther(Qt::Orientation o) noexcept
+    static constexpr int mapOther(Qt::Orientation o)
     {
+        Q_ASSERT(o == Qt::Horizontal || o == Qt::Vertical); // Q_PRE
         return 2 - int(o);
     }
 public:
@@ -86,11 +89,11 @@ public:
         : m_data{h, v} {}
     QHVContainer() = default;
 
-    constexpr T &operator[](Qt::Orientation o) noexcept { return m_data[map(o)]; }
-    constexpr const T &operator[](Qt::Orientation o) const noexcept { return m_data[map(o)]; }
+    constexpr T &operator[](Qt::Orientation o) { return m_data[map(o)]; }
+    constexpr const T &operator[](Qt::Orientation o) const { return m_data[map(o)]; }
 
-    constexpr T &other(Qt::Orientation o) noexcept { return m_data[mapOther(o)]; }
-    constexpr const T &other(Qt::Orientation o) const noexcept { return m_data[mapOther(o)]; }
+    constexpr T &other(Qt::Orientation o) { return m_data[mapOther(o)]; }
+    constexpr const T &other(Qt::Orientation o) const { return m_data[mapOther(o)]; }
 
     constexpr void transpose() noexcept { qSwap(m_data[0], m_data[1]); }
     constexpr QHVContainer transposed() const
@@ -193,7 +196,7 @@ public:
     int q_stretch;
 };
 
-typedef QMap<QPair<int, int>, QGridLayoutMultiCellData> MultiCellMap;
+typedef QMap<std::pair<int, int>, QGridLayoutMultiCellData> MultiCellMap;
 
 class QGridLayoutRowInfo;
 
@@ -282,6 +285,8 @@ public:
 
 
     virtual QLayoutPolicy::ControlTypes controlTypes(LayoutSide side) const;
+
+    inline virtual QString toString() const { return QDebug::toString(this); }
 
     QRectF geometryWithin(qreal x, qreal y, qreal width, qreal height, qreal rowDescent, Qt::Alignment align, bool snapToPixelGrid) const;
     QGridLayoutBox box(Qt::Orientation orientation, bool snapToPixelGrid, qreal constraint = -1.0) const;

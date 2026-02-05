@@ -1,6 +1,7 @@
 ﻿// Copyright (C) 2019 Volker Krause <vkrause@kde.org>
 // Copyright (C) 2022 The Qt Company Ltd.
 // SPDX-License-Identifier: LicenseRef-Qt-Commercial OR LGPL-3.0-only OR GPL-2.0-only OR GPL-3.0-only
+// Qt-Security score:critical reason:data-parser
 
 #include "androidcontentfileengine.h"
 
@@ -10,25 +11,33 @@
 #include <QtCore/qurl.h>
 #include <QtCore/qdatetime.h>
 #include <QtCore/qmimedatabase.h>
+#include <QtCore/qdebug.h>
+#include <QtCore/qloggingcategory.h>
 
 QT_BEGIN_NAMESPACE
 
 using namespace QNativeInterface;
 using namespace Qt::StringLiterals;
 
-Q_DECLARE_JNI_CLASS(ContentResolverType, "android/content/ContentResolver");
-Q_DECLARE_JNI_CLASS(UriType, "android/net/Uri");
-Q_DECLARE_JNI_CLASS(Uri, "android/net/Uri");
+Q_STATIC_LOGGING_CATEGORY(lcAndroidContentFileEngine, "qt.qpa.contentfileengine")
+
 Q_DECLARE_JNI_CLASS(ParcelFileDescriptorType, "android/os/ParcelFileDescriptor");
 Q_DECLARE_JNI_CLASS(CursorType, "android/database/Cursor");
-Q_DECLARE_JNI_TYPE(StringArray, "[Ljava/lang/String;");
+Q_DECLARE_JNI_CLASS(QtContentFileEngine, "org/qtproject/qt/android/QtContentFileEngine");
+Q_DECLARE_JNI_CLASS(List, "java/util/List");
+
+constexpr char contentScheme[] = "content";
+constexpr char contentSchemeFull[] = "content://";
+constexpr char treeSegment[] = "tree";
+constexpr char documentSegment[] = "document";
+constexpr char childrenSegment[] = "%2Fchildren";
 
 static QJniObject &contentResolverInstance()
 {
     static QJniObject contentResolver;
     if (!contentResolver.isValid()) {
         contentResolver = QJniObject(QNativeInterface::QAndroidApplication::context())
-                .callMethod<QtJniTypes::ContentResolverType>("getContentResolver");
+                .callMethod<QtJniTypes::ContentResolver>("getContentResolver");
     }
 
     return contentResolver;
@@ -45,45 +54,50 @@ bool AndroidContentFileEngine::open(QIODevice::OpenMode openMode,
                                     std::optional<QFile::Permissions> permissions)
 {
     Q_UNUSED(permissions);
-    QString openModeStr;
-    if (openMode & QFileDevice::ReadOnly) {
-        openModeStr += u'r';
-    }
-    if (openMode & QFileDevice::WriteOnly) {
-        openModeStr += u'w';
-        if (!m_documentFile->exists()) {
-            if (QUrl(m_initialFile).path().startsWith("/tree/"_L1)) {
-                const int lastSeparatorIndex = m_initialFile.lastIndexOf('/');
-                const QString fileName = m_initialFile.mid(lastSeparatorIndex + 1);
 
-                QString mimeType;
-                const auto mimeTypes = QMimeDatabase().mimeTypesForFileName(fileName);
-                if (!mimeTypes.empty())
-                    mimeType = mimeTypes.first().name();
-                else
-                    mimeType = "application/octet-stream";
+    if (openMode == QIODeviceBase::NotOpen)
+        return true;
 
-                if (m_documentFile->parent()) {
-                    auto createdFile = m_documentFile->parent()->createFile(mimeType, fileName);
-                    if (createdFile)
-                        m_documentFile = createdFile;
-                }
-            } else {
-                qWarning() << "open(): non-existent content URI with a document type provided";
-            }
+    if (!m_documentFile->exists() && (openMode & QIODevice::WriteOnly)) {
+        // Create the file if it doesn't exist yet
+        DocumentFilePtr parent = m_documentFile->parent();
+        if (!parent) {
+            qCWarning(lcAndroidContentFileEngine) << "Cannot create file under a null parent.";
+            return false;
+        }
+
+        if (!parent->exists() || !parent->isDirectory()) {
+            qCWarning(lcAndroidContentFileEngine)
+                << "Cannot create file, parent doesn't exist or not a directory:"
+                << parent->uri().toString();
+            return false;
+        }
+
+        const QString fileName = m_documentFile->initialName();
+        if (fileName.isEmpty()) {
+            qCWarning(lcAndroidContentFileEngine) << "Coudln't determine filename from content URI:"
+                                                  << m_documentFile->uri().toString();
+            return false;
+        }
+
+        QMimeDatabase db;
+        QString mimeType = db.mimeTypeForFile(fileName, QMimeDatabase::MatchDefault).name();
+
+        m_documentFile = parent->createFile(mimeType, fileName);
+        if (!m_documentFile) {
+            qCWarning(lcAndroidContentFileEngine) << "Failed to create new document under parent:"
+                                                  << parent->uri().toString();
+            return false;
         }
     }
-    if (openMode & QFileDevice::Truncate) {
-        openModeStr += u't';
-    } else if (openMode & QFileDevice::Append) {
-        openModeStr += u'a';
-    }
 
-    m_pfd = contentResolverInstance().callMethod<
-            QtJniTypes::ParcelFileDescriptorType, QtJniTypes::UriType, jstring>(
+    using namespace QtJniTypes;
+    const QString openModeStr = (openMode & QIODevice::WriteOnly) ? "w"_L1 : "r"_L1;
+    m_pfd = QtContentFileEngine::callStaticMethod<ParcelFileDescriptorType>(
                 "openFileDescriptor",
-                m_documentFile->uri().object(),
-                QJniObject::fromString(openModeStr).object<jstring>());
+                contentResolverInstance().object<ContentResolver>(),
+                m_documentFile->uri().object<Uri>(),
+                openModeStr);
 
     if (!m_pfd.isValid())
         return false;
@@ -125,7 +139,7 @@ bool AndroidContentFileEngine::remove()
 bool AndroidContentFileEngine::rename(const QString &newName)
 {
     if (m_documentFile->rename(newName)) {
-        m_initialFile = m_documentFile->uri().toString();
+        m_initialFile = newName;
         return true;
     }
     return false;
@@ -151,7 +165,7 @@ bool AndroidContentFileEngine::mkdir(const QString &dirName, bool createParentDi
         // Find if the sub-dir already exists and then don't re-create it
         bool subDirExists = false;
         for (const DocumentFilePtr &subDir : m_documentFile->listFiles()) {
-            if (dir == subDir->name() && subDir->isDirectory()) {
+            if (dir == subDir->initialName() && subDir->isDirectory()) {
                 createdDir = subDir;
                 subDirExists = true;
             }
@@ -174,19 +188,9 @@ bool AndroidContentFileEngine::mkdir(const QString &dirName, bool createParentDi
 
 bool AndroidContentFileEngine::rmdir(const QString &dirName, bool recurseParentDirectories) const
 {
-    if (recurseParentDirectories)
-        qWarning() << "rmpath(): Unsupported for Content URIs";
+    Q_UNUSED(recurseParentDirectories) // DocumentFile deletes recursively by default
 
-    const QString dirFileName = QUrl(dirName).fileName();
-    bool deleted = false;
-    for (const DocumentFilePtr &dir : m_documentFile->listFiles()) {
-        if (dirFileName == dir->name() && dir->isDirectory()) {
-            deleted = dir->remove();
-            break;
-        }
-    }
-
-    return deleted;
+    return DocumentFile::parseFromAnyUri(dirName)->remove();
 }
 
 QByteArray AndroidContentFileEngine::id() const
@@ -239,8 +243,10 @@ QString AndroidContentFileEngine::fileName(FileName f) const
         case AbsoluteName:
         case CanonicalName:
             return m_documentFile->uri().toString();
-        case BaseName:
-            return m_documentFile->name();
+        case BaseName: {
+            const QString queriedName = m_documentFile->name();
+            return queriedName.isEmpty() ? m_documentFile->initialName() : queriedName;
+        }
         default:
             break;
     }
@@ -248,31 +254,29 @@ QString AndroidContentFileEngine::fileName(FileName f) const
     return QString();
 }
 
-QAbstractFileEngine::Iterator *AndroidContentFileEngine::beginEntryList(QDir::Filters filters,
-                                                                    const QStringList &filterNames)
+QAbstractFileEngine::IteratorUniquePtr
+AndroidContentFileEngine::beginEntryList(const QString &path, QDirListing::IteratorFlags filters,
+                                         const QStringList &filterNames)
 {
-    return new AndroidContentFileEngineIterator(filters, filterNames);
-}
-
-QAbstractFileEngine::Iterator *AndroidContentFileEngine::endEntryList()
-{
-    return nullptr;
+    return std::make_unique<AndroidContentFileEngineIterator>(path, filters, filterNames);
 }
 
 AndroidContentFileEngineHandler::AndroidContentFileEngineHandler() = default;
 AndroidContentFileEngineHandler::~AndroidContentFileEngineHandler() = default;
 
-QAbstractFileEngine* AndroidContentFileEngineHandler::create(const QString &fileName) const
+std::unique_ptr<QAbstractFileEngine>
+AndroidContentFileEngineHandler::create(const QString &fileName) const
 {
-    if (!fileName.startsWith("content"_L1))
-        return nullptr;
+    if (fileName.startsWith(contentScheme))
+        return std::make_unique<AndroidContentFileEngine>(fileName);
 
-    return new AndroidContentFileEngine(fileName);
+    return {};
+
 }
 
-AndroidContentFileEngineIterator::AndroidContentFileEngineIterator(QDir::Filters filters,
-                                                                   const QStringList &filterNames)
-    : QAbstractFileEngineIterator(filters, filterNames)
+AndroidContentFileEngineIterator::AndroidContentFileEngineIterator(
+    const QString &path, QDirListing::IteratorFlags filters, const QStringList &filterNames)
+    : QAbstractFileEngineIterator(path, filters, filterNames)
 {
 }
 
@@ -280,15 +284,7 @@ AndroidContentFileEngineIterator::~AndroidContentFileEngineIterator()
 {
 }
 
-QString AndroidContentFileEngineIterator::next()
-{
-    if (!hasNext())
-        return QString();
-    ++m_index;
-    return currentFilePath();
-}
-
-bool AndroidContentFileEngineIterator::hasNext() const
+bool AndroidContentFileEngineIterator::advance()
 {
     if (m_index == -1 && m_files.isEmpty()) {
         const auto currentPath = path();
@@ -299,9 +295,18 @@ bool AndroidContentFileEngineIterator::hasNext() const
         if (iterDoc->isDirectory())
             for (const auto &doc : iterDoc->listFiles())
                 m_files.append(doc);
+        if (m_files.isEmpty())
+            return false;
+        m_index = 0;
+        return true;
     }
 
-    return m_index < (m_files.size() - 1);
+    if (m_index < m_files.size() - 1) {
+        ++m_index;
+        return true;
+    }
+
+    return false;
 }
 
 QString AndroidContentFileEngineIterator::currentFileName() const
@@ -373,15 +378,14 @@ public:
                                             const QStringList &selectionArgs = {},
                                             const QString &sortOrder = {})
     {
-        auto cursor = contentResolverInstance().callMethod<QtJniTypes::CursorType>(
-            "query",
-            uri.object<QtJniTypes::UriType>(),
-            projection.isEmpty() ?
-                        nullptr : fromStringList(projection).object<QtJniTypes::StringArray>(),
-            selection.isEmpty() ? nullptr : QJniObject::fromString(selection).object<jstring>(),
-            selectionArgs.isEmpty() ?
-                        nullptr : fromStringList(selectionArgs).object<QtJniTypes::StringArray>(),
-            sortOrder.isEmpty() ? nullptr : QJniObject::fromString(sortOrder).object<jstring>());
+        using namespace QtJniTypes;
+        auto cursor = QtContentFileEngine::callStaticMethod<CursorType>("query",
+                contentResolverInstance().object<ContentResolver>(),
+                uri.object<Uri>(),
+                QJniArray(projection),
+                selection.isEmpty() ? nullptr : selection,
+                QJniArray(selectionArgs),
+                sortOrder.isEmpty() ? nullptr : sortOrder);
         if (!cursor.isValid())
             return {};
         return std::make_unique<Cursor>(cursor);
@@ -414,15 +418,6 @@ public:
     bool moveToNext() { return m_object.callMethod<jboolean>("moveToNext"); }
 
 private:
-    static QJniObject fromStringList(const QStringList &list)
-    {
-        QJniEnvironment env;
-        auto array = env->NewObjectArray(list.size(), env.findClass("java/lang/String"), nullptr);
-        for (int i = 0; i < list.size(); ++i)
-            env->SetObjectArrayElement(array, i, QJniObject::fromString(list[i]).object());
-        return QJniObject::fromLocalRef(array);
-    }
-
     QJniObject m_object;
 };
 
@@ -464,7 +459,7 @@ const QLatin1String MIME_TYPE_DIR("vnd.android.document/directory");
 
 QString documentId(const QJniObject &uri)
 {
-    return QJniObject::callStaticMethod<jstring, QtJniTypes::UriType>(
+    return QJniObject::callStaticMethod<jstring, QtJniTypes::Uri>(
                 QtJniTypes::Traits<QtJniTypes::DocumentsContract>::className(),
                 "getDocumentId",
                 uri.object()).toString();
@@ -472,7 +467,7 @@ QString documentId(const QJniObject &uri)
 
 QString treeDocumentId(const QJniObject &uri)
 {
-    return QJniObject::callStaticMethod<jstring, QtJniTypes::UriType>(
+    return QJniObject::callStaticMethod<jstring, QtJniTypes::Uri>(
                 QtJniTypes::Traits<QtJniTypes::DocumentsContract>::className(),
                 "getTreeDocumentId",
                 uri.object()).toString();
@@ -480,20 +475,20 @@ QString treeDocumentId(const QJniObject &uri)
 
 QJniObject buildChildDocumentsUriUsingTree(const QJniObject &uri, const QString &parentDocumentId)
 {
-    return QJniObject::callStaticMethod<QtJniTypes::UriType>(
+    return QJniObject::callStaticMethod<QtJniTypes::Uri>(
                 QtJniTypes::Traits<QtJniTypes::DocumentsContract>::className(),
                 "buildChildDocumentsUriUsingTree",
-                uri.object<QtJniTypes::UriType>(),
+                uri.object<QtJniTypes::Uri>(),
                 QJniObject::fromString(parentDocumentId).object<jstring>());
 
 }
 
 QJniObject buildDocumentUriUsingTree(const QJniObject &treeUri, const QString &documentId)
 {
-    return QJniObject::callStaticMethod<QtJniTypes::UriType>(
+    return QJniObject::callStaticMethod<QtJniTypes::Uri>(
                 QtJniTypes::Traits<QtJniTypes::DocumentsContract>::className(),
                 "buildDocumentUriUsingTree",
-                treeUri.object<QtJniTypes::UriType>(),
+                treeUri.object<QtJniTypes::Uri>(),
                 QJniObject::fromString(documentId).object<jstring>());
 }
 
@@ -503,7 +498,7 @@ bool isDocumentUri(const QJniObject &uri)
                 QtJniTypes::Traits<QtJniTypes::DocumentsContract>::className(),
                 "isDocumentUri",
                 QNativeInterface::QAndroidApplication::context(),
-                uri.object<QtJniTypes::UriType>());
+                uri.object<QtJniTypes::Uri>());
 }
 
 bool isTreeUri(const QJniObject &uri)
@@ -511,17 +506,17 @@ bool isTreeUri(const QJniObject &uri)
     return QJniObject::callStaticMethod<jboolean>(
                 QtJniTypes::Traits<QtJniTypes::DocumentsContract>::className(),
                 "isTreeUri",
-                uri.object<QtJniTypes::UriType>());
+                uri.object<QtJniTypes::Uri>());
 }
 
 QJniObject createDocument(const QJniObject &parentDocumentUri, const QString &mimeType,
                           const QString &displayName)
 {
-    return QJniObject::callStaticMethod<QtJniTypes::UriType>(
+    return QJniObject::callStaticMethod<QtJniTypes::Uri>(
                 QtJniTypes::Traits<QtJniTypes::DocumentsContract>::className(),
                 "createDocument",
-                contentResolverInstance().object<QtJniTypes::ContentResolverType>(),
-                parentDocumentUri.object<QtJniTypes::UriType>(),
+                contentResolverInstance().object<QtJniTypes::ContentResolver>(),
+                parentDocumentUri.object<QtJniTypes::Uri>(),
                 QJniObject::fromString(mimeType).object<jstring>(),
                 QJniObject::fromString(displayName).object<jstring>());
 }
@@ -535,8 +530,8 @@ bool deleteDocument(const QJniObject &documentUri)
     return QJniObject::callStaticMethod<jboolean>(
                 QtJniTypes::Traits<QtJniTypes::DocumentsContract>::className(),
                 "deleteDocument",
-                contentResolverInstance().object<QtJniTypes::ContentResolverType>(),
-                documentUri.object<QtJniTypes::UriType>());
+                contentResolverInstance().object<QtJniTypes::ContentResolver>(),
+                documentUri.object<QtJniTypes::Uri>());
 }
 
 QJniObject moveDocument(const QJniObject &sourceDocumentUri,
@@ -547,13 +542,13 @@ QJniObject moveDocument(const QJniObject &sourceDocumentUri,
     if (!(flags & Document::FLAG_SUPPORTS_MOVE))
         return {};
 
-    return QJniObject::callStaticMethod<QtJniTypes::UriType>(
+    return QJniObject::callStaticMethod<QtJniTypes::Uri>(
                 QtJniTypes::Traits<QtJniTypes::DocumentsContract>::className(),
                 "moveDocument",
-                contentResolverInstance().object<QtJniTypes::ContentResolverType>(),
-                sourceDocumentUri.object<QtJniTypes::UriType>(),
-                sourceParentDocumentUri.object<QtJniTypes::UriType>(),
-                targetParentDocumentUri.object<QtJniTypes::UriType>());
+                contentResolverInstance().object<QtJniTypes::ContentResolver>(),
+                sourceDocumentUri.object<QtJniTypes::Uri>(),
+                sourceParentDocumentUri.object<QtJniTypes::Uri>(),
+                targetParentDocumentUri.object<QtJniTypes::Uri>());
 }
 
 QJniObject renameDocument(const QJniObject &documentUri, const QString &displayName)
@@ -562,11 +557,11 @@ QJniObject renameDocument(const QJniObject &documentUri, const QString &displayN
     if (!(flags & Document::FLAG_SUPPORTS_RENAME))
         return {};
 
-    return QJniObject::callStaticMethod<QtJniTypes::UriType>(
+    return QJniObject::callStaticMethod<QtJniTypes::Uri>(
                 QtJniTypes::Traits<QtJniTypes::DocumentsContract>::className(),
                 "renameDocument",
-                contentResolverInstance().object<QtJniTypes::ContentResolverType>(),
-                documentUri.object<QtJniTypes::UriType>(),
+                contentResolverInstance().object<QtJniTypes::ContentResolver>(),
+                documentUri.object<QtJniTypes::Uri>(),
                 QJniObject::fromString(displayName).object<jstring>());
 }
 } // End DocumentsContract namespace
@@ -580,81 +575,196 @@ class MakeableDocumentFile : public DocumentFile
 {
 public:
     MakeableDocumentFile(const QJniObject &uri, const DocumentFilePtr &parent = {})
-        : DocumentFile(uri, parent)
+        : DocumentFile(uri, QString(), parent)
+    {
+        QString uriString = uri.toString();
+
+        if (uriString.endsWith(childrenSegment)) {
+            // A URI ending with /children is a query for accessing documents under
+            // the parent tree, so the closest name would be that of the parent.
+            uriString.chop(std::size(childrenSegment) - 1);
+        }
+
+        const QString path = QUrl(uriString).path();
+        if (path.isEmpty() || path == u"/")
+            return;
+
+        int displayNameStartIndex = uriString.lastIndexOf(u'/') + 1;
+
+        const int encodedSlashPos = uriString.lastIndexOf(u"%2F");
+        if (encodedSlashPos != -1)
+            displayNameStartIndex = qMax(displayNameStartIndex, encodedSlashPos + 3);
+
+        const int encodedColonPos = uriString.lastIndexOf(u"%3A");
+        if (encodedColonPos != -1)
+            displayNameStartIndex = qMax(displayNameStartIndex, encodedColonPos + 3);
+
+        m_displayName = uriString.mid(displayNameStartIndex);
+    }
+
+    MakeableDocumentFile(const QJniObject &uri, const QString &displayName, const DocumentFilePtr &parent = {})
+        : DocumentFile(uri, displayName, parent)
     {}
 };
 }
 
 DocumentFile::DocumentFile(const QJniObject &uri,
+                           const QString &displayName,
                            const DocumentFilePtr &parent)
-    : m_uri{uri}
-    , m_parent{parent}
+    : m_displayName{displayName},
+      m_uri{uri},
+      m_parent{parent}
 {}
+
+QStringList DocumentFile::getPathSegments(const QJniObject &uri)
+{
+    if (!uri.isValid())
+        return {};
+
+    const auto jSegments = uri.callMethod<QtJniTypes::List>("getPathSegments");
+    if (!jSegments.isValid())
+        return {};
+
+    QStringList segments;
+    for (int i = 0; i < jSegments.callMethod<jint>("size"); ++i)
+        segments.append(jSegments.callMethod<QJniObject>("get", i).toString());
+
+    return segments;
+}
 
 QJniObject parseUri(const QString &uri)
 {
-    QString uriToParse = uri;
-    if (uriToParse.contains(' '))
-        uriToParse.replace(' ', QUrl::toPercentEncoding(" "));
-
-    return QJniObject::callStaticMethod<QtJniTypes::UriType>(
+    return QJniObject::callStaticMethod<QtJniTypes::Uri>(
                 QtJniTypes::Traits<QtJniTypes::Uri>::className(),
                 "parse",
-                QJniObject::fromString(uriToParse).object<jstring>());
+                QJniObject::fromString(uri).object<jstring>());
 }
 
 DocumentFilePtr DocumentFile::parseFromAnyUri(const QString &fileName)
 {
-    const QString encodedUri = QUrl(fileName).toEncoded();
-    const QJniObject uri = parseUri(encodedUri);
+    const QJniObject uri = parseUri(fileName);
+    if (!uri.isValid() || uri.toString().isEmpty())
+        return {};
 
-    if (DocumentsContract::isDocumentUri(uri) || !DocumentsContract::isTreeUri(uri))
+    const auto scheme = uri.callMethod<QString>("getScheme");
+    if (scheme != QLatin1String(contentScheme))
+        return std::make_shared<MakeableDocumentFile>(uri);
+
+    const auto authority = uri.callMethod<QString>("getAuthority");
+    const QStringList segments = getPathSegments(uri);
+
+    const int treeIndex = segments.indexOf(treeSegment);
+    const int docIndex = segments.indexOf(documentSegment);
+
+    DocumentFilePtr parent;
+    QJniObject parsedUri;
+
+    if (treeIndex != -1) {
+        // the segment after "tree" is the tree ID, otherwise it's malformed uri
+        if (segments.size() <= treeIndex + 1)
+            return fromSingleUri(uri);
+
+        const QString treeId = segments.at(treeIndex + 1);
+        const QString encodedTreeId = QUrl::toPercentEncoding(treeId);
+        const QString treeUriString = "%1://%2/%3/%4"_L1.arg(scheme, authority,
+                                                             treeSegment, encodedTreeId);
+        const QJniObject treeUri = parseUri(treeUriString);
+
+        const int midIndex = (docIndex > treeIndex) ? docIndex + 1 : treeIndex + 2;
+        QString docIdOrPath = segments.mid(midIndex).join('/');
+
+        if (docIdOrPath.isEmpty())
+            return fromTreeUri(treeUri);
+
+        QString fullDocId;
+        if (docIndex > treeIndex)
+            fullDocId = docIdOrPath; // full ID
+        else
+            fullDocId = treeId + u'/' + docIdOrPath; // relative path
+
+        parsedUri = buildDocumentUriUsingTree(treeUri, fullDocId);
+
+        const int lastSlash = fullDocId.lastIndexOf('/');
+        if (lastSlash != -1) {
+            const QString parentDocId = fullDocId.left(lastSlash);
+            // Parent must be within the same tree, or be the tree root
+            if (!parentDocId.isEmpty() && parentDocId.startsWith(treeId)) {
+                QJniObject parentUri = buildDocumentUriUsingTree(treeUri, parentDocId);
+                parent = std::make_shared<MakeableDocumentFile>(parentUri);
+            }
+        }
+
+        if (!parent)
+            parent = fromTreeUri(treeUri);
+    } else if (docIndex != -1) {
+        const QString docId = segments.mid(docIndex + 1).join('/');
+        const QString encodedDocId = QUrl::toPercentEncoding(docId);
+        const QString docUriStr = "%1://%2/%3/%4"_L1.arg(scheme, authority,
+                                                         documentSegment, encodedDocId);
+        parsedUri = parseUri(docUriStr);
+
+        const int lastSlash = docId.lastIndexOf('/');
+        if (lastSlash != -1) {
+            const QString parentDocId = docId.left(lastSlash);
+            const QString encodedParentDocId = QUrl::toPercentEncoding(parentDocId);
+            const QString parentUriStr = "%1://%2/%3/%4"_L1.arg(scheme, authority, documentSegment,
+                                                                encodedParentDocId);
+            parent = fromSingleUri(parseUri(parentUriStr));
+        }
+    } else {
+        parsedUri = uri;
+        if (segments.size() > 1) {
+            QStringList parentSegments = segments;
+            parentSegments.removeLast();
+            const QString parendDocId = parentSegments.join('/');
+            const QString parentUriStr = "%1://%2/%3"_L1.arg(scheme, authority, parendDocId);
+            parent = fromSingleUri(parseUri(parentUriStr));
+        }
+    }
+
+    if (!parsedUri.isValid())
         return fromSingleUri(uri);
 
-    const QString documentType = "/document/"_L1;
-    const QString treeType = "/tree/"_L1;
-
-    const int treeIndex = encodedUri.indexOf(treeType);
-    const int documentIndex = encodedUri.indexOf(documentType);
-    const int index = fileName.lastIndexOf("/");
-
-    if (index <= treeIndex + treeType.size() || index <= documentIndex + documentType.size())
-        return fromTreeUri(uri);
-
-    const QString parentUrl = encodedUri.left(index);
-    DocumentFilePtr parentDocFile = fromTreeUri(parseUri(parentUrl));
-
-    const QString baseName = encodedUri.mid(index);
-    const QString fileUrl = parentUrl + QUrl::toPercentEncoding(baseName);
-
-    DocumentFilePtr docFile = std::make_shared<MakeableDocumentFile>(parseUri(fileUrl));
-    if (parentDocFile && parentDocFile->isDirectory())
-        docFile->m_parent = parentDocFile;
+    auto docFile = std::make_shared<MakeableDocumentFile>(parsedUri);
+    if (parent)
+        docFile->m_parent = parent;
 
     return docFile;
 }
 
 DocumentFilePtr DocumentFile::fromSingleUri(const QJniObject &uri)
 {
+    if (!uri.isValid())
+        return {};
+
     return std::make_shared<MakeableDocumentFile>(uri);
 }
 
 DocumentFilePtr DocumentFile::fromTreeUri(const QJniObject &treeUri)
 {
-    QString docId;
-    if (isDocumentUri(treeUri))
-        docId = documentId(treeUri);
-    else
-        docId = treeDocumentId(treeUri);
+    if (!treeUri.isValid())
+        return {};
 
-    return std::make_shared<MakeableDocumentFile>(buildDocumentUriUsingTree(treeUri, docId));
+    if (isDocumentUri(treeUri))
+        return std::make_shared<MakeableDocumentFile>(treeUri);
+
+    if (isTreeUri(treeUri)) {
+        const QString docId = treeDocumentId(treeUri);
+        if (!docId.isEmpty()) {
+            const QJniObject docUri = buildDocumentUriUsingTree(treeUri, docId);
+            return std::make_shared<MakeableDocumentFile>(docUri);
+        }
+    }
+
+    return std::make_shared<MakeableDocumentFile>(treeUri);
 }
 
 DocumentFilePtr DocumentFile::createFile(const QString &mimeType, const QString &displayName)
 {
     if (isDirectory()) {
+        const QString decodedName = QUrl::fromPercentEncoding(displayName.toUtf8());
         return std::make_shared<MakeableDocumentFile>(
-                    createDocument(m_uri, mimeType, displayName),
+                    createDocument(m_uri, mimeType, decodedName),
                     shared_from_this());
     }
     return {};
@@ -678,6 +788,11 @@ const QJniObject &DocumentFile::uri() const
 const DocumentFilePtr &DocumentFile::parent() const
 {
     return m_parent;
+}
+
+QString DocumentFile::initialName() const
+{
+    return m_displayName;
 }
 
 QString DocumentFile::name() const
@@ -734,7 +849,7 @@ bool DocumentFile::canRead() const
 {
     const auto context = QJniObject(QNativeInterface::QAndroidApplication::context());
     const bool selfUriPermission = context.callMethod<jint>("checkCallingOrSelfUriPermission",
-                                                            m_uri.object<QtJniTypes::UriType>(),
+                                                            m_uri.object<QtJniTypes::Uri>(),
                                                             FLAG_GRANT_READ_URI_PERMISSION);
     if (selfUriPermission != 0)
         return false;
@@ -746,7 +861,7 @@ bool DocumentFile::canWrite() const
 {
     const auto context = QJniObject(QNativeInterface::QAndroidApplication::context());
     const bool selfUriPermission = context.callMethod<jint>("checkCallingOrSelfUriPermission",
-                                                            m_uri.object<QtJniTypes::UriType>(),
+                                                            m_uri.object<QtJniTypes::Uri>(),
                                                             FLAG_GRANT_WRITE_URI_PERMISSION);
     if (selfUriPermission != 0)
         return false;
@@ -793,41 +908,55 @@ std::vector<DocumentFilePtr> DocumentFile::listFiles()
 
 bool DocumentFile::rename(const QString &newName)
 {
-    QJniObject uri;
-    if (newName.startsWith("content://"_L1)) {
-        auto lastSeparatorIndex = [](const QString &file) {
-            int posDecoded = file.lastIndexOf("/");
-            int posEncoded = file.lastIndexOf(QUrl::toPercentEncoding("/"));
-            return posEncoded > posDecoded ? posEncoded : posDecoded;
-        };
+    if (!newName.startsWith(contentSchemeFull)) {
+        // Simple rename
+        QJniObject renamedUri = renameDocument(m_uri, newName);
+        if (!renamedUri.isValid())
+            return false;
 
-        // first try to see if the new file is under the same tree and thus used rename only
-        const QString parent = m_uri.toString().left(lastSeparatorIndex(m_uri.toString()));
-        if (newName.contains(parent)) {
-            QString displayName = newName.mid(lastSeparatorIndex(newName));
-            if (displayName.startsWith('/'))
-                displayName.remove(0, 1);
-            else if (displayName.startsWith(QUrl::toPercentEncoding("/")))
-                displayName.remove(0, 3);
+        m_uri = renamedUri;
+        m_displayName = newName;
 
-            uri = renameDocument(m_uri, displayName);
-        } else {
-            // Move
-            QJniObject srcParentUri = fromTreeUri(parseUri(parent))->uri();
-            const QString destParent = newName.left(lastSeparatorIndex(newName));
-            QJniObject targetParentUri = fromTreeUri(parseUri(destParent))->uri();
-            uri = moveDocument(m_uri, srcParentUri, targetParentUri);
-        }
-    } else {
-        uri = renameDocument(m_uri, newName);
-    }
-
-    if (uri.isValid()) {
-        m_uri = uri;
         return true;
     }
 
-    return false;
+    // Mixed move and rename
+    auto destDoc = parseFromAnyUri(newName);
+    if (!destDoc)
+        return false;
+
+    DocumentFilePtr destParent = destDoc->parent();
+    const QString oldName = name();
+    const QString destName = QUrl::fromPercentEncoding(QFileInfo(newName).fileName().toUtf8());
+
+    bool isMove = false;
+    if (parent() && destParent && parent()->uri().toString() != destParent->uri().toString())
+        isMove = true;
+
+    QJniObject currentUri = m_uri;
+    if (isMove) {
+        if (!parent()) // Cannot move if source parent is unknown
+            return false;
+
+        currentUri = moveDocument(m_uri, parent()->uri(), destParent->uri());
+        if (!currentUri.isValid())
+            return false;
+    }
+
+    if (oldName != destName) {
+        QJniObject renamedUri = renameDocument(currentUri, destName);
+        if (!renamedUri.isValid())
+            return false;
+
+        currentUri = renamedUri;
+    }
+
+    m_uri = currentUri;
+    m_displayName = destName;
+    if (isMove)
+        m_parent = destParent;
+
+    return true;
 }
 
 QT_END_NAMESPACE

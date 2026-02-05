@@ -24,9 +24,11 @@ foreach(test tst_qstring tst_qstring_restricted_ascii tst_qstring_no_cast_from_a
         NO_BATCH
         SOURCES
             tst_qstring.cpp
+            tst_qstringliteral_compile.cpp
             ${tst_qstring_extra_sources}
         LIBRARIES
             Qt::CorePrivate
+            Qt::TestPrivate
             ${tst_qstring_extra_libraries}
         DEFINES
             ${tst_qstring_extra_defines}

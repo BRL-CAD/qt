@@ -417,8 +417,6 @@ static QStringList get_colornames()
     For more information about painting in general, see the \l{Paint
     System} documentation.
 
-    \tableofcontents
-
     \section1 Integer vs. Floating Point Precision
 
     QColor supports floating point precision and provides floating
@@ -443,7 +441,8 @@ static QStringList get_colornames()
 
     The code above produces the following output:
 
-    \image alphafill.png
+    \image alphafill.png {An image that contains four square sections,
+           with the colors purple, blue, red and white}
 
     The alpha channel of a color can be retrieved and set using the
     alpha() and setAlpha() functions if its value is an integer, and
@@ -788,33 +787,33 @@ QColor::QColor(Spec spec) noexcept
 /*!
     \fn QColor::QColor(const QString &name)
 
-    Constructs a named color in the same way as setNamedColor() using
+    Constructs a named color in the same way as fromString() using
     the given \a name.
 
     The color is left invalid if the \a name cannot be parsed.
 
-    \sa setNamedColor(), name(), isValid()
+    \sa fromString(), name(), isValid()
 */
 
 /*!
     \fn QColor::QColor(const char *name)
 
-    Constructs a named color in the same way as setNamedColor() using
+    Constructs a named color in the same way as fromString() using
     the given \a name.
 
     \overload
-    \sa setNamedColor(), name(), isValid()
+    \sa fromString(), name(), isValid()
 */
 
 /*!
     \fn QColor::QColor(QLatin1StringView name)
 
-    Constructs a named color in the same way as setNamedColor() using
+    Constructs a named color in the same way as fromString() using
     the given \a name.
 
     \overload
     \since 5.8
-    \sa setNamedColor(), name(), isValid()
+    \sa fromString(), name(), isValid()
 */
 
 /*!
@@ -906,9 +905,9 @@ void QColor::setNamedColor(QLatin1StringView name)
    be used to construct a valid QColor object, otherwise returns
    false.
 
-   It uses the same algorithm used in setNamedColor().
+   It uses the same algorithm used in fromString().
 
-   \sa setNamedColor()
+   \sa fromString()
 */
 bool QColor::isValidColor(const QString &name)
 {
@@ -2198,29 +2197,27 @@ QColor QColor::toHsv() const noexcept
     color.ct.ahsv.alpha = ct.argb.alpha;
     color.ct.ahsv.pad = 0;
 
-    const float r = ct.argb.red   / float(USHRT_MAX);
-    const float g = ct.argb.green / float(USHRT_MAX);
-    const float b = ct.argb.blue  / float(USHRT_MAX);
-    const float max = Q_MAX_3(r, g, b);
-    const float min = Q_MIN_3(r, g, b);
-    const float delta = max - min;
-    color.ct.ahsv.value = qRound(max * USHRT_MAX);
-    if (qFuzzyIsNull(delta)) {
+    const ushort r = ct.argb.red;
+    const ushort g = ct.argb.green;
+    const ushort b = ct.argb.blue;
+    const auto [min, max] = std::minmax({r, g, b});
+    color.ct.ahsv.value = max;
+    if (max == min) {
         // achromatic case, hue is undefined
         color.ct.ahsv.hue = USHRT_MAX;
         color.ct.ahsv.saturation = 0;
     } else {
         // chromatic case
-        float hue = 0;
+        const float delta = max - min; // cannot overflow
+        float hue;
         color.ct.ahsv.saturation = qRound((delta / max) * USHRT_MAX);
-        if (qFuzzyCompare(r, max)) {
-            hue = ((g - b) /delta);
-        } else if (qFuzzyCompare(g, max)) {
-            hue = (2.0f + (b - r) / delta);
-        } else if (qFuzzyCompare(b, max)) {
-            hue = (4.0f + (r - g) / delta);
+        if (max == r) {
+            hue = 0 + (g - b) / delta;
+        } else if (max == g) {
+            hue = 2 + (b - r) / delta;
         } else {
-            Q_ASSERT_X(false, "QColor::toHsv", "internal error");
+            Q_ASSERT(max == b); // max({r,g,b}) must be one of r, g, and b!
+            hue = 4 + (r - g) / delta;
         }
         hue *= 60.0f;
         if (hue < 0.0f)

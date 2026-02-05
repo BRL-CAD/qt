@@ -1,5 +1,6 @@
 // Copyright (C) 2016 The Qt Company Ltd.
 // SPDX-License-Identifier: LicenseRef-Qt-Commercial OR LGPL-3.0-only OR GPL-2.0-only OR GPL-3.0-only
+// Qt-Security score:critical reason:data-parser
 
 /*!
     \class QMovie
@@ -103,7 +104,6 @@
 */
 
 /*! \fn void QMovie::frameChanged(int frameNumber)
-    \since 4.1
 
     This signal is emitted when the frame number has changed to
     \a frameNumber.  You can call currentImage() or currentPixmap() to get a
@@ -144,19 +144,20 @@
 #include "qrect.h"
 #include "qelapsedtimer.h"
 #include "qtimer.h"
-#include "qmap.h"
 #include "qlist.h"
 #include "qbuffer.h"
 #include "qdir.h"
 #include "qloggingcategory.h"
+#include "private/qimage_p.h"
 #include "private/qobject_p.h"
 #include "private/qproperty_p.h"
+
+#include <map>
+#include <memory>
 
 #define QMOVIE_INVALID_DELAY -1
 
 QT_BEGIN_NAMESPACE
-
-Q_DECLARE_LOGGING_CATEGORY(lcImageIo)
 
 class QFrameInfo
 {
@@ -194,7 +195,10 @@ class QMoviePrivate : public QObjectPrivate
     Q_DECLARE_PUBLIC(QMovie)
 
 public:
-    QMoviePrivate(QMovie *qq);
+    QMoviePrivate();
+
+    void init(QMovie *qq, std::unique_ptr<QImageReader> r);
+
     bool isDone();
     bool next();
     int speedAdjustedDelay(int delay) const;
@@ -214,7 +218,7 @@ public:
     void _q_loadNextFrame();
     void _q_loadNextFrame(bool starting);
 
-    QImageReader *reader = nullptr;
+    std::unique_ptr<QImageReader> reader = nullptr;
 
     void setSpeed(int percentSpeed) { q_func()->setSpeed(percentSpeed); }
     Q_OBJECT_COMPAT_PROPERTY_WITH_ARGS(QMoviePrivate, int, speed, &QMoviePrivate::setSpeed, 100)
@@ -232,25 +236,33 @@ public:
                                          QMovie::CacheNone)
     bool haveReadAll = false;
     bool isFirstIteration = true;
-    QMap<int, QFrameInfo> frameMap;
+    std::map<int, QFrameInfo> frameMap;
     QString absoluteFilePath;
 
-    QTimer nextImageTimer;
+    QTimer *nextImageTimer = nullptr;
 };
 
 /*! \internal
  */
-QMoviePrivate::QMoviePrivate(QMovie *qq)
+QMoviePrivate::QMoviePrivate()
+{
+}
+
+void QMoviePrivate::init(QMovie *qq, std::unique_ptr<QImageReader> r)
 {
     q_ptr = qq;
-    nextImageTimer.setSingleShot(true);
+    reader = std::move(r);
+    nextImageTimer = new QTimer(qq);
+    nextImageTimer->setSingleShot(true);
+    QObject::connect(nextImageTimer, SIGNAL(timeout()),
+                     qq, SLOT(_q_loadNextFrame()));
 }
 
 /*! \internal
  */
 void QMoviePrivate::reset()
 {
-    nextImageTimer.stop();
+    nextImageTimer->stop();
     if (reader->device())
         initialDevicePos = reader->device()->pos();
     currentFrameNumber = -1;
@@ -335,11 +347,10 @@ QFrameInfo QMoviePrivate::infoForFrame(int frameNumber)
                     QIODevice *device = reader->device();
                     QColor bgColor = reader->backgroundColor();
                     QSize scaledSize = reader->scaledSize();
-                    delete reader;
                     if (fileName.isEmpty())
-                        reader = new QImageReader(device, format);
+                        reader = std::make_unique<QImageReader>(device, format);
                     else
-                        reader = new QImageReader(absoluteFilePath, format);
+                        reader = std::make_unique<QImageReader>(absoluteFilePath, format);
                     if (!reader->canRead()) // Provoke a device->open() call
                         emit q->error(reader->error());
                     reader->device()->seek(initialDevicePos);
@@ -393,9 +404,9 @@ QFrameInfo QMoviePrivate::infoForFrame(int frameNumber)
                 greatestFrameNumber = i;
                 QFrameInfo info(QPixmap::fromImage(std::move(anImage)), nextFrameDelay());
                 // Cache it!
-                frameMap.insert(i, info);
+                auto &e = frameMap[i] = std::move(info);
                 if (i == frameNumber) {
-                    return info;
+                    return e;
                 }
             } else {
                 // We've read all frames now. Return an end marker
@@ -405,7 +416,8 @@ QFrameInfo QMoviePrivate::infoForFrame(int frameNumber)
         }
     }
     // Return info for requested (cached) frame
-    return frameMap.value(frameNumber);
+    const auto it = frameMap.find(frameNumber);
+    return it == frameMap.cend() ? QFrameInfo() : it->second;
 }
 
 /*!
@@ -449,11 +461,7 @@ bool QMoviePrivate::next()
     }
     // Image and delay OK, update internal state
     currentFrameNumber = nextFrameNumber++;
-    QSize scaledSize = reader->scaledSize();
-    if (scaledSize.isValid() && (scaledSize != info.pixmap.size()))
-        currentPixmap = QPixmap::fromImage( info.pixmap.toImage().scaled(scaledSize) );
-    else
-        currentPixmap = info.pixmap;
+    currentPixmap = info.pixmap;
 
     if (!speed)
         return true;
@@ -493,7 +501,7 @@ void QMoviePrivate::_q_loadNextFrame(bool starting)
         emit q->frameChanged(currentFrameNumber);
 
         if (speed && movieState == QMovie::Running)
-            nextImageTimer.start(nextDelay);
+            nextImageTimer->start(nextDelay);
     } else {
         // Could not read another frame
         if (!isDone()) {
@@ -543,7 +551,7 @@ bool QMoviePrivate::jumpToFrame(int frameNumber)
         return true;
     nextFrameNumber = frameNumber;
     if (movieState == QMovie::Running)
-        nextImageTimer.stop();
+        nextImageTimer->stop();
     _q_loadNextFrame();
     return (nextFrameNumber == currentFrameNumber+1);
 }
@@ -576,11 +584,10 @@ bool QMoviePrivate::jumpToNextFrame()
     \sa setFileName(), setDevice(), setFormat()
  */
 QMovie::QMovie(QObject *parent)
-    : QObject(*new QMoviePrivate(this), parent)
+    : QObject(*new QMoviePrivate, parent)
 {
     Q_D(QMovie);
-    d->reader = new QImageReader;
-    connect(&d->nextImageTimer, SIGNAL(timeout()), this, SLOT(_q_loadNextFrame()));
+    d->init(this, std::make_unique<QImageReader>());
 }
 
 /*!
@@ -592,12 +599,11 @@ QMovie::QMovie(QObject *parent)
     The \a parent object is passed to QObject's constructor.
  */
 QMovie::QMovie(QIODevice *device, const QByteArray &format, QObject *parent)
-    : QObject(*new QMoviePrivate(this), parent)
+    : QObject(*new QMoviePrivate, parent)
 {
     Q_D(QMovie);
-    d->reader = new QImageReader(device, format);
+    d->init(this, std::make_unique<QImageReader>(device, format));
     d->initialDevicePos = device->pos();
-    connect(&d->nextImageTimer, SIGNAL(timeout()), this, SLOT(_q_loadNextFrame()));
 }
 
 /*!
@@ -609,14 +615,13 @@ QMovie::QMovie(QIODevice *device, const QByteArray &format, QObject *parent)
     The \a parent object is passed to QObject's constructor.
  */
 QMovie::QMovie(const QString &fileName, const QByteArray &format, QObject *parent)
-    : QObject(*new QMoviePrivate(this), parent)
+    : QObject(*new QMoviePrivate, parent)
 {
     Q_D(QMovie);
+    d->init(this, std::make_unique<QImageReader>(fileName, format));
     d->absoluteFilePath = QDir(fileName).absolutePath();
-    d->reader = new QImageReader(fileName, format);
     if (d->reader->device())
         d->initialDevicePos = d->reader->device()->pos();
-    connect(&d->nextImageTimer, SIGNAL(timeout()), this, SLOT(_q_loadNextFrame()));
 }
 
 /*!
@@ -625,7 +630,7 @@ QMovie::QMovie(const QString &fileName, const QByteArray &format, QObject *paren
 QMovie::~QMovie()
 {
     Q_D(QMovie);
-    delete d->reader;
+    d->reader.reset();
 }
 
 /*!
@@ -892,12 +897,12 @@ void QMovie::setPaused(bool paused)
         if (d->movieState == NotRunning)
             return;
         d->enterState(Paused);
-        d->nextImageTimer.stop();
+        d->nextImageTimer->stop();
     } else {
         if (d->movieState == Running)
             return;
         d->enterState(Running);
-        d->nextImageTimer.start(nextFrameDelay());
+        d->nextImageTimer->start(nextFrameDelay());
     }
 }
 
@@ -915,7 +920,7 @@ void QMovie::setSpeed(int percentSpeed)
 {
     Q_D(QMovie);
     if (!d->speed && d->movieState == Running)
-        d->nextImageTimer.start(nextFrameDelay());
+        d->nextImageTimer->start(nextFrameDelay());
     if (percentSpeed != d->speed) {
         d->speed = percentSpeed;
         d->speed.notify();
@@ -972,13 +977,11 @@ void QMovie::stop()
     if (d->movieState == NotRunning)
         return;
     d->enterState(NotRunning);
-    d->nextImageTimer.stop();
+    d->nextImageTimer->stop();
     d->nextFrameNumber = 0;
 }
 
 /*!
-    \since 4.1
-
     Returns the scaled size of frames.
 
     \sa QImageReader::scaledSize()
@@ -990,8 +993,6 @@ QSize QMovie::scaledSize()
 }
 
 /*!
-    \since 4.1
-
     Sets the scaled frame size to \a size.
 
     \sa QImageReader::setScaledSize()
@@ -1003,8 +1004,6 @@ void QMovie::setScaledSize(const QSize &size)
 }
 
 /*!
-    \since 4.1
-
     Returns the list of image formats supported by QMovie.
 
     \sa QImageReader::supportedImageFormats()

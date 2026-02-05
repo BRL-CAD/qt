@@ -5,6 +5,10 @@
 #include <QDataStream>
 #include <QBuffer>
 
+#ifndef QT_NO_DEBUG_STREAM
+#include <QtCore/qdebug.h>
+#endif
+
 QT_BEGIN_NAMESPACE
 
 /*!
@@ -211,6 +215,9 @@ QT_BEGIN_NAMESPACE
     translated to a compute shader that may be dependent on the index buffer
     usage in the draw calls (e.g. if the shader is using gl_VertexIndex), hence
     the need for three dedicated variants.
+
+    \value [since 6.10] HdrCapableFragmentShader A fragment shader rewritten to support high
+    dynamic range rendering in a Qt Quick scenegraph.
  */
 
 /*!
@@ -332,9 +339,7 @@ QShader::~QShader()
 /*!
     \fn void QShader::swap(QShader &other)
     \since 6.7
-
-    Swaps shader \a other with this shader. This operation is very fast and
-    never fails.
+    \memberswap{shader}
 */
 
 /*!
@@ -534,6 +539,11 @@ static void readShaderKey(QDataStream *ds, QShaderKey *k)
 
     If \a data cannot be deserialized successfully, the result is a default
     constructed QShader for which isValid() returns \c false.
+
+    \warning Shader packages, including \c{.qsb} files in the filesystem, are
+    assumed to be trusted content. Application developers are advised to
+    carefully consider the potential implications before allowing the loading of
+    user-provided content that is not part of the application.
 
     \sa serialized()
   */
@@ -796,14 +806,13 @@ bool operator==(const QShader &lhs, const QShader &rhs) noexcept
  */
 
 /*!
-    Returns the hash value for \a s, using \a seed to seed the calculation.
-
-    \relates QShader
+    \fn size_t qHash(const QShader &key, size_t seed)
+    \qhashold{QShader}
  */
 size_t qHash(const QShader &s, size_t seed) noexcept
 {
     if (s.d) {
-        QtPrivate::QHashCombine hash;
+        QtPrivate::QHashCombineWithSeed hash(seed);
         seed = hash(seed, s.stage());
         if (!s.d->shaders.isEmpty()) {
             seed = hash(seed, s.d->shaders.firstKey());
@@ -903,9 +912,8 @@ bool operator<(const QShaderKey &lhs, const QShaderKey &rhs) noexcept
  */
 
 /*!
-    Returns the hash value for \a k, using \a seed to seed the calculation.
-
-    \relates QShaderKey
+    \fn size_t qHash(const QShaderKey &key, size_t seed)
+    \qhashold{QShaderKey}
  */
 size_t qHash(const QShaderKey &k, size_t seed) noexcept
 {
@@ -936,9 +944,8 @@ bool operator==(const QShaderCode &lhs, const QShaderCode &rhs) noexcept
  */
 
 /*!
-    Returns the hash value for \a k, using \a seed to seed the calculation.
-
-    \relates QShaderCode
+    \fn size_t qHash(const QShaderCode &key, size_t seed)
+    \qhashold{QShaderCode}
  */
 size_t qHash(const QShaderCode &k, size_t seed) noexcept
 {
@@ -984,7 +991,7 @@ QDebug operator<<(QDebug dbg, const QShaderVersion &v)
 /*!
     \typedef QShader::NativeResourceBindingMap
 
-    Synonym for QMap<int, QPair<int, int>>.
+    Synonym for QMap<int, std::pair<int, int>>.
 
     The resource binding model QRhi assumes is based on SPIR-V. This means that
     uniform buffers, storage buffers, combined image samplers, and storage

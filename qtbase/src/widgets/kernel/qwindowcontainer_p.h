@@ -1,5 +1,6 @@
 // Copyright (C) 2016 The Qt Company Ltd.
 // SPDX-License-Identifier: LicenseRef-Qt-Commercial OR LGPL-3.0-only OR GPL-2.0-only OR GPL-3.0-only
+// Qt-Security score:significant reason:default
 
 #ifndef QWINDOWCONTAINER_H
 #define QWINDOWCONTAINER_H
@@ -31,6 +32,7 @@ public:
     explicit QWindowContainer(QWindow *embeddedWindow, QWidget *parent = nullptr, Qt::WindowFlags f = { });
     ~QWindowContainer();
     QWindow *containedWindow() const;
+    QSize minimumSizeHint() const override;
 
     static void toplevelAboutToBeDestroyed(QWidget *parent);
     static void parentWasChanged(QWidget *parent);
@@ -41,9 +43,6 @@ public:
 protected:
     bool event(QEvent *ev) override;
     bool eventFilter(QObject *, QEvent *ev) override;
-
-private slots:
-    void focusWindowChanged(QWindow *focusWindow);
 };
 
 QT_END_NAMESPACE

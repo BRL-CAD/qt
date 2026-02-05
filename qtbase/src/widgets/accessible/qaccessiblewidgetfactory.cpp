@@ -83,7 +83,7 @@ QAccessibleInterface *qAccessibleFactory(const QString &classname, QObject *obje
         iface = new QAccessibleButton(widget);
 #endif
     } else if (classname == "QDialog"_L1) {
-        iface = new QAccessibleWidget(widget, QAccessible::Dialog);
+        iface = new QAccessibleWidgetV2(widget, QAccessible::Dialog);
 #if QT_CONFIG(messagebox)
     } else if (classname == "QMessageBox"_L1) {
         iface = new QAccessibleMessageBox(widget);
@@ -105,7 +105,7 @@ QAccessibleInterface *qAccessibleFactory(const QString &classname, QObject *obje
         iface = new QAccessibleProgressBar(widget);
 #endif
     } else if (classname == "QToolBar"_L1) {
-        iface = new QAccessibleWidget(widget, QAccessible::ToolBar, widget->windowTitle());
+        iface = new QAccessibleWidgetV2(widget, QAccessible::ToolBar, widget->windowTitle());
 #if QT_CONFIG(menubar)
     } else if (classname == "QMenuBar"_L1) {
         iface = new QAccessibleMenuBar(widget);
@@ -118,22 +118,25 @@ QAccessibleInterface *qAccessibleFactory(const QString &classname, QObject *obje
     } else if (classname == "QTreeView"_L1) {
         iface = new QAccessibleTree(widget);
 #endif // QT_CONFIG(treeview)
+#if QT_CONFIG(listview)
+    } else if (classname == "QListView"_L1) {
+        iface = new QAccessibleList(widget);
+#endif
 #if QT_CONFIG(itemviews)
-    } else if (classname == "QTableView"_L1 || classname == "QListView"_L1) {
+    } else if (classname == "QTableView"_L1) {
         iface = new QAccessibleTable(widget);
-    // ### This should be cleaned up. We return the parent for the scrollarea to hide it.
 #endif // QT_CONFIG(itemviews)
 #if QT_CONFIG(tabbar)
     } else if (classname == "QTabBar"_L1) {
         iface = new QAccessibleTabBar(widget);
 #endif
     } else if (classname == "QSizeGrip"_L1) {
-        iface = new QAccessibleWidget(widget, QAccessible::Grip);
+        iface = new QAccessibleWidgetV2(widget, QAccessible::Grip);
 #if QT_CONFIG(splitter)
     } else if (classname == "QSplitter"_L1) {
-        iface = new QAccessibleWidget(widget, QAccessible::Splitter);
+        iface = new QAccessibleWidgetV2(widget, QAccessible::Splitter);
     } else if (classname == "QSplitterHandle"_L1) {
-        iface = new QAccessibleWidget(widget, QAccessible::Grip);
+        iface = new QAccessibleWidgetV2(widget, QAccessible::Grip);
 #endif
 #if QT_CONFIG(textedit) && !defined(QT_NO_CURSOR)
     } else if (classname == "QTextEdit"_L1) {
@@ -144,7 +147,7 @@ QAccessibleInterface *qAccessibleFactory(const QString &classname, QObject *obje
     } else if (classname == "QTipLabel"_L1) {
         iface = new QAccessibleDisplay(widget, QAccessible::ToolTip);
     } else if (classname == "QFrame"_L1) {
-        iface = new QAccessibleWidget(widget, QAccessible::Border);
+        iface = new QAccessibleWidgetV2(widget, QAccessible::Border);
 #if QT_CONFIG(stackedwidget)
     } else if (classname == "QStackedWidget"_L1) {
         iface = new QAccessibleStackedWidget(widget);
@@ -169,7 +172,7 @@ QAccessibleInterface *qAccessibleFactory(const QString &classname, QObject *obje
 #endif
 #if QT_CONFIG(rubberband)
     } else if (classname == "QRubberBand"_L1) {
-        iface = new QAccessibleWidget(widget, QAccessible::Border);
+        iface = new QAccessibleWidgetV2(widget, QAccessible::Border);
 #endif
 #if QT_CONFIG(textbrowser) && !defined(QT_NO_CURSOR)
     } else if (classname == "QTextBrowser"_L1) {
@@ -191,7 +194,7 @@ QAccessibleInterface *qAccessibleFactory(const QString &classname, QObject *obje
 #endif
 
     } else if (classname == "QWidget"_L1) {
-        iface = new QAccessibleWidget(widget);
+        iface = new QAccessibleWidgetV2(widget);
     } else if (classname == "QWindowContainer"_L1) {
         iface = new QAccessibleWindowContainer(widget);
     }

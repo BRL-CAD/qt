@@ -41,7 +41,7 @@ public:
         WindowFrameExclusive
     };
 
-    QWindowPrivate();
+    QWindowPrivate(decltype(QObjectPrivateVersion) version = QObjectPrivateVersion);
     ~QWindowPrivate() override;
 
     void init(QWindow *parent, QScreen *targetScreen = nullptr);
@@ -76,16 +76,28 @@ public:
     void setTransientParent(QWindow *parent);
 
     virtual void clearFocusObject();
+
+    enum class FocusTarget {
+        First,
+        Last,
+        Current,
+        Next,
+        Prev
+    };
+    virtual void setFocusToTarget(FocusTarget, Qt::FocusReason) {}
+
     virtual QRectF closestAcceptableGeometry(const QRectF &rect) const;
 
     void setMinOrMaxSize(QSize *oldSizeMember, const QSize &size,
                          qxp::function_ref<void()> funcWidthChanged,
                          qxp::function_ref<void()> funcHeightChanged);
 
-    virtual void processSafeAreaMarginsChanged() {}
-
     virtual bool participatesInLastWindowClosed() const;
     virtual bool treatAsVisible() const;
+
+    virtual void maybeSynthesizeContextMenuEvent(QMouseEvent *event);
+
+    const QWindow *forwardToPopup(QEvent *event, const QWindow *activePopupOnPress);
 
     bool isPopup() const { return (windowFlags & Qt::WindowType_Mask) == Qt::Popup; }
     void setAutomaticPositionAndResizeEnabled(bool a)

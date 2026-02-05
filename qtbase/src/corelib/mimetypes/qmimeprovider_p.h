@@ -1,6 +1,7 @@
 // Copyright (C) 2016 The Qt Company Ltd.
 // Copyright (C) 2015 Klaralvdalens Datakonsult AB, a KDAB Group company, info@kdab.com, author David Faure <david.faure@kdab.com>
 // SPDX-License-Identifier: LicenseRef-Qt-Commercial OR LGPL-3.0-only OR GPL-2.0-only OR GPL-3.0-only
+// Qt-Security score:significant reason:default
 
 #ifndef QMIMEPROVIDER_P_H
 #define QMIMEPROVIDER_P_H
@@ -23,7 +24,8 @@ QT_REQUIRE_CONFIG(mimetype);
 #include "qmimeglobpattern_p.h"
 #include <QtCore/qdatetime.h>
 #include <QtCore/qset.h>
-#include <QtCore/qmap.h>
+
+#include <map>
 
 QT_BEGIN_NAMESPACE
 
@@ -45,7 +47,7 @@ class QMimeProviderBase
 
 public:
     QMimeProviderBase(QMimeDatabasePrivate *db, const QString &directory);
-    virtual ~QMimeProviderBase() {}
+    virtual ~QMimeProviderBase() = default;
 
     virtual bool isValid() = 0;
     virtual bool isInternalDatabase() const = 0;
@@ -123,7 +125,7 @@ private:
         QStringList globPatterns;
         bool hasGlobDeleteAll = false;
     };
-    using MimeTypeExtraMap = QMap<QString, MimeTypeExtra>;
+    using MimeTypeExtraMap = std::map<QString, MimeTypeExtra>;
     MimeTypeExtraMap m_mimetypeExtra;
 
     MimeTypeExtraMap::const_iterator loadMimeTypeExtra(const QString &mimeName);

@@ -24,6 +24,7 @@
 #if defined(Q_OS_WIN)
 # include <qt_windows.h> // for SetFileAttributes
 #endif
+#include <private/qfileinfo_p.h>
 #include <private/qfilesystemengine_p.h>
 
 #include <algorithm>
@@ -113,12 +114,18 @@ private slots:
 
     void fileInfo();
 
+    void pathWithTrailingSpace_data();
+    void pathWithTrailingSpace();
+
+#ifdef Q_OS_WIN
+    void correctFileInfoForDriveRootPath();
+#endif
+
 protected:
     bool createFiles(QFileSystemModel *model, const QString &test_path,
                      const QStringList &initial_files, int existingFileCount = 0,
                      const QStringList &initial_dirs = QStringList());
-    QModelIndex prepareTestModelRoot(QFileSystemModel *model, const QString &test_path,
-                                     QSignalSpy **spy2 = nullptr, QSignalSpy **spy3 = nullptr);
+    QModelIndex prepareTestModelRoot(QFileSystemModel *model, const QString &test_path);
 
 private:
     QString flatDirTestPath;
@@ -382,16 +389,11 @@ bool tst_QFileSystemModel::createFiles(QFileSystemModel *model, const QString &t
     return true;
 }
 
-QModelIndex tst_QFileSystemModel::prepareTestModelRoot(QFileSystemModel *model, const QString &test_path,
-                                                       QSignalSpy **spy2, QSignalSpy **spy3)
+QModelIndex tst_QFileSystemModel::prepareTestModelRoot(QFileSystemModel *model,
+                                                       const QString &test_path)
 {
     if (model->rowCount(model->index(test_path)) != 0)
         return QModelIndex();
-
-    if (spy2)
-        *spy2 = new QSignalSpy(model, &QFileSystemModel::rowsInserted);
-    if (spy3)
-        *spy3 = new QSignalSpy(model, &QFileSystemModel::rowsAboutToBeInserted);
 
     QStringList files = { "b", "d", "f", "h", "j", ".a", ".c", ".e", ".g" };
 
@@ -412,16 +414,16 @@ QModelIndex tst_QFileSystemModel::prepareTestModelRoot(QFileSystemModel *model, 
 
 void tst_QFileSystemModel::rowCount()
 {
-    QSignalSpy *spy2 = nullptr;
-    QSignalSpy *spy3 = nullptr;
     QScopedPointer<QFileSystemModel> model(new QFileSystemModel);
     QAbstractItemModelTester tester(model.get());
+    QSignalSpy rowsInsertedSpy(model.get(), &QFileSystemModel::rowsInserted);
+    QSignalSpy rowsAboutToBeInsertedSpy(model.get(), &QFileSystemModel::rowsAboutToBeInserted);
     tester.setUseFetchMore(false);
-    QModelIndex root = prepareTestModelRoot(model.data(), flatDirTestPath, &spy2, &spy3);
+    QModelIndex root = prepareTestModelRoot(model.data(), flatDirTestPath);
     QVERIFY(root.isValid());
 
-    QVERIFY(spy2 && spy2->size() > 0);
-    QVERIFY(spy3 && spy3->size() > 0);
+    QCOMPARE_GT(rowsInsertedSpy.size(), 0);
+    QCOMPARE_GT(rowsAboutToBeInsertedSpy.size(), 0);
 }
 
 void tst_QFileSystemModel::rowsInserted_data()
@@ -667,6 +669,9 @@ void tst_QFileSystemModel::filters()
 
 #ifdef Q_OS_LINUX
     if (files.size() >= 3 && rowCount >= 3 && rowCount != 5) {
+        if (::geteuid() == 0)
+            QSKIP("Running this test as root doesn't make sense");
+
         QString fileName1 = (tmp + '/' + files.at(0));
         QString fileName2 = (tmp + '/' + files.at(1));
         QString fileName3 = (tmp + '/' + files.at(2));
@@ -722,8 +727,7 @@ void tst_QFileSystemModel::showFilesOnly()
     // THEN: setting the root path to the previous (parent) dir, the model should
     // still only show files.
     // Doubling the default timeout (5s) as this test to fails on macos on the CI
-    QTRY_COMPARE_WITH_TIMEOUT(model.rowCount(model.setRootPath(tmp)), files.size(),
-                              (10000ms).count());
+    QTRY_COMPARE_WITH_TIMEOUT(model.rowCount(model.setRootPath(tmp)), files.size(), 10s);
 }
 
 void tst_QFileSystemModel::nameFilters()
@@ -812,7 +816,10 @@ void tst_QFileSystemModel::setData()
         QCOMPARE(spy.size(), 1);
         QList<QVariant> arguments = spy.takeFirst();
         QCOMPARE(model->data(idx, QFileSystemModel::FileNameRole).toString(), newFileName);
+        QCOMPARE(model->data(idx, QFileSystemModel::FileInfoRole).value<QFileInfo>().fileName(), newFileName);
         QCOMPARE(model->fileInfo(idx).filePath(), tmp + '/' + newFileName);
+        QCOMPARE(model->fileName(idx), newFileName);
+        QCOMPARE(model->fileName(idx.siblingAtColumn(1)), newFileName);
         QCOMPARE(model->index(arguments.at(0).toString()), model->index(tmp));
         QCOMPARE(arguments.at(1).toString(), oldFileName);
         QCOMPARE(arguments.at(2).toString(), newFileName);
@@ -878,13 +885,13 @@ void tst_QFileSystemModel::sort()
     //Create a file that will be at the end when sorting by name (For Mac, the default)
     //but if we sort by size descending it will be the first
     QFile tempFile(dirPath + "/plop2.txt");
-    tempFile.open(QIODevice::WriteOnly | QIODevice::Text);
+    QVERIFY(tempFile.open(QIODevice::WriteOnly | QIODevice::Text));
     QTextStream out(&tempFile);
     out << "The magic number is: " << 49 << "\n";
     tempFile.close();
 
     QFile tempFile2(dirPath + "/plop.txt");
-    tempFile2.open(QIODevice::WriteOnly | QIODevice::Text);
+    QVERIFY(tempFile2.open(QIODevice::WriteOnly | QIODevice::Text));
     QTextStream out2(&tempFile2);
     out2 << "The magic number is : " << 49 << " but i write some stuff in the file \n";
     tempFile2.close();
@@ -1056,11 +1063,18 @@ void tst_QFileSystemModel::caseSensitivity()
         indexes.append(index);
     }
 
-    if (!QFileSystemEngine::isCaseSensitive()) {
-        // QTBUG-31103, QTBUG-64147: Verify that files can be accessed by paths with fLipPeD case.
+    QFileInfo tmpInfo(tmp);
+    auto *tmpInfoPriv = QFileInfoPrivate::get(&tmpInfo);
+    if (!qt_isCaseSensitive(tmpInfoPriv->fileEntry, tmpInfoPriv->metaData)) {
+        // Verify that files can be accessed by paths with fLipPeD case.
         for (int i = 0; i < paths.size(); ++i) {
+            const QModelIndex normalCaseIndex = indexes.at(i);
             const QModelIndex flippedCaseIndex = model->index(flipCase(paths.at(i)));
-            QCOMPARE(indexes.at(i), flippedCaseIndex);
+#if !defined(Q_OS_WIN)
+            QEXPECT_FAIL("", "QFileSystemModelNodePathKey is hard-coded to be case"
+                " sensitive on non-Windows and case-insensitive on Windows (QTBUG-31103)", Abort);
+#endif
+            QCOMPARE(normalCaseIndex, flippedCaseIndex);
         }
     }
 }
@@ -1291,6 +1305,109 @@ void tst_QFileSystemModel::fileInfo()
     idx = model.setRootPath(dirPath);
     QCOMPARE(model.fileInfo(idx), QFileInfo(dirPath));
 }
+
+void tst_QFileSystemModel::pathWithTrailingSpace_data()
+{
+    QTest::addColumn<QString>("input");
+    QTest::addColumn<QString>("foundAs");
+
+    static constexpr bool windows =
+#ifdef Q_OS_WIN
+        true;
+#else
+        false;
+#endif
+    // Cover the various cases as documented at
+    // https://learn.microsoft.com/en-us/troubleshoot/windows-client/shell-experience/file-folder-name-whitespace-characters
+
+    QTest::addRow("trailing space") << "space "
+        << (windows ? "space" : "space ");
+    QTest::addRow("leading space") << " leadingspace"
+        << (windows ? "leadingspace" : " leadingspace");
+    QTest::addRow("trailing dot") << "dot."
+        << (windows ? "dot" : "dot.");
+    QTest::addRow("leading dot") << ".dot" << ".dot";
+
+    QTest::addRow("spacedot .") << "spacedot ."
+        << (windows ? "spacedot" : "spacedot .");
+    QTest::addRow("dotspace. ") << "dotspace. "
+        << (windows ? "dotspace" : "dotspace. ");
+    QTest::addRow("invisible") << "      "
+        << (windows ? "" : "      ");
+
+    QTest::addRow("leading 0x3000") << "\u3000-x3000" << "\u3000-x3000";
+    QTest::addRow("trailing 0x3000") << "x3000-\u3000" << "x3000-\u3000";
+}
+
+void tst_QFileSystemModel::pathWithTrailingSpace()
+{
+    QFETCH(const QString, input);
+    QFETCH(const QString, foundAs);
+
+    const bool validInput = !foundAs.isEmpty();
+
+    QTemporaryDir temp;
+
+    QFileSystemModel model;
+    model.setReadOnly(false);
+    const QModelIndex rootIndex = model.setRootPath(temp.path());
+    const QDir rootDir = model.rootDirectory();
+    const QString absoluteInput = rootDir.absoluteFilePath(input);
+    const QString absoluteFoundAs = validInput ? rootDir.absoluteFilePath(foundAs)
+                                               : rootDir.absolutePath();
+
+    const QModelIndex createdIndex = model.mkdir(rootIndex, input);
+    QCOMPARE(createdIndex.isValid(), validInput);
+    if (createdIndex.isValid())
+        QCOMPARE(model.filePath(createdIndex), absoluteFoundAs);
+    const QModelIndex foundIndex = model.index(absoluteInput);
+    QVERIFY(foundIndex.isValid());
+    QCOMPARE(model.filePath(foundIndex), absoluteFoundAs);
+
+    if (createdIndex.isValid())
+        QVERIFY(model.rmdir(createdIndex));
+
+    const QPersistentModelIndex newFolder = model.mkdir(rootIndex, "New Folder");
+    QVERIFY(newFolder.isValid());
+    QVERIFY(model.flags(newFolder) & Qt::ItemIsEditable);
+    QCOMPARE(model.setData(newFolder, input, Qt::EditRole), validInput);
+    if (validInput) {
+        const QModelIndex renamedIndex = model.index(absoluteInput);
+        QVERIFY(renamedIndex.isValid());
+    }
+}
+
+#ifdef Q_OS_WIN
+void tst_QFileSystemModel::correctFileInfoForDriveRootPath()
+{
+    const QString current = QDir::currentPath();
+    const qsizetype firstSlash = current.indexOf(u'/');
+    const QString drive = current.left(firstSlash);
+    QCOMPARE(drive.length(), 2);
+
+    // Obtaining the drive root path's file info must not result in the current directory's file
+    // info (QTBUG-133746)
+    const QString slashDrive = drive + u'/';
+    const QString backslashDrive = drive + u'\\';
+    QFileSystemModel model;
+    QFileInfo info = model.fileInfo(model.index(slashDrive, 0));
+    QCOMPARE(info.absoluteFilePath(), slashDrive);
+    QCOMPARE(info.absolutePath(), slashDrive);
+    info = model.fileInfo(model.index(backslashDrive, 0));
+    QCOMPARE(info.absoluteFilePath(), slashDrive);
+    QCOMPARE(info.absolutePath(), slashDrive);
+
+    const qsizetype secondSlash = current.indexOf(u'/', firstSlash + 1);
+    if (secondSlash == -1)
+        return;
+
+    const QString rootChild = current.left(secondSlash);
+    QModelIndex childIndex = model.index(rootChild, 0);
+    info = model.fileInfo(childIndex.parent());
+    QCOMPARE(info.absoluteFilePath(), slashDrive);
+    QCOMPARE(info.absolutePath(), slashDrive);
+}
+#endif
 
 QTEST_MAIN(tst_QFileSystemModel)
 #include "tst_qfilesystemmodel.moc"

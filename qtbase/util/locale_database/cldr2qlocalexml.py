@@ -27,27 +27,34 @@ append new entries to enumdata.py's lists and update documentation in
 src/corelib/text/qlocale.qdoc, adding the new entries in alphabetic
 order.
 
-While updating the locale data, check also for updates to MS-Win's
-time zone names; see cldr2qtimezone.py for details.
-
-All the scripts mentioned support --help to tell you how to use them.
+Both of the scripts mentioned support --help to tell you how to use
+them.
 
 .. _CLDR: https://unicode.org/Public/cldr/
 .. _github: https://github.com/unicode-org/cldr
 """
 
 from pathlib import Path
-import sys
 import argparse
 
 from cldr import CldrReader
+from typing import TextIO
 from qlocalexml import QLocaleXmlWriter
 
 
-def main(out, err):
-    all_calendars = ['gregorian', 'persian', 'islamic']  # 'hebrew'
+def main(argv: list[str], out: TextIO, err: TextIO) -> int:
+    """Generate a QLocaleXML file from CLDR data.
+
+    Takes sys.argv, sys.stdout, sys.stderr (or equivalents) as
+    arguments. In argv[1:], it expects the root of the CLDR data
+    directory as first parameter and the name of the file in which to
+    save QLocaleXML data as second parameter. It accepts a --calendars
+    option to select which calendars to support (all available by
+    default)."""
+    all_calendars = ['gregorian', 'persian', 'islamic']
 
     parser = argparse.ArgumentParser(
+        prog=Path(argv[0]).name,
         description='Generate QLocaleXML from CLDR data.',
         formatter_class=argparse.ArgumentDefaultsHelpFormatter)
     parser.add_argument('cldr_path', help='path to the root of the CLDR tree')
@@ -56,8 +63,11 @@ def main(out, err):
     parser.add_argument('--calendars', help='select calendars to emit data for',
                         nargs='+', metavar='CALENDAR',
                         choices=all_calendars, default=all_calendars)
-
-    args = parser.parse_args()
+    parser.add_argument('-v', '--verbose', help='more verbose output',
+                        action='count', default=0)
+    parser.add_argument('-q', '--quiet', help='less output',
+                        dest='verbose', action='store_const', const=-1)
+    args = parser.parse_args(argv[1:])
 
     root = Path(args.cldr_path)
     root_xml_path = 'common/main/root.xml'
@@ -73,21 +83,26 @@ def main(out, err):
         parser.error(f'Please use a .xml extension on your output file name, not {xml}')
     else:
         try:
-            emit = open(xml, 'w')
+            emit = open(xml, 'w', encoding="utf-8")
         except IOError as e:
             parser.error(f'Failed to open "{xml}" to write output to it')
 
-    # TODO - command line options to tune choice of grumble and whitter:
-    reader = CldrReader(root, err.write, err.write)
-    writer = QLocaleXmlWriter(emit.write)
+    reader = CldrReader(root,
+                        (lambda *x: 0) if args.verbose < 0 else
+                        # Use stderr for logging if stdout is where our XML is going:
+                        err.write if out is emit else out.write,
+                        err.write)
+    writer = QLocaleXmlWriter(reader.root.cldrVersion, emit.write)
 
-    writer.version(reader.root.cldrVersion)
     writer.enumData(reader.root.englishNaming)
     writer.likelySubTags(reader.likelySubTags())
-    writer.locales(reader.readLocales(args.calendars), args.calendars)
+    writer.zoneData(*reader.zoneData()) # Locale-independent zone data.
+    en_US = tuple(id for id, name in reader.root.codesToIdName('en', '', 'US'))
+    writer.locales(reader.readLocales(args.calendars), args.calendars, en_US)
 
     writer.close(err.write)
     return 0
 
 if __name__ == '__main__':
-    sys.exit(main(sys.stdout, sys.stderr))
+    import sys
+    sys.exit(main(sys.argv, sys.stdout, sys.stderr))

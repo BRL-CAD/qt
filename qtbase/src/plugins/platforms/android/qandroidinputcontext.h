@@ -79,6 +79,7 @@ public:
     bool isComposing() const;
     void clear();
     void setFocusObject(QObject *object) override;
+    QObject *focusObject();
     void sendShortcut(const QKeySequence &);
 
     //---------------//
@@ -92,6 +93,7 @@ public:
     QString getSelectedText(jint flags);
     QString getTextAfterCursor(jint length, jint flags);
     QString getTextBeforeCursor(jint length, jint flags);
+    jboolean replaceText(jint start, jint end, const QString text, jint newCursorPosition);
     jboolean setComposingText(const QString &text, jint newCursorPosition);
     jboolean setComposingRegion(jint start, jint end);
     jboolean setSelection(jint start, jint end);

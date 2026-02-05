@@ -1,5 +1,6 @@
 // Copyright (C) 2016 The Qt Company Ltd.
 // SPDX-License-Identifier: LicenseRef-Qt-Commercial OR LGPL-3.0-only OR GPL-2.0-only OR GPL-3.0-only
+// Qt-Security score:significant reason:default
 
 #ifndef QDBUSEXTRATYPES_H
 #define QDBUSEXTRATYPES_H
@@ -38,6 +39,9 @@ public:
     operator QVariant() const;
 
 private:
+#ifndef QT_NO_DEBUG_STREAM
+    Q_DBUS_EXPORT friend QDebug operator<<(QDebug, const QDBusObjectPath &);
+#endif
     void doCheck();
 };
 Q_DECLARE_SHARED(QDBusObjectPath)
@@ -74,10 +78,7 @@ class Q_DBUS_EXPORT QDBusSignature
 {
     QString m_signature;
 public:
-    QDBusSignature() noexcept
-    {
-        m_signature.detach(); // mark non-null (empty signatures are valid)
-    }
+    QDBusSignature() noexcept;
     // compiler-generated copy/move constructor/assignment operators are ok!
     // compiler-generated destructor is ok!
 

@@ -1,5 +1,6 @@
 // Copyright (C) 2023 The Qt Company Ltd.
 // SPDX-License-Identifier: LicenseRef-Qt-Commercial OR LGPL-3.0-only OR GPL-2.0-only OR GPL-3.0-only
+// Qt-Security score:significant reason:default
 
 #ifndef QNETWORKREQUESTFACTORY_H
 #define QNETWORKREQUESTFACTORY_H
@@ -11,6 +12,7 @@
 #include <QtCore/qshareddata.h>
 #include <QtCore/qurlquery.h>
 #include <QtCore/qurl.h>
+#include <QtCore/qvariant.h>
 
 #include <chrono>
 
@@ -24,7 +26,7 @@ class QSslConfiguration;
 class QNetworkRequestFactoryPrivate;
 QT_DECLARE_QESDP_SPECIALIZATION_DTOR_WITH_EXPORT(QNetworkRequestFactoryPrivate, Q_NETWORK_EXPORT)
 
-class QT_TECH_PREVIEW_API QNetworkRequestFactory
+class QNetworkRequestFactory
 {
 public:
     Q_NETWORK_EXPORT QNetworkRequestFactory();
@@ -73,6 +75,16 @@ public:
     Q_NETWORK_EXPORT QUrlQuery queryParameters() const;
     Q_NETWORK_EXPORT void setQueryParameters(const QUrlQuery &query);
     Q_NETWORK_EXPORT void clearQueryParameters();
+
+    Q_NETWORK_EXPORT void setPriority(QNetworkRequest::Priority priority);
+    Q_NETWORK_EXPORT QNetworkRequest::Priority priority() const;
+
+    Q_NETWORK_EXPORT QVariant attribute(QNetworkRequest::Attribute attribute) const;
+    Q_NETWORK_EXPORT QVariant attribute(QNetworkRequest::Attribute attribute,
+                                        const QVariant &defaultValue) const;
+    Q_NETWORK_EXPORT void setAttribute(QNetworkRequest::Attribute attribute, const QVariant &value);
+    Q_NETWORK_EXPORT void clearAttribute(QNetworkRequest::Attribute attribute);
+    Q_NETWORK_EXPORT void clearAttributes();
 
 private:
 #ifndef QT_NO_DEBUG_STREAM

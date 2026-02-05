@@ -1,5 +1,6 @@
 // Copyright (C) 2016 The Qt Company Ltd.
 // SPDX-License-Identifier: LicenseRef-Qt-Commercial OR LGPL-3.0-only OR GPL-2.0-only OR GPL-3.0-only
+// Qt-Security score:significant reason:default
 
 #include "qcolordialog.h"
 
@@ -383,7 +384,7 @@ void QWellArray::setCurrent(int row, int col)
     if ((curRow == row) && (curCol == col))
         return;
 
-    if (row < 0 || col < 0)
+    if (row < 0 || col < 0 || row >= nrows || col >= ncols)
         row = col = -1;
 
     int oldRow = curRow;
@@ -500,6 +501,12 @@ public:
         return false;
     }
 
+    void applicationStateChanged(Qt::ApplicationState state)
+    {
+        if (state != Qt::ApplicationActive)
+            m_dp->releaseColorPicking();
+    }
+
 private:
     QColorDialogPrivate *m_dp;
 };
@@ -516,8 +523,6 @@ int QColorDialog::customCount()
 }
 
 /*!
-    \since 4.5
-
     Returns the custom color at the given \a index as a QColor value.
 */
 QColor QColorDialog::customColor(int index)
@@ -1398,8 +1403,8 @@ void QColorShower::htmlEd()
     if (t.isEmpty())
         return;
 
-    if (!t.startsWith(QStringLiteral("#"))) {
-        t = QStringLiteral("#") + t;
+    if (!t.startsWith(u"#")) {
+        t.prepend(u"#");
         QSignalBlocker blocker(htEd);
         htEd->setText(t);
     }
@@ -1612,7 +1617,7 @@ void QColorDialogPrivate::pickScreenColor()
     Q_Q(QColorDialog);
 
     auto *platformServices = QGuiApplicationPrivate::platformIntegration()->services();
-    if (platformServices->hasCapability(QPlatformServices::Capability::ColorPicking)) {
+    if (platformServices && platformServices->hasCapability(QPlatformServices::Capability::ColorPicking)) {
         if (auto *colorPicker = platformServices->colorPicker(q->windowHandle())) {
             q->connect(colorPicker, &QPlatformServiceColorPicker::colorPicked, q,
                        [q, colorPicker](const QColor &color) {
@@ -1627,6 +1632,8 @@ void QColorDialogPrivate::pickScreenColor()
     if (!colorPickingEventFilter)
         colorPickingEventFilter = new QColorPickingEventFilter(this, q);
     q->installEventFilter(colorPickingEventFilter);
+    QObject::connect(qApp, &QGuiApplication::applicationStateChanged,
+                     colorPickingEventFilter, &QColorPickingEventFilter::applicationStateChanged);
     // If user pushes Escape, the last color before picking will be restored.
     beforeScreenColorPicking = cs->currentColor();
 #ifndef QT_NO_CURSOR
@@ -1673,6 +1680,8 @@ void QColorDialogPrivate::releaseColorPicking()
     Q_Q(QColorDialog);
     cp->setCrossVisible(true);
     q->removeEventFilter(colorPickingEventFilter);
+    QObject::disconnect(qApp, &QGuiApplication::applicationStateChanged,
+                        colorPickingEventFilter, &QColorPickingEventFilter::applicationStateChanged);
     q->releaseMouse();
 #ifdef Q_OS_WIN32
     updateTimer->stop();
@@ -1974,8 +1983,6 @@ static const Qt::WindowFlags qcd_DefaultWindowFlags =
 */
 
 /*!
-    \since 4.5
-
     Constructs a color dialog with the given \a parent.
 */
 QColorDialog::QColorDialog(QWidget *parent)
@@ -1984,8 +1991,6 @@ QColorDialog::QColorDialog(QWidget *parent)
 }
 
 /*!
-    \since 4.5
-
     Constructs a color dialog with the given \a parent and specified
     \a initial color.
 */
@@ -2056,8 +2061,6 @@ void QColorDialog::setOption(ColorDialogOption option, bool on)
 }
 
 /*!
-    \since 4.5
-
     Returns \c true if the given \a option is enabled; otherwise, returns
     false.
 
@@ -2110,8 +2113,6 @@ QColorDialog::ColorDialogOptions QColorDialog::options() const
 /*!
     \enum QColorDialog::ColorDialogOption
 
-    \since 4.5
-
     This enum specifies various options that affect the look and feel
     of a color dialog.
 
@@ -2161,7 +2162,9 @@ void QColorDialog::setVisible(bool visible)
 */
 void QColorDialogPrivate::setVisible(bool visible)
 {
-    Q_Q(QColorDialog);
+    // Don't use Q_Q here! This function is called from ~QDialog,
+    // so Q_Q calling q_func() invokes undefined behavior (invalid cast in q_func()).
+    const auto q = static_cast<QDialog *>(q_ptr);
 
     if (visible)
         selectedQColor = QColor();
@@ -2171,7 +2174,7 @@ void QColorDialogPrivate::setVisible(bool visible)
             // Set WA_DontShowOnScreen so that QDialog::setVisible(visible) below
             // updates the state correctly, but skips showing the non-native version:
             q->setAttribute(Qt::WA_DontShowOnScreen);
-        } else {
+        } else if (visible) {
             initWidgets();
         }
     } else {
@@ -2182,8 +2185,6 @@ void QColorDialogPrivate::setVisible(bool visible)
 }
 
 /*!
-    \since 4.5
-
     Opens the dialog and connects its colorSelected() signal to the slot specified
     by \a receiver and \a member.
 
@@ -2199,8 +2200,6 @@ void QColorDialog::open(QObject *receiver, const char *member)
 }
 
 /*!
-    \since 4.5
-
     Pops up a modal color dialog with the given window \a title (or "Select Color" if none is
     specified), lets the user choose a color, and returns that color. The color is initially set
     to \a initial. The dialog is a child of \a parent. It returns an invalid (see
@@ -2211,13 +2210,19 @@ void QColorDialog::open(QObject *receiver, const char *member)
 QColor QColorDialog::getColor(const QColor &initial, QWidget *parent, const QString &title,
                               ColorDialogOptions options)
 {
-    QColorDialog dlg(parent);
+    QAutoPointer<QColorDialog> dlg(new QColorDialog(parent));
     if (!title.isEmpty())
-        dlg.setWindowTitle(title);
-    dlg.setOptions(options);
-    dlg.setCurrentColor(initial);
-    dlg.exec();
-    return dlg.selectedColor();
+        dlg->setWindowTitle(title);
+    dlg->setOptions(options);
+    dlg->setCurrentColor(initial);
+
+    // If the dlg was deleted with a parent window,
+    // dlg == nullptr after leaving the exec().
+    dlg->exec();
+    if (bool(dlg))
+        return dlg->selectedColor();
+    else
+        return QColor();
 }
 
 /*!

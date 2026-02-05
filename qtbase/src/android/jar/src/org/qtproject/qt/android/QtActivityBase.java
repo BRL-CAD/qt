@@ -3,9 +3,12 @@
 
 package org.qtproject.qt.android;
 
+import android.annotation.SuppressLint;
 import android.app.Activity;
 import android.content.Intent;
+import android.content.pm.ActivityInfo;
 import android.content.res.Configuration;
+import android.content.res.Resources;
 import android.net.Uri;
 import android.os.Build;
 import android.os.Bundle;
@@ -18,41 +21,48 @@ import android.view.MenuItem;
 import android.view.MotionEvent;
 import android.view.View;
 import android.view.Window;
+import java.lang.IllegalArgumentException;
+
+import android.widget.Toast;
 
 public class QtActivityBase extends Activity
 {
+    public static final String EXTRA_SOURCE_INFO = "org.qtproject.qt.android.sourceInfo";
+
     private String m_applicationParams = "";
     private boolean m_isCustomThemeSet = false;
     private boolean m_retainNonConfigurationInstance = false;
-
-    private QtActivityDelegate m_delegate;
-
-    public static final String EXTRA_SOURCE_INFO = "org.qtproject.qt.android.sourceInfo";
+    private Configuration m_prevConfig;
+    private final QtActivityDelegate m_delegate;
+    private boolean m_onCreateSucceeded = false;
 
     private void addReferrer(Intent intent)
     {
-        if (intent.getExtras() != null && intent.getExtras().getString(EXTRA_SOURCE_INFO) != null)
+        Bundle extras = intent.getExtras();
+        if (extras != null && extras.getString(EXTRA_SOURCE_INFO) != null)
             return;
 
-        String browserApplicationId = "";
-        if (intent.getExtras() != null)
-            browserApplicationId = intent.getExtras().getString(Browser.EXTRA_APPLICATION_ID);
-
-        String sourceInformation = "";
-        if (browserApplicationId != null && !browserApplicationId.isEmpty()) {
-            sourceInformation = browserApplicationId;
-        } else {
+        if (extras == null) {
             Uri referrer = getReferrer();
-            if (referrer != null)
-                sourceInformation = referrer.toString().replaceFirst("android-app://", "");
+            if (referrer != null) {
+                String cleanReferrer = referrer.toString().replaceFirst("android-app://", "");
+                intent.putExtra(EXTRA_SOURCE_INFO, cleanReferrer);
+            }
+        } else {
+            String applicationId = extras.getString(Browser.EXTRA_APPLICATION_ID);
+            if (applicationId != null)
+                intent.putExtra(EXTRA_SOURCE_INFO, applicationId);
         }
-
-        intent.putExtra(EXTRA_SOURCE_INFO, sourceInformation);
     }
 
-    // Append any parameters to your application.
-    // Either a whitespace or a tab is accepted as a separator between parameters.
-    /** @noinspection unused*/
+    /**
+     * Adds parameters to the list of arguments that will be passed to the
+     * native Qt application's main() function.
+     *
+     * Either a whitespace or a tab is accepted as a separator.
+     */
+    /**unused*/
+    @SuppressWarnings("unused")
     public void appendApplicationParameters(String params)
     {
         if (params == null || params.isEmpty())
@@ -63,23 +73,22 @@ public class QtActivityBase extends Activity
         m_applicationParams += params;
     }
 
-    private void handleActivityRestart() {
-        if (QtNative.getStateDetails().isStarted) {
-            boolean updated = m_delegate.updateActivityAfterRestart(this);
-            if (!updated) {
-                // could not update the activity so restart the application
-                Intent intent = Intent.makeRestartActivityTask(getComponentName());
-                startActivity(intent);
-                QtNative.quitApp();
-                Runtime.getRuntime().exit(0);
-            }
-        }
-    }
-
     @Override
     public void setTheme(int resId) {
         super.setTheme(resId);
         m_isCustomThemeSet = true;
+    }
+
+    private void restartApplication() {
+        Intent intent = Intent.makeRestartActivityTask(getComponentName());
+        startActivity(intent);
+        QtNative.quitApp();
+        Runtime.getRuntime().exit(0);
+    }
+
+    public QtActivityBase()
+    {
+        m_delegate = new QtActivityDelegate(this);
     }
 
     @Override
@@ -94,29 +103,47 @@ public class QtActivityBase extends Activity
                     android.R.style.Theme_Holo_Light);
         }
 
-        m_delegate = new QtActivityDelegate(this);
+        if (QtNative.getStateDetails().isStarted) {
+            // We don't yet have a reliable way to keep the app
+            // running properly in case of an Activity only restart,
+            // so for now restart the whole app.
+            restartApplication();
+        }
 
-        handleActivityRestart();
+        QtNative.registerAppStateListener(m_delegate);
         addReferrer(getIntent());
 
-        QtActivityLoader loader = new QtActivityLoader(this);
-        loader.appendApplicationParameters(m_applicationParams);
+        try {
+            QtActivityLoader loader = QtActivityLoader.getActivityLoader(this);
+            loader.appendApplicationParameters(m_applicationParams);
 
-        loader.loadQtLibraries();
-        m_delegate.startNativeApplication(loader.getApplicationParameters(),
-                loader.getMainLibraryPath());
+            QtLoader.LoadingResult result = loader.loadQtLibraries();
+            if (result == QtLoader.LoadingResult.Succeeded) {
+                m_delegate.startNativeApplication(loader.getApplicationParameters(),
+                        loader.getMainLibraryPath());
+            } else if (result == QtLoader.LoadingResult.Failed) {
+                showFatalFinishingToast();
+                return;
+            }
+        } catch (IllegalArgumentException e) {
+            e.printStackTrace();
+            showFatalFinishingToast();
+            return;
+        }
+
+        m_prevConfig = new Configuration(getResources().getConfiguration());
+        m_onCreateSucceeded = true;
     }
 
-    @Override
-    protected void onStart()
-    {
-        super.onStart();
-    }
+    private void showFatalFinishingToast() {
+        Resources resources = getResources();
+        String packageName = getPackageName();
+        @SuppressLint("DiscouragedApi") int id = resources.getIdentifier(
+                "fatal_error_msg", "string", packageName);
+        String message = resources.getString(id);
+        Toast.makeText(this, message, Toast.LENGTH_LONG).show();
 
-    @Override
-    protected void onRestart()
-    {
-        super.onRestart();
+        finish();
     }
 
     @Override
@@ -135,9 +162,9 @@ public class QtActivityBase extends Activity
         QtNative.setApplicationState(QtNative.ApplicationState.ApplicationActive);
         if (QtNative.getStateDetails().isStarted) {
             m_delegate.displayManager().registerDisplayListener();
-            QtNative.updateWindow();
+            QtWindow.updateWindows();
             // Suspending the app clears the immersive mode, so we need to set it again.
-            m_delegate.displayManager().updateFullScreen();
+            m_delegate.displayManager().reinstateFullScreen();
         }
     }
 
@@ -152,7 +179,12 @@ public class QtActivityBase extends Activity
     protected void onDestroy()
     {
         super.onDestroy();
+
+        if (!m_onCreateSucceeded)
+            System.exit(-1);
+
         if (!m_retainNonConfigurationInstance) {
+            QtNative.unregisterAppStateListener(m_delegate);
             QtNative.terminateQt();
             QtNative.setActivity(null);
             QtNative.getQtThread().exit();
@@ -164,7 +196,15 @@ public class QtActivityBase extends Activity
     public void onConfigurationChanged(Configuration newConfig)
     {
         super.onConfigurationChanged(newConfig);
-        m_delegate.handleUiModeChange(newConfig.uiMode & Configuration.UI_MODE_NIGHT_MASK);
+
+        int diff = newConfig.diff(m_prevConfig);
+        if ((diff & ActivityInfo.CONFIG_UI_MODE) != 0)
+            m_delegate.handleUiModeChange();
+
+        if ((diff & ActivityInfo.CONFIG_LOCALE) != 0)
+            QtNative.updateLocale();
+
+        m_prevConfig = new Configuration(newConfig);
     }
 
     @Override
@@ -262,9 +302,15 @@ public class QtActivityBase extends Activity
     protected void onRestoreInstanceState(Bundle savedInstanceState)
     {
         super.onRestoreInstanceState(savedInstanceState);
+
+        // only restore when this Activity is being recreated for a config change
+        if (getLastNonConfigurationInstance() == null)
+            return;
+
         QtNative.setStarted(savedInstanceState.getBoolean("Started"));
-        int savedSystemUiVisibility = savedInstanceState.getInt("SystemUiVisibility");
-        m_delegate.displayManager().setSystemUiVisibility(savedSystemUiVisibility);
+        boolean isFullScreen = savedInstanceState.getBoolean("isFullScreen");
+        boolean expandedToCutout = savedInstanceState.getBoolean("expandedToCutout");
+        m_delegate.displayManager().setSystemUiVisibility(isFullScreen, expandedToCutout);
         // FIXME restore all surfaces
     }
 
@@ -280,7 +326,8 @@ public class QtActivityBase extends Activity
     protected void onSaveInstanceState(Bundle outState)
     {
         super.onSaveInstanceState(outState);
-        outState.putInt("SystemUiVisibility", m_delegate.displayManager().systemUiVisibility());
+        outState.putBoolean("isFullScreen", m_delegate.displayManager().isFullScreen());
+        outState.putBoolean("expandedToCutout", m_delegate.displayManager().expandedToCutout());
         outState.putBoolean("Started", QtNative.getStateDetails().isStarted);
     }
 
@@ -289,7 +336,7 @@ public class QtActivityBase extends Activity
     {
         super.onWindowFocusChanged(hasFocus);
         if (hasFocus)
-            m_delegate.displayManager().updateFullScreen();
+            m_delegate.displayManager().reinstateFullScreen();
     }
 
     @Override
@@ -309,18 +356,12 @@ public class QtActivityBase extends Activity
     @Override
     public void onRequestPermissionsResult(int requestCode, String[] permissions, int[] grantResults)
     {
-        QtNative.sendRequestPermissionsResult(requestCode, permissions, grantResults);
+        QtNative.sendRequestPermissionsResult(requestCode, grantResults);
     }
 
     @UsedFromNativeCode
     public void hideSplashScreen(final int duration)
     {
         m_delegate.hideSplashScreen(duration);
-    }
-
-    @UsedFromNativeCode
-    QtActivityDelegateBase getActivityDelegate()
-    {
-        return m_delegate;
     }
 }

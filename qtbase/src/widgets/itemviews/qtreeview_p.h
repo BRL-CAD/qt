@@ -1,5 +1,6 @@
 // Copyright (C) 2016 The Qt Company Ltd.
 // SPDX-License-Identifier: LicenseRef-Qt-Commercial OR LGPL-3.0-only OR GPL-2.0-only OR GPL-3.0-only
+// Qt-Security score:significant reason:default
 
 #ifndef QTREEVIEW_P_H
 #define QTREEVIEW_P_H
@@ -16,8 +17,10 @@
 //
 
 #include <QtWidgets/private/qtwidgetsglobal_p.h>
+#include "qtreeview.h"
 #include "private/qabstractitemview_p.h"
 #include <QtCore/qabstractitemmodel.h>
+#include <QtCore/qbasictimer.h>
 #include <QtCore/qlist.h>
 #if QT_CONFIG(animation)
 #include <QtCore/qvariantanimation.h>
@@ -58,7 +61,7 @@ public:
           itemsExpandable(true), sortingEnabled(false),
           expandsOnDoubleClick(true),
           allColumnsShowFocus(false), customIndent(false), current(0), spanning(false),
-          animationsEnabled(false), columnResizeTimerID(0),
+          animationsEnabled(false),
           autoExpandDelay(-1), hoverBranch(-1), geometryRecursionBlock(false), hasRemovedItems(false),
           treePosition(0) {}
 
@@ -137,11 +140,11 @@ public:
     int itemDecorationAt(const QPoint &pos) const;
     QRect itemDecorationRect(const QModelIndex &index) const;
 
-    QList<QPair<int, int>> columnRanges(const QModelIndex &topIndex,
+    QList<std::pair<int, int>> columnRanges(const QModelIndex &topIndex,
                                         const QModelIndex &bottomIndex) const;
     void select(const QModelIndex &start, const QModelIndex &stop, QItemSelectionModel::SelectionFlags command);
 
-    QPair<int,int> startAndEndColumns(const QRect &rect) const;
+    std::pair<int,int> startAndEndColumns(const QRect &rect) const;
 
     void updateChildCount(const int parentItem, const int delta);
 
@@ -183,7 +186,7 @@ public:
     bool customIndent;
 
     // used for drawing
-    mutable QPair<int,int> leftAndRight;
+    mutable std::pair<int,int> leftAndRight;
     mutable int current;
     mutable bool spanning;
 
@@ -239,7 +242,7 @@ public:
     QSet<QPersistentModelIndex> spanningIndexes;
 
     // used for updating resized columns
-    int columnResizeTimerID;
+    QBasicTimer columnResizeTimer;
     QList<int> columnsToUpdate;
 
     // used for the automatic opening of nodes during DND

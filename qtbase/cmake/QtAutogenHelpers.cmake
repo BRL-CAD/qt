@@ -78,14 +78,23 @@ endfunction()
 
 # Complete manual moc invocation with full control.
 # Use AUTOMOC whenever possible.
-# INCLUDE_DIRECTORIES specifies a list of include directories used by 'moc'.
-# INCLUDE_DIRECTORY_TARGETS specifies a list of targets to extract the INTERFACE_INCLUDE_DIRECTORIES
-# property and use it as the 'moc' include directories.
+# Multi-value Arguments:
+#     INCLUDE_DIRECTORIES
+#         Specifies a list of include directories used by 'moc'.
+#     INCLUDE_DIRECTORY_TARGETS
+#         Specifies a list of targets to extract the INTERFACE_INCLUDE_DIRECTORIES
+#         property and use it as the 'moc' include directories.(Deprecated use TARGETS instead)
+#     DEFINITIONS
+#         List of the definitions that should be added to the moc command line arguments.
+#         Supports the syntax both with and without the prepending '-D'.
+#     TARGETS
+#         The list of targets that will be used to collect the INTERFACE_INCLUDE_DIRECTORIES,
+#         INCLUDE_DIRECTORIES, and COMPILE_DEFINITIONS properties.
 function(qt_manual_moc result)
     cmake_parse_arguments(arg
                           ""
                           "OUTPUT_MOC_JSON_FILES"
-                          "FLAGS;INCLUDE_DIRECTORIES;INCLUDE_DIRECTORY_TARGETS"
+                          "FLAGS;INCLUDE_DIRECTORIES;INCLUDE_DIRECTORY_TARGETS;DEFINITIONS;TARGETS"
                           ${ARGN})
     set(moc_files)
     set(metatypes_json_list)
@@ -102,7 +111,7 @@ function(qt_manual_moc result)
                 "-I\n${dir}")
         endforeach()
 
-        foreach(dep IN ITEMS ${arg_INCLUDE_DIRECTORY_TARGETS})
+        foreach(dep IN LISTS arg_INCLUDE_DIRECTORY_TARGETS arg_TARGETS)
             set(include_expr "$<TARGET_PROPERTY:${dep},INTERFACE_INCLUDE_DIRECTORIES>")
             list(APPEND moc_parameters
                 "$<$<BOOL:${include_expr}>:-I\n$<JOIN:${include_expr},\n-I\n>>")
@@ -114,10 +123,7 @@ function(qt_manual_moc result)
                     set(dep "${QT_CMAKE_EXPORT_NAMESPACE}::${dep}")
                 endif()
 
-                get_target_property(alias_dep ${dep} ALIASED_TARGET)
-                if(alias_dep)
-                    set(dep ${alias_dep})
-                endif()
+                _qt_internal_dealias_target(dep)
 
                 get_target_property(loc ${dep} IMPORTED_LOCATION)
                 string(REGEX REPLACE "(.*)/Qt[^/]+\\.framework.*" "\\1" loc "${loc}")
@@ -128,6 +134,30 @@ function(qt_manual_moc result)
             endif()
         endforeach()
 
+        foreach(dep IN LISTS arg_TARGETS)
+            set(include_property_expr
+                "$<TARGET_GENEX_EVAL:${dep},$<TARGET_PROPERTY:${dep},INCLUDE_DIRECTORIES>>")
+            list(APPEND moc_parameters
+                "$<$<BOOL:${include_property_expr}>:-I\n$<JOIN:${include_property_expr},\n-I\n>>")
+
+            set(defines_property_expr
+                "$<TARGET_GENEX_EVAL:${dep},$<TARGET_PROPERTY:${dep},COMPILE_DEFINITIONS>>")
+            set(defines_with_d "$<FILTER:${defines_property_expr},INCLUDE,^-D>")
+            set(defines_without_d "$<FILTER:${defines_property_expr},EXCLUDE,^-D>")
+            list(APPEND moc_parameters
+                "$<$<BOOL:${defines_with_d}>:$<JOIN:${defines_with_d},\n>>")
+            list(APPEND moc_parameters
+                "$<$<BOOL:${defines_without_d}>:-D\n$<JOIN:${defines_without_d},\n-D\n>>")
+        endforeach()
+
+        foreach(def IN LISTS arg_DEFINITIONS)
+            if(NOT def MATCHES "^-D")
+                list(APPEND moc_parameters "-D\n${def}")
+            else()
+                list(APPEND moc_parameters "${def}")
+            endif()
+        endforeach()
+
         set(metatypes_byproducts)
         if (arg_OUTPUT_MOC_JSON_FILES)
             set(moc_json_file "${outfile}.json")
@@ -135,6 +165,9 @@ function(qt_manual_moc result)
             list(APPEND metatypes_json_list "${outfile}.json")
             set(metatypes_byproducts "${outfile}.json")
         endif()
+
+        _qt_internal_get_moc_compiler_flavor_flags(flavor_flags)
+        list(APPEND moc_parameters ${flavor_flags})
 
         if (TARGET Qt::Platform)
            get_target_property(_abi_tag Qt::Platform qt_libcpp_abi_tag)
@@ -166,8 +199,8 @@ function(qt_make_output_file infile prefix suffix source_dir binary_dir result)
     get_filename_component(outfilename "${infile}" NAME_WE)
 
     set(base_dir "${source_dir}")
-    string(FIND "${infile}" "${binary_dir}/" in_binary)
-    if (in_binary EQUAL 0)
+    _qt_internal_path_is_prefix(binary_dir "${infile}" in_binary)
+    if(in_binary)
         set(base_dir "${binary_dir}")
     endif()
 
@@ -181,3 +214,4 @@ function(qt_make_output_file infile prefix suffix source_dir binary_dir result)
     file(MAKE_DIRECTORY "${outpath}")
     set("${result}" "${outpath}/${prefix}${outfilename}${suffix}" PARENT_SCOPE)
 endfunction()
+

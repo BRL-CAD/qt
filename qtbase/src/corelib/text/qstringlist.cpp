@@ -1,12 +1,13 @@
 // Copyright (C) 2016 The Qt Company Ltd.
 // SPDX-License-Identifier: LicenseRef-Qt-Commercial OR LGPL-3.0-only OR GPL-2.0-only OR GPL-3.0-only
+// Qt-Security score:significant reason:default
 
 #include <qstringlist.h>
-#include <qset.h>
 #if QT_CONFIG(regularexpression)
 #  include <qregularexpression.h>
 #endif
 #include <private/qduplicatetracker_p.h>
+#include <QtCore/qlatin1stringmatcher.h>
 
 #include <algorithm>
 QT_BEGIN_NAMESPACE
@@ -48,7 +49,7 @@ QT_BEGIN_NAMESPACE
 
     \reentrant
 
-    QStringList inherits from QList<QString>. Like QList, QStringList is
+    QStringList is actually just a QList<QString>. Like QList, QStringList is
     \l{implicitly shared}. It provides fast index-based access as well as fast
     insertions and removals. Passing string lists as value parameters is both
     fast and safe.
@@ -58,9 +59,7 @@ QT_BEGIN_NAMESPACE
     functions like append(), prepend(), insert(), replace(), removeAll(),
     removeAt(), removeFirst(), removeLast(), and removeOne() to modify a
     QStringList. In addition, QStringList provides a few convenience
-    functions that make handling lists of strings easier:
-
-    \tableofcontents
+    functions that make handling lists of strings easier.
 
     \section1 Initializing
 
@@ -273,10 +272,36 @@ QStringList QtPrivate::QStringList_filter(const QStringList *that, QStringView s
     For example:
     \snippet qstringlist/main.cpp 18
 
-    \sa contains()
+    \sa contains(), filter(const QLatin1StringMatcher &)
 */
 
+/*!
+    \fn QStringList QStringList::filter(const QLatin1StringMatcher &matcher) const
+    \since 6.9
+
+    Returns a list of all the strings matched by \a matcher (i.e. for which
+    \c matcher.indexIn() returns an index >= 0).
+
+    Using QLatin1StringMatcher may be faster when searching in large
+    lists and/or in lists with long strings (the best way to find out is
+    benchmarking).
+
+    For example:
+    \snippet qstringlist/main.cpp 19
+
+    \sa contains(), filter(const QStringMatcher &)
+*/
 QStringList QtPrivate::QStringList_filter(const QStringList &that, const QStringMatcher &matcher)
+{
+    QStringList res;
+    for (const auto &s : that) {
+        if (matcher.indexIn(s) != -1)
+            res.append(s);
+    }
+    return res;
+}
+
+QStringList QtPrivate::QStringList_filter(const QStringList &that, const QLatin1StringMatcher &matcher)
 {
     QStringList res;
     for (const auto &s : that) {
@@ -381,6 +406,9 @@ QStringList QtPrivate::QStringList_filter(const QStringList *that, const QRegula
     Returns a string list where every string has had the \a before
     text replaced with the \a after text wherever the \a before text
     is found.
+
+    \note If you use an empty \a before argument, the \a after argument will be
+    inserted \e {before and after} each character of the string.
 
     \include qstringlist.cpp comparison-case-sensitivity
 

@@ -111,7 +111,7 @@ private:
 #endif
     QScopedPointer<QCocoaDrag> mCocoaDrag;
     QScopedPointer<QCocoaNativeInterface> mNativeInterface;
-    QScopedPointer<QCocoaServices> mServices;
+    mutable QScopedPointer<QCocoaServices> mServices;
     QScopedPointer<QAppleKeyMapper> mKeyboardMapper;
 
 #if QT_CONFIG(vulkan)
@@ -119,6 +119,8 @@ private:
 #endif
 
     QCocoaWindowManager m_windowManager;
+
+    QMacNotificationObserver m_menuTrackingObserver;
 };
 
 Q_DECLARE_OPERATORS_FOR_FLAGS(QCocoaIntegration::Options)

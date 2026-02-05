@@ -14,21 +14,43 @@ set(__qt_chainload_toolchain_file \"\${__qt_initially_configured_toolchain_file}
 ")
     endif()
 
-    if(VCPKG_CHAINLOAD_TOOLCHAIN_FILE)
-        file(TO_CMAKE_PATH "${VCPKG_CHAINLOAD_TOOLCHAIN_FILE}" VCPKG_CHAINLOAD_TOOLCHAIN_FILE)
-        list(APPEND init_vcpkg
-             "set(VCPKG_CHAINLOAD_TOOLCHAIN_FILE \"${VCPKG_CHAINLOAD_TOOLCHAIN_FILE}\")")
+    if(QT_USE_VCPKG)
+        set(init_vcpkg "set(__qt_initially_configured_use_vcpkg TRUE)")
+        if(VCPKG_CHAINLOAD_TOOLCHAIN_FILE)
+            file(TO_CMAKE_PATH "${VCPKG_CHAINLOAD_TOOLCHAIN_FILE}"
+                initial_vcpkg_chainload_toolchain_file)
+            get_filename_component(initial_vcpkg_chainload_toolchain_file
+                "${initial_vcpkg_chainload_toolchain_file}" REALPATH)
+            list(APPEND init_vcpkg
+                "set(__qt_initially_configured_vcpkg_chainload_toolchain_file \
+    \"${initial_vcpkg_chainload_toolchain_file}\")")
+        endif()
+
+        if(VCPKG_TARGET_TRIPLET)
+            list(APPEND init_vcpkg
+                "set(__qt_initially_configured_vcpkg_target_triplet \"${VCPKG_TARGET_TRIPLET}\")")
+        endif()
+    else()
+        set(init_vcpkg "")
     endif()
 
-    if(VCPKG_TARGET_TRIPLET)
-        list(APPEND init_vcpkg
-             "set(VCPKG_TARGET_TRIPLET \"${VCPKG_TARGET_TRIPLET}\" CACHE STRING \"\")")
-    endif()
-
-    if(CMAKE_SYSTEM_NAME STREQUAL "Windows" AND CMAKE_SYSTEM_PROCESSOR STREQUAL "arm64" AND CMAKE_SYSTEM_VERSION STREQUAL "10")
-        list(APPEND init_platform "set(CMAKE_SYSTEM_NAME Windows CACHE STRING \"\")")
-        list(APPEND init_platform "set(CMAKE_SYSTEM_VERSION 10 CACHE STRING \"\")")
-        list(APPEND init_platform "set(CMAKE_SYSTEM_PROCESSOR arm64 CACHE STRING \"\")")
+    if(CMAKE_SYSTEM_NAME STREQUAL "Windows" AND CMAKE_CROSSCOMPILING)
+        list(APPEND init_platform
+            "string(TOUPPER \"${CMAKE_SYSTEM_PROCESSOR}\" _qt_orig_target_system_processor_upper)"
+            "string(TOUPPER \"\${CMAKE_HOST_SYSTEM_PROCESSOR}\" _qt_host_system_processor_upper)"
+            "if(NOT _qt_orig_target_system_processor_upper STREQUAL _qt_host_system_processor_upper"
+            "    OR NOT CMAKE_HOST_SYSTEM_VERSION MATCHES \"^${CMAKE_SYSTEM_VERSION}(\\\\..+|$)\""
+            "    OR QT_FORCE_CROSSCOMPILING)"
+            ""
+            "    set(CMAKE_SYSTEM_NAME \"${CMAKE_SYSTEM_NAME}\" CACHE STRING \"\")"
+            "    set(CMAKE_SYSTEM_VERSION \"${CMAKE_SYSTEM_VERSION}\" CACHE STRING \"\")"
+            "    set(CMAKE_SYSTEM_PROCESSOR \"${CMAKE_SYSTEM_PROCESSOR}\" CACHE STRING \"\")"
+            "else()"
+            "   set(QT_REQUIRE_HOST_PATH_CHECK FALSE)"
+            "endif()"
+            "unset(_qt_host_system_processor_upper)"
+            "unset(_qt_orig_host_system_processor_upper)"
+        )
     endif()
 
     if(QT_QMAKE_TARGET_MKSPEC)
@@ -144,26 +166,27 @@ endif()")
     unset(init_additional_used_variables)
     if(APPLE)
 
-        # For an iOS simulator_and_device build, we should not explicitly set the sysroot, but let
-        # CMake do it's universal build magic to use one sysroot / sdk per-arch.
-        # For a single arch / sysroot iOS build, try to use the initially configured sysroot
-        # path if it exists, otherwise just set the name of the sdk to be used.
-        # The latter "name" part is important for user projects so that running 'xcodebuild' from
-        # the command line chooses the correct sdk.
+        # For an iOS simulator_and_device build, we should not explicitly set the sysroot,
+        # but let CMake do it's universal build magic to use one sysroot / sdk per-arch.
+        # For a single arch / sysroot build, try to use the initially configured sysroot
+        # by name.
+        #
         # Also allow to opt out just in case.
         #
         # TODO: Figure out if the same should apply to universal macOS builds.
 
+        # We want to preserve the sysroot as an SDK name, instead of the path
+        # that CMake transforms it into in Darwin-initialize.cmake, so we pick
+        # it out from the cache, where it hasn't been touched by CMake.
+        set(cmake_sysroot_name "$CACHE{CMAKE_OSX_SYSROOT}")
+
         list(LENGTH CMAKE_OSX_ARCHITECTURES _qt_osx_architectures_count)
-        if(CMAKE_OSX_SYSROOT AND NOT _qt_osx_architectures_count GREATER 1 AND UIKIT)
+        if(cmake_sysroot_name AND (MACOS OR (UIKIT AND NOT _qt_osx_architectures_count GREATER 1)))
             list(APPEND init_platform "
-    set(__qt_uikit_sdk \"${QT_UIKIT_SDK}\")
-    set(__qt_initial_cmake_osx_sysroot \"${CMAKE_OSX_SYSROOT}\")
-    if(NOT DEFINED CMAKE_OSX_SYSROOT AND EXISTS \"\${__qt_initial_cmake_osx_sysroot}\")
-        set(CMAKE_OSX_SYSROOT \"\${__qt_initial_cmake_osx_sysroot}\" CACHE PATH \"\")
-    elseif(NOT DEFINED CMAKE_OSX_SYSROOT AND NOT QT_NO_SET_OSX_SYSROOT)
-        set(CMAKE_OSX_SYSROOT \"\${__qt_uikit_sdk}\" CACHE PATH \"\")
-    endif()")
+set(__qt_initial_apple_sdk \"${QT_APPLE_SDK}\")
+if(NOT DEFINED CMAKE_OSX_SYSROOT)
+    set(CMAKE_OSX_SYSROOT \"${cmake_sysroot_name}\" CACHE STRING \"\")
+endif()")
         endif()
 
         if(CMAKE_OSX_DEPLOYMENT_TARGET)
@@ -195,13 +218,27 @@ endif()")
         list(APPEND init_platform "endif()")
         list(APPEND init_platform "")
 
-        # For macOS user projects, default to not specifying any architecture. This means CMake will
-        # not pass an -arch flag to the compiler and the compiler will choose the default
-        # architecture to build for.
+        # For macOS user projects, the common case is to default to not specifying any architecture.
+        # This means CMake will not pass an -arch flag to the compiler and the compiler will
+        # choose the default architecture to build for.
         # On Apple Silicon, CMake will introspect whether it's running under Rosetta and will
         # pass the detected architecture (x86_64 under Rosetta or arm64 natively) to the compiler.
         # This is line with default CMake behavior for user projects.
-        #
+        # If Qt was cross-compiled to arm64 from an x86_64 host machine, or vice versa, we need
+        # to continue using the same architecture for the user project, otherwise the CMake default
+        # might be incorrect depending on which host arch the user project is built on.
+        if(NOT UIKIT)
+            list(LENGTH CMAKE_OSX_ARCHITECTURES arch_count)
+            if(arch_count EQUAL 1 AND CMAKE_CROSSCOMPILING AND CMAKE_SYSTEM_NAME STREQUAL "Darwin")
+                list(APPEND init_platform
+"if(NOT __qt_toolchain_building_qt_repo AND NOT QT_NO_SET_OSX_ARCHITECTURES)"
+"    set(CMAKE_OSX_ARCHITECTURES \"${CMAKE_OSX_ARCHITECTURES}\" CACHE STRING \"\")"
+"    set(CMAKE_SYSTEM_NAME \"${CMAKE_SYSTEM_NAME}\" CACHE STRING \"\")"
+"endif()"
+                )
+            endif()
+        endif()
+
         # For iOS, we provide a bit more convenience.
         # When the user project is built using the Xcode generator, we only specify the architecture
         # if this is a single architecture Qt for iOS build. If we wouldn't, invoking just
@@ -218,7 +255,8 @@ endif()")
             qt_internal_get_first_osx_arch(osx_first_arch)
             list(APPEND init_platform
 "if((NOT CMAKE_GENERATOR STREQUAL \"Xcode\" AND NOT __qt_toolchain_building_qt_repo)
-    OR (CMAKE_GENERATOR STREQUAL \"Xcode\" AND __qt_uikit_sdk AND NOT QT_NO_SET_OSX_ARCHITECTURES))")
+    OR (CMAKE_GENERATOR STREQUAL \"Xcode\" AND __qt_initial_apple_sdk
+        AND NOT QT_NO_SET_OSX_ARCHITECTURES))")
             list(APPEND init_platform
                 "    set(CMAKE_OSX_ARCHITECTURES \"${osx_first_arch}\" CACHE STRING \"\")")
             list(APPEND init_platform "endif()")
@@ -273,6 +311,13 @@ endif()")
             "            \"Please specify the toolchain file with -DQT_CHAINLOAD_TOOLCHAIN_FILE=<file>.\")")
         list(APPEND init_platform "    endif()")
         list(APPEND init_platform "endif()")
+
+        qt_internal_get_android_cmake_policy_version_minimum_assignment(
+            android_cmake_policy_version_minimum TYPE TOOLCHAIN_FILE_ASSIGNMENT)
+        if(android_cmake_policy_version_minimum)
+            list(APPEND init_platform "${android_cmake_policy_version_minimum}")
+        endif()
+
     elseif(EMSCRIPTEN)
         list(APPEND init_platform
 "include(\${CMAKE_CURRENT_LIST_DIR}/QtPublicWasmToolchainHelpers.cmake)

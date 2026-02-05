@@ -5,15 +5,12 @@
 
 #ifndef QT_NO_GESTURES
 
-Q_LOGGING_CATEGORY(lcQpaGestures, "qt.qpa.input.gestures")
+Q_STATIC_LOGGING_CATEGORY(lcQpaGestures, "qt.qpa.input.gestures")
 
 @implementation QNSView (Gestures)
 
 - (bool)handleGestureAsBeginEnd:(NSEvent *)event
 {
-    if (QOperatingSystemVersion::current() < QOperatingSystemVersion::OSXElCapitan)
-        return false;
-
     if ([event phase] == NSEventPhaseBegan) {
         [self beginGestureWithEvent:event];
         return true;

@@ -22,8 +22,6 @@
 
 QT_BEGIN_NAMESPACE
 
-Q_DECLARE_LOGGING_CATEGORY(qLcEglDevDebug)
-
 QEglFSWindow::QEglFSWindow(QWindow *w)
     : QPlatformWindow(w),
 #ifndef QT_NO_OPENGL
@@ -65,9 +63,6 @@ void QEglFSWindow::create()
     }
 
     m_flags = Created;
-
-    if (window()->type() == Qt::Desktop)
-        return;
 
     // Stop if there is already a window backed by a native window and surface. Additional
     // raster windows will not have their own native window, surface and context. Instead,
@@ -113,14 +108,14 @@ void QEglFSWindow::setBackingStore(QOpenGLCompositorBackingStore *backingStore)
 #ifndef QT_NO_OPENGL
     if (!m_rasterCompositingContext) {
         m_rasterCompositingContext = new QOpenGLContext;
-        m_rasterCompositingContext->setShareContext(qt_gl_global_share_context());
+        m_rasterCompositingContext->setShareContext(QOpenGLContext::globalShareContext());
         m_rasterCompositingContext->setFormat(m_format);
         m_rasterCompositingContext->setScreen(window()->screen());
         if (Q_UNLIKELY(!m_rasterCompositingContext->create()))
             qFatal("EGLFS: Failed to create compositing context");
         // If there is a "root" window into which raster and QOpenGLWidget content is
         // composited, all other contexts must share with its context.
-        if (!qt_gl_global_share_context())
+        if (!QOpenGLContext::globalShareContext())
             qt_gl_set_global_share_context(m_rasterCompositingContext);
     }
     QOpenGLCompositor *compositor = QOpenGLCompositor::instance();
@@ -134,29 +129,42 @@ void QEglFSWindow::destroy()
     if (!m_flags.testFlag(Created))
         return; // already destroyed
 
-#ifndef QT_NO_OPENGL
-    QOpenGLCompositor::instance()->removeWindow(this);
-#endif
-
     QEglFSScreen *screen = this->screen();
-    if (m_flags.testFlag(HasNativeWindow)) {
 #ifndef QT_NO_OPENGL
+    QOpenGLCompositor *compositor = QOpenGLCompositor::instance();
+    compositor->removeWindow(this);
+    if (compositor->targetWindow() == window()) {
         QEglFSCursor *cursor = qobject_cast<QEglFSCursor *>(screen->cursor());
         if (cursor)
             cursor->resetResources();
-#endif
+
         if (screen->primarySurface() == m_surface)
             screen->setPrimarySurface(EGL_NO_SURFACE);
 
         invalidateSurface();
 
-#ifndef QT_NO_OPENGL
-        QOpenGLCompositor::destroy();
-        if (qt_gl_global_share_context() == m_rasterCompositingContext)
-            qt_gl_set_global_share_context(nullptr);
-        delete m_rasterCompositingContext;
-#endif
+        if (compositor->windows().isEmpty()) {
+            compositor->destroy();
+            if (QOpenGLContext::globalShareContext() == m_rasterCompositingContext)
+                qt_gl_set_global_share_context(nullptr);
+            delete m_rasterCompositingContext;
+        } else {
+            auto topWindow = static_cast<QEglFSWindow *>(compositor->windows().last());
+            // Make fullscreen
+            topWindow->setGeometry(screen->rawGeometry());
+            topWindow->resetSurface();
+            screen->setPrimarySurface(topWindow->surface());
+            compositor->setTargetWindow(topWindow->sourceWindow(), screen->rawGeometry());
+        }
     }
+#else
+    if (m_flags.testFlag(HasNativeWindow)) {
+        if (screen->primarySurface() == m_surface)
+            screen->setPrimarySurface(EGL_NO_SURFACE);
+
+        invalidateSurface();
+    }
+#endif
 
     m_flags = { };
 }
@@ -183,7 +191,6 @@ void QEglFSWindow::invalidateSurface()
 
         if (screen()->primarySurface() == m_surface)
             screen()->setPrimarySurface(EGL_NO_SURFACE);
-
 
         m_surface = EGL_NO_SURFACE;
         m_flags = m_flags & ~Created;

@@ -1,5 +1,6 @@
 // Copyright (C) 2016 The Qt Company Ltd.
 // SPDX-License-Identifier: LicenseRef-Qt-Commercial OR LGPL-3.0-only OR GPL-2.0-only OR GPL-3.0-only
+// Qt-Security score:significant reason:default
 
 #ifndef QFUTUREWATCHER_P_H
 #define QFUTUREWATCHER_P_H
@@ -15,6 +16,8 @@
 // We mean it.
 //
 
+#include <QtCore/qfuturewatcher.h>
+
 #include "qfutureinterface_p.h"
 #include <qlist.h>
 
@@ -24,7 +27,6 @@ QT_REQUIRE_CONFIG(future);
 
 QT_BEGIN_NAMESPACE
 
-class QFutureWatcherBase;
 class QFutureWatcherBasePrivate : public QObjectPrivate,
                                   public QFutureCallOutInterface
 {

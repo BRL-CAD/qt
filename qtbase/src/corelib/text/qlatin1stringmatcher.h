@@ -1,5 +1,6 @@
 // Copyright (C) 2022 The Qt Company Ltd.
 // SPDX-License-Identifier: LicenseRef-Qt-Commercial OR LGPL-3.0-only OR GPL-2.0-only OR GPL-3.0-only
+// Qt-Security score:critical reason:data-parser
 
 #ifndef QLATIN1STRINGMATCHER_H
 #define QLATIN1STRINGMATCHER_H
@@ -14,6 +15,10 @@
 QT_BEGIN_NAMESPACE
 
 namespace QtPrivate {
+template <typename T> constexpr inline bool isLatin1OrUtf16View = false;
+template <> constexpr inline bool isLatin1OrUtf16View<QLatin1StringView> = true;
+template <> constexpr inline bool isLatin1OrUtf16View<QStringView> = true;
+
 template<class RandomIt1,
          class Hash = std::hash<typename std::iterator_traits<RandomIt1>::value_type>,
          class BinaryPredicate = std::equal_to<>>
@@ -147,6 +152,7 @@ public:
     Q_CORE_EXPORT Qt::CaseSensitivity caseSensitivity() const noexcept;
 
     Q_CORE_EXPORT qsizetype indexIn(QLatin1StringView haystack, qsizetype from = 0) const noexcept;
+    Q_CORE_EXPORT qsizetype indexIn(QStringView haystack, qsizetype from = 0) const noexcept;
 
 private:
     void setSearcher() noexcept;
@@ -164,6 +170,10 @@ private:
         CaseSensitiveSearcher m_caseSensitiveSearcher;
         CaseInsensitiveSearcher m_caseInsensitiveSearcher;
     };
+
+    template <typename String>
+    qsizetype indexIn_helper(String haystack, qsizetype from) const noexcept;
+
     char m_foldBuffer[256];
 };
 

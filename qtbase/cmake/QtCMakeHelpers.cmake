@@ -1,52 +1,24 @@
 # Copyright (C) 2022 The Qt Company Ltd.
 # SPDX-License-Identifier: BSD-3-Clause
 
-# The common implementation of qt_configure_file functionality.
-macro(qt_configure_file_impl)
-    if(NOT arg_OUTPUT)
-        message(FATAL_ERROR "No output file provided to qt_configure_file.")
-    endif()
-
-    # We use this check for the cases when the specified CONTENT is empty. The value of arg_CONTENT
-    # is undefined, but we still want to create a file with empty content.
-    if(NOT "CONTENT" IN_LIST arg_KEYWORDS_MISSING_VALUES)
-        if(arg_INPUT)
-            message(WARNING "Both CONTENT and INPUT are specified. CONTENT will be used to generate"
-                " output")
-        endif()
-        set(template_name "QtFileConfigure.txt.in")
-        # When building qtbase, use the source template file.
-        # Otherwise use the installed file (basically wherever Qt6 package is found).
-        # This should work for non-prefix and superbuilds as well.
-        if(QtBase_SOURCE_DIR)
-            set(input_file "${QtBase_SOURCE_DIR}/cmake/${template_name}")
-        else()
-            set(input_file "${_qt_6_config_cmake_dir}/${template_name}")
-        endif()
-        set(__qt_file_configure_content "${arg_CONTENT}")
-    elseif(arg_INPUT)
-        set(input_file "${arg_INPUT}")
-    else()
-        message(FATAL_ERROR "No input value provided to qt_configure_file.")
-    endif()
-
-    configure_file("${input_file}" "${arg_OUTPUT}" @ONLY)
-endmacro()
-
 # qt_configure_file(OUTPUT output-file <INPUT input-file | CONTENT content>)
 # input-file is relative to ${CMAKE_CURRENT_SOURCE_DIR}
 # output-file is relative to ${CMAKE_CURRENT_BINARY_DIR}
 #
-# This function is similar to file(GENERATE OUTPUT) except it writes the content
-# to the file at configure time, rather than at generate time.
-#
-# TODO: Once we require 3.18+, this can use file(CONFIGURE) in its implementation,
-# or maybe its usage can be replaced by file(CONFIGURE). Until then, it  uses
-# configure_file() with a generic input file as source, when used with the CONTENT
-# signature.
+# This function is the universal replacement for file(CONFIGURE CMake command.
 function(qt_configure_file)
     cmake_parse_arguments(PARSE_ARGV 0 arg "" "OUTPUT;INPUT;CONTENT" "")
-    qt_configure_file_impl()
+    if("CONTENT" IN_LIST ARGV)
+        if(arg_INPUT)
+            message(WARNING "Both CONTENT and INPUT are specified. CONTENT will be used to generate"
+                " output")
+        endif()
+        _qt_internal_configure_file(CONFIGURE OUTPUT "${arg_OUTPUT}" CONTENT "${arg_CONTENT}")
+    elseif(arg_INPUT)
+        _qt_internal_configure_file(CONFIGURE OUTPUT "${arg_OUTPUT}" INPUT "${arg_INPUT}")
+    else()
+        message(FATAL_ERROR "No input value provided to _qt_internal_configure_file.")
+    endif()
 endfunction()
 
 # A version of cmake_parse_arguments that makes sure all arguments are processed and errors out
@@ -60,14 +32,6 @@ macro(qt_parse_all_arguments result type flags options multiopts)
         message(FATAL_ERROR "Unknown arguments were passed to ${type} (${${result}_UNPARSED_ARGUMENTS}).")
     endif()
 endmacro()
-
-# Checks whether any unparsed arguments have been passed to the function at the call site.
-# Use this right after `cmake_parse_arguments`.
-function(_qt_internal_validate_all_args_are_parsed prefix)
-    if(DEFINED ${prefix}_UNPARSED_ARGUMENTS)
-        message(FATAL_ERROR "Unknown arguments: (${${prefix}_UNPARSED_ARGUMENTS})")
-    endif()
-endfunction()
 
 # Print all variables defined in the current scope.
 macro(qt_debug_print_variables)
@@ -116,63 +80,12 @@ endmacro()
 # Takes a list of path components and joins them into one path separated by forward slashes "/",
 # and saves the path in out_var.
 function(qt_path_join out_var)
-    string(JOIN "/" path ${ARGN})
+    _qt_internal_path_join(path ${ARGN})
     set(${out_var} ${path} PARENT_SCOPE)
 endfunction()
 
-# qt_remove_args can remove arguments from an existing list of function
-# arguments in order to pass a filtered list of arguments to a different function.
-# Parameters:
-#   out_var: result of remove all arguments specified by ARGS_TO_REMOVE from ALL_ARGS
-#   ARGS_TO_REMOVE: Arguments to remove.
-#   ALL_ARGS: All arguments supplied to cmake_parse_arguments
-#   from which ARGS_TO_REMOVE should be removed from. We require all the
-#   arguments or we can't properly identify the range of the arguments detailed
-#   in ARGS_TO_REMOVE.
-#   ARGS: Arguments passed into the function, usually ${ARGV}
-#
-#   E.g.:
-#   We want to forward all arguments from foo to bar, execpt ZZZ since it will
-#   trigger an error in bar.
-#
-#   foo(target BAR .... ZZZ .... WWW ...)
-#   bar(target BAR.... WWW...)
-#
-#   function(foo target)
-#       cmake_parse_arguments(PARSE_ARGV 1 arg "" "" "BAR;ZZZ;WWW")
-#       qt_remove_args(forward_args
-#           ARGS_TO_REMOVE ${target} ZZZ
-#           ALL_ARGS ${target} BAR ZZZ WWW
-#           ARGS ${ARGV}
-#       )
-#       bar(${target} ${forward_args})
-#   endfunction()
-#
 function(qt_remove_args out_var)
-    cmake_parse_arguments(arg "" "" "ARGS_TO_REMOVE;ALL_ARGS;ARGS" ${ARGN})
-    set(result ${arg_ARGS})
-    foreach(arg IN LISTS arg_ARGS_TO_REMOVE)
-        # find arg
-        list(FIND result ${arg} find_result)
-        if (NOT find_result EQUAL -1)
-            # remove arg
-            list(REMOVE_AT result ${find_result})
-            list(LENGTH result result_len)
-            if(find_result EQUAL result_len)
-                # We removed the last argument, could have been an option keyword
-                continue()
-            endif()
-            list(GET result ${find_result} arg_current)
-            # remove values until we hit another arg or the end of the list
-            while(NOT "${arg_current}" IN_LIST arg_ALL_ARGS AND find_result LESS result_len)
-                list(REMOVE_AT result ${find_result})
-                list(LENGTH result result_len)
-                if (NOT find_result EQUAL result_len)
-                    list(GET result ${find_result} arg_current)
-                endif()
-            endwhile()
-        endif()
-    endforeach()
+    _qt_internal_remove_args(result ${ARGN})
     set(${out_var} "${result}" PARENT_SCOPE)
 endfunction()
 

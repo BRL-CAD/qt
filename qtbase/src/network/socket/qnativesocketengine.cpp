@@ -1,6 +1,7 @@
 // Copyright (C) 2016 The Qt Company Ltd.
 // Copyright (C) 2016 Intel Corporation.
 // SPDX-License-Identifier: LicenseRef-Qt-Commercial OR LGPL-3.0-only OR GPL-2.0-only OR GPL-3.0-only
+// Qt-Security score:significant reason:default
 
 //#define QNATIVESOCKETENGINE_DEBUG
 
@@ -429,11 +430,14 @@ bool QNativeSocketEngine::initialize(QAbstractSocket::SocketType socketType, QAb
 
     if (socketType == QAbstractSocket::UdpSocket) {
         // Set the broadcasting flag if it's a UDP socket.
-        if (!setOption(BroadcastSocketOption, 1)) {
-            d->setError(QAbstractSocket::UnsupportedSocketOperationError,
-                        QNativeSocketEnginePrivate::BroadcastingInitFailedErrorString);
-            close();
-            return false;
+        // IPv6 does not support broadcast — only set option for IPv4
+        if (protocol != QAbstractSocket::IPv6Protocol) {
+            if (!setOption(BroadcastSocketOption, 1)) {
+                d->setError(QAbstractSocket::UnsupportedSocketOperationError,
+                            QNativeSocketEnginePrivate::BroadcastingInitFailedErrorString);
+                close();
+                return false;
+            }
         }
 
         // Set some extra flags that are interesting to us, but accept failure
@@ -507,6 +511,7 @@ bool QNativeSocketEngine::initialize(qintptr socketDescriptor, QAbstractSocket::
 
         // Set the broadcasting flag if it's a UDP socket.
         if (d->socketType == QAbstractSocket::UdpSocket
+            && d->socketProtocol != QAbstractSocket::IPv6Protocol
             && !setOption(BroadcastSocketOption, 1)) {
             d->setError(QAbstractSocket::UnsupportedSocketOperationError,
                 QNativeSocketEnginePrivate::BroadcastingInitFailedErrorString);
@@ -900,12 +905,11 @@ qint64 QNativeSocketEngine::read(char *data, qint64 maxSize)
 
     qint64 readBytes = d->nativeRead(data, maxSize);
 
-    // Handle remote close
-    if (readBytes == 0 && (d->socketType == QAbstractSocket::TcpSocket
-#ifndef QT_NO_SCTP
-        || d->socketType == QAbstractSocket::SctpSocket
-#endif
-        )) {
+    // Handle remote close.
+    // Non-datagram socket types signal the EOF state with a zero read.
+    // Note that it is perfectly fine to have a 0-byte message with datagram
+    // sockets (SOCK_DGRAM or SOCK_SEQPACKET).
+    if (readBytes == 0 && d->socketType != QAbstractSocket::UdpSocket) {
         d->setError(QAbstractSocket::RemoteHostClosedError,
                     QNativeSocketEnginePrivate::RemoteHostClosedErrorString);
         close();
@@ -948,15 +952,15 @@ void QNativeSocketEngine::close()
     d->peerAddress.clear();
     d->inboundStreamCount = d->outboundStreamCount = 0;
     if (d->readNotifier) {
-        qDeleteInEventHandler(d->readNotifier);
+        delete d->readNotifier;
         d->readNotifier = nullptr;
     }
     if (d->writeNotifier) {
-        qDeleteInEventHandler(d->writeNotifier);
+        delete d->writeNotifier;
         d->writeNotifier = nullptr;
     }
     if (d->exceptNotifier) {
-        qDeleteInEventHandler(d->exceptNotifier);
+        delete d->exceptNotifier;
         d->exceptNotifier = nullptr;
     }
 }

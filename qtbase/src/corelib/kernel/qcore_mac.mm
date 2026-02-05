@@ -50,6 +50,8 @@ extern char **environ;
 
 QT_BEGIN_NAMESPACE
 
+using namespace Qt::StringLiterals;
+
 // --------------------------------------------------------------------------
 
 #if defined(Q_OS_MACOS)
@@ -174,6 +176,7 @@ os_log_type_t AppleUnifiedLogger::logTypeForMessageType(QtMsgType msgType)
 
 #endif // QT_USE_APPLE_UNIFIED_LOGGING
 
+#ifndef QT_NO_DEBUG_STREAM
 // -------------------------------------------------------------------------
 
 QDebug operator<<(QDebug dbg, id obj)
@@ -228,6 +231,7 @@ QT_FOR_EACH_CORE_FOUNDATION_TYPE(QT_DECLARE_WEAK_QDEBUG_OPERATOR_FOR_CF_TYPE);
 QT_FOR_EACH_MUTABLE_CORE_FOUNDATION_TYPE(QT_DECLARE_WEAK_QDEBUG_OPERATOR_FOR_CF_TYPE);
 QT_FOR_EACH_CORE_GRAPHICS_TYPE(QT_DECLARE_WEAK_QDEBUG_OPERATOR_FOR_CF_TYPE);
 QT_FOR_EACH_MUTABLE_CORE_GRAPHICS_TYPE(QT_DECLARE_WEAK_QDEBUG_OPERATOR_FOR_CF_TYPE);
+#endif // QT_NO_DEBUG_STREAM
 
 // -------------------------------------------------------------------------
 
@@ -320,14 +324,7 @@ QDebug operator<<(QDebug debug, const QCFString &string)
 }
 #endif // !QT_NO_DEBUG_STREAM
 
-#ifdef Q_OS_MACOS
-bool qt_mac_applicationIsInDarkMode()
-{
-    auto appearance = [NSApp.effectiveAppearance bestMatchFromAppearancesWithNames:
-            @[ NSAppearanceNameAqua, NSAppearanceNameDarkAqua ]];
-    return [appearance isEqualToString:NSAppearanceNameDarkAqua];
-}
-
+#if defined(Q_OS_MACOS) && !defined(QT_BOOTSTRAPPED)
 bool qt_mac_runningUnderRosetta()
 {
     int translated = 0;
@@ -335,6 +332,32 @@ bool qt_mac_runningUnderRosetta()
     if (sysctlbyname("sysctl.proc_translated", &translated, &size, nullptr, 0) == 0)
         return translated;
     return false;
+}
+
+bool qt_apple_runningWithLiquidGlass()
+{
+    static const bool runningWithLiquidGlass = []{
+        if (QMacVersion::buildSDK(QMacVersion::ApplicationBinary).majorVersion() < 26)
+            return false;
+
+        if (QMacVersion::currentRuntime().majorVersion() < 26)
+            return false;
+
+        // Word on the street is that the opt out will only work for
+        // macOS 26, but it's not clear whether building against the
+        // Xcode 27 SDK is what will disable it, or simply running on
+        // macOS 27. Let's go with the latter for now.
+        if (QMacVersion::currentRuntime().majorVersion() < 27) {
+            const id liquidGlassOptOut = [NSBundle.mainBundle
+                objectForInfoDictionaryKey:@"UIDesignRequiresCompatibility"];
+            if (liquidGlassOptOut && [liquidGlassOptOut boolValue])
+                return false;
+        }
+
+        return true;
+    }();
+
+    return runningWithLiquidGlass;
 }
 
 std::optional<uint32_t> qt_mac_sipConfiguration()
@@ -346,7 +369,7 @@ std::optional<uint32_t> qt_mac_sipConfiguration()
             return config;
 #endif
 
-        QIOType<io_registry_entry_t> nvram = IORegistryEntryFromPath(kIOMasterPortDefault, "IODeviceTree:/options");
+        QIOType<io_registry_entry_t> nvram = IORegistryEntryFromPath(kIOMainPortDefault, "IODeviceTree:/options");
         if (!nvram) {
             qWarning("Failed to locate NVRAM entry in IO registry");
             return {};
@@ -358,13 +381,15 @@ std::optional<uint32_t> qt_mac_sipConfiguration()
             return {}; // SIP config is not available
 
         if (auto type = CFGetTypeID(csrConfig); type != CFDataGetTypeID()) {
+#ifndef QT_NO_DEBUG_STREAM
             qWarning() << "Unexpected SIP config type" << CFCopyTypeIDDescription(type);
+#endif
             return {};
         }
 
         QByteArray data = QByteArray::fromRawCFData(csrConfig.as<CFDataRef>());
         if (data.size() != sizeof(uint32_t)) {
-            qWarning() << "Unexpected SIP config size" << data.size();
+            qWarning("Unexpected SIP config size %td", ptrdiff_t(data.size()));
             return {};
         }
 
@@ -373,8 +398,23 @@ std::optional<uint32_t> qt_mac_sipConfiguration()
     return configuration;
 }
 
+bool qt_mac_processHasEntitlement(const QString &entitlement)
+{
+    if (QCFType<SecTaskRef> task = SecTaskCreateFromSelf(kCFAllocatorDefault)) {
+        if (QCFType<CFTypeRef> value = SecTaskCopyValueForEntitlement(task,
+            entitlement.toCFString(), nullptr)) {
+
+            if (CFGetTypeID(value) != CFBooleanGetTypeID())
+                return false;
+
+            return CFBooleanGetValue(value.as<CFBooleanRef>());
+        }
+    }
+    return false;
+}
+
 #define CHECK_SPAWN(expr) \
-    if (int err = (expr)) { \
+    if ((expr) != 0) { \
         posix_spawnattr_destroy(&attr); \
         return; \
     }
@@ -451,55 +491,11 @@ AppleApplication *qt_apple_sharedApplication()
 
 #if !defined(QT_BOOTSTRAPPED)
 
-#if defined(Q_OS_MACOS)
-namespace {
-struct SandboxChecker
-{
-    SandboxChecker() : m_thread([this]{
-            m_isSandboxed = []{
-                QCFType<SecStaticCodeRef> staticCode = nullptr;
-                NSURL *executableUrl = NSBundle.mainBundle.executableURL;
-                if (SecStaticCodeCreateWithPath((__bridge CFURLRef)executableUrl,
-                    kSecCSDefaultFlags, &staticCode) != errSecSuccess)
-                    return false;
-
-                QCFType<SecRequirementRef> sandboxRequirement;
-                if (SecRequirementCreateWithString(CFSTR("entitlement[\"com.apple.security.app-sandbox\"] exists"),
-                    kSecCSDefaultFlags, &sandboxRequirement) != errSecSuccess)
-                    return false;
-
-                if (SecStaticCodeCheckValidityWithErrors(staticCode,
-                    kSecCSBasicValidateOnly, sandboxRequirement, nullptr) != errSecSuccess)
-                    return false;
-
-                return true;
-            }();
-        })
-    {}
-    ~SandboxChecker() {
-        std::scoped_lock lock(m_mutex);
-        if (m_thread.joinable())
-            m_thread.detach();
-    }
-    bool isSandboxed() const {
-        std::scoped_lock lock(m_mutex);
-        if (m_thread.joinable())
-            m_thread.join();
-        return m_isSandboxed;
-    }
-private:
-    bool m_isSandboxed;
-    mutable std::thread m_thread;
-    mutable std::mutex m_mutex;
-};
-} // namespace
-static SandboxChecker sandboxChecker;
-#endif // Q_OS_MACOS
-
 bool qt_apple_isSandboxed()
 {
 #if defined(Q_OS_MACOS)
-    return sandboxChecker.isSandboxed();
+    static bool isSandboxed = qt_mac_processHasEntitlement(u"com.apple.security.app-sandbox"_s);
+    return isSandboxed;
 #else
     return true; // All other Apple platforms
 #endif
@@ -541,7 +537,7 @@ QMacRootLevelAutoReleasePool::QMacRootLevelAutoReleasePool()
     if (qEnvironmentVariableIsSet(ROOT_LEVEL_POOL_DISABLE_SWITCH))
         return;
 
-    pool.reset(new QMacAutoReleasePool);
+    pool.emplace();
 
     [[[ROOT_LEVEL_POOL_MARKER alloc] init] autorelease];
 
@@ -559,6 +555,7 @@ QMacRootLevelAutoReleasePool::~QMacRootLevelAutoReleasePool()
 
 // -------------------------------------------------------------------------
 
+#ifndef QT_BOOTSTRAPPED
 void qt_apple_check_os_version()
 {
 #if defined(__WATCH_OS_VERSION_MIN_REQUIRED)
@@ -567,6 +564,9 @@ void qt_apple_check_os_version()
 #elif defined(__TV_OS_VERSION_MIN_REQUIRED)
     const char *os = "tvOS";
     const int version = __TV_OS_VERSION_MIN_REQUIRED;
+#elif defined(__VISION_OS_VERSION_MIN_REQUIRED)
+    const char *os = "visionOS";
+    const int version = __VISION_OS_VERSION_MIN_REQUIRED;
 #elif defined(__IPHONE_OS_VERSION_MIN_REQUIRED)
     const char *os = "iOS";
     const int version = __IPHONE_OS_VERSION_MIN_REQUIRED;
@@ -603,6 +603,7 @@ void qt_apple_check_os_version()
     }
 }
 Q_CONSTRUCTOR_FUNCTION(qt_apple_check_os_version);
+#endif // QT_BOOTSTRAPPED
 
 // -------------------------------------------------------------------------
 
@@ -649,6 +650,7 @@ QT_BEGIN_NAMESPACE
 
 // -------------------------------------------------------------------------
 
+#ifndef QT_BOOTSTRAPPED
 QOperatingSystemVersion QMacVersion::buildSDK(VersionTarget target)
 {
     switch (target) {
@@ -767,6 +769,43 @@ QMacVersion::VersionTuple QMacVersion::libraryVersion()
         return versionsForImage(static_cast<mach_header*>(qtCoreImage.dli_fbase));
     }();
     return version;
+}
+#endif // QT_BOOTSTRAPPED
+
+// -------------------------------------------------------------------------
+
+QObjCWeakPointerBase::QObjCWeakPointerBase(NSObject *object)
+    : m_weakReference(object)
+{
+}
+
+QObjCWeakPointerBase::QObjCWeakPointerBase(const QObjCWeakPointerBase &other)
+{
+    QMacAutoReleasePool pool;
+    m_weakReference = other.m_weakReference;
+}
+
+QObjCWeakPointerBase &QObjCWeakPointerBase::operator=(const QObjCWeakPointerBase &other)
+{
+    QMacAutoReleasePool pool;
+    m_weakReference = other.m_weakReference;
+    return *this;
+}
+
+QObjCWeakPointerBase::~QObjCWeakPointerBase()
+{
+    QMacAutoReleasePool pool;
+    m_weakReference = nil;
+}
+
+NSObject *QObjCWeakPointerBase::get() const
+{
+    // Loading from a __weak variable will retain and auto-release (in non-ARC).
+    // Unlike cases above, we want the object to stay alive until the outer
+    // auto-release pool is drained, so that consumers of QObjCWeakPointer
+    // can trust that the variable they get back will be alive, similar to
+    // the semantics of loading from __weak.
+    return m_weakReference;
 }
 
 // -------------------------------------------------------------------------

@@ -1,5 +1,6 @@
 // Copyright (C) 2016 The Qt Company Ltd.
 // SPDX-License-Identifier: LicenseRef-Qt-Commercial OR LGPL-3.0-only OR GPL-2.0-only OR GPL-3.0-only
+// Qt-Security score:critical reason:data-parser
 
 #include "qfilesystementry_p.h"
 
@@ -13,6 +14,10 @@
 QT_BEGIN_NAMESPACE
 
 using namespace Qt::StringLiterals;
+
+// Assigned to m_lastSeparator and m_firstDotInFileName to indicate resolveFilePath()
+// hasn't been called yet
+constexpr int Uninitialized = -2;
 
 #ifdef Q_OS_WIN
 static bool isUncRoot(const QString &server)
@@ -51,8 +56,8 @@ QFileSystemEntry::QFileSystemEntry()
  */
 QFileSystemEntry::QFileSystemEntry(const QString &filePath)
     : m_filePath(QDir::fromNativeSeparators(filePath)),
-    m_lastSeparator(-2),
-    m_firstDotInFileName(-2),
+    m_lastSeparator(Uninitialized),
+    m_firstDotInFileName(Uninitialized),
     m_lastDotInFileName(0)
 {
 }
@@ -64,8 +69,8 @@ QFileSystemEntry::QFileSystemEntry(const QString &filePath)
  */
 QFileSystemEntry::QFileSystemEntry(const QString &filePath, FromInternalPath /* dummy */)
     : m_filePath(filePath),
-    m_lastSeparator(-2),
-    m_firstDotInFileName(-2),
+    m_lastSeparator(Uninitialized),
+    m_firstDotInFileName(Uninitialized),
     m_lastDotInFileName(0)
 {
 }
@@ -76,8 +81,8 @@ QFileSystemEntry::QFileSystemEntry(const QString &filePath, FromInternalPath /* 
  */
 QFileSystemEntry::QFileSystemEntry(const NativePath &nativeFilePath, FromNativePath /* dummy */)
     : m_nativeFilePath(nativeFilePath),
-    m_lastSeparator(-2),
-    m_firstDotInFileName(-2),
+    m_lastSeparator(Uninitialized),
+    m_firstDotInFileName(Uninitialized),
     m_lastDotInFileName(0)
 {
 }
@@ -85,8 +90,8 @@ QFileSystemEntry::QFileSystemEntry(const NativePath &nativeFilePath, FromNativeP
 QFileSystemEntry::QFileSystemEntry(const QString &filePath, const NativePath &nativeFilePath)
     : m_filePath(QDir::fromNativeSeparators(filePath)),
     m_nativeFilePath(nativeFilePath),
-    m_lastSeparator(-2),
-    m_firstDotInFileName(-2),
+    m_lastSeparator(Uninitialized),
+    m_firstDotInFileName(Uninitialized),
     m_lastDotInFileName(0)
 {
 }
@@ -312,7 +317,7 @@ bool QFileSystemEntry::isEmpty() const
 
 void QFileSystemEntry::findLastSeparator() const
 {
-    if (m_lastSeparator == -2) {
+    if (m_lastSeparator == Uninitialized) {
         resolveFilePath();
         m_lastSeparator = m_filePath.lastIndexOf(u'/');
     }
@@ -320,7 +325,7 @@ void QFileSystemEntry::findLastSeparator() const
 
 void QFileSystemEntry::findFileNameSeparators() const
 {
-    if (m_firstDotInFileName == -2) {
+    if (m_firstDotInFileName == Uninitialized) {
         resolveFilePath();
         int firstDotInFileName = -1;
         int lastDotInFileName = -1;
@@ -334,7 +339,8 @@ void QFileSystemEntry::findFileNameSeparators() const
             stop = lastSeparator;
         }
 
-        int i = m_filePath.size() - 1;
+        Q_ASSERT(m_filePath.size() == int(m_filePath.size()));
+        int i = int(m_filePath.size() - 1);
         for (; i >= stop; --i) {
             if (m_filePath.at(i).unicode() == '.') {
                 firstDotInFileName = lastDotInFileName = i;

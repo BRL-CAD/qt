@@ -1,20 +1,26 @@
 // Copyright (C) 2016 The Qt Company Ltd.
 // Copyright (C) 2012 BogDan Vatra <bogdan@kde.org>
 // SPDX-License-Identifier: LicenseRef-Qt-Commercial OR LGPL-3.0-only OR GPL-2.0-only OR GPL-3.0-only
+// Qt-Security score:critical reason:password-input-type
 
 package org.qtproject.qt.android;
 
+import android.annotation.SuppressLint;
+import android.app.Activity;
 import android.content.Context;
 import android.graphics.Canvas;
 import android.text.InputType;
 import android.view.View;
 import android.view.inputmethod.EditorInfo;
+import android.view.inputmethod.ExtractedText;
+import android.view.inputmethod.ExtractedTextRequest;
 import android.view.inputmethod.InputConnection;
 import android.view.KeyEvent;
 
 import org.qtproject.qt.android.QtInputConnection.QtInputConnectionListener;
 
-public class QtEditText extends View
+@SuppressLint("ViewConstructor")
+class QtEditText extends View
 {
     int m_initialCapsMode = 0;
     int m_imeOptions = 0;
@@ -49,19 +55,33 @@ public class QtEditText extends View
 
     private final QtInputConnectionListener m_qtInputConnectionListener;
 
-    public QtEditText(Context context, QtInputConnectionListener listener)
+
+    // Values coming from QAndroidInputContext::CursorHandleShowMode
+    static final int CursorHandleNotShown       = 0;
+    static final int CursorHandleShowNormal     = 1;
+    static final int CursorHandleShowSelection  = 2;
+    static final int CursorHandleShowEdit       = 0x100;
+
+    private CursorHandle m_cursorHandle;
+    private CursorHandle m_leftSelectionHandle;
+    private CursorHandle m_rightSelectionHandle;
+
+    final private EditPopupMenu m_editPopupMenu;
+
+    QtEditText(Context context, QtInputConnectionListener listener)
     {
         super(context);
         setFocusable(true);
         setFocusableInTouchMode(true);
         m_qtInputConnectionListener = listener;
+        m_editPopupMenu = new EditPopupMenu(this);
     }
 
     private void setImeOptions(int imeOptions)
     {
         if (m_imeOptions == imeOptions)
             return;
-        m_imeOptions = m_imeOptions;
+        m_imeOptions = imeOptions;
         m_optionsChanged = true;
     }
 
@@ -78,7 +98,7 @@ public class QtEditText extends View
     {
         if (m_inputType == inputType)
             return;
-        m_inputType = m_inputType;
+        m_inputType = inputType;
         m_optionsChanged = true;
     }
 
@@ -89,6 +109,13 @@ public class QtEditText extends View
         outAttrs.imeOptions = m_imeOptions;
         outAttrs.initialCapsMode = m_initialCapsMode;
         m_inputConnection = new QtInputConnection(this,m_qtInputConnectionListener);
+
+        ExtractedText extracted = m_inputConnection.getExtractedText(new ExtractedTextRequest(), 0);
+        if (extracted != null) {
+            outAttrs.initialSelStart = extracted.selectionStart;
+            outAttrs.initialSelEnd = extracted.selectionEnd;
+        }
+
         return m_inputConnection;
     }
 
@@ -115,7 +142,7 @@ public class QtEditText extends View
     }
 
 
-    public void setEditTextOptions(int enterKeyType, int inputHints)
+    void setEditTextOptions(int enterKeyType, int inputHints)
     {
         int initialCapsMode = 0;
         int imeOptions = imeOptionsFromEnterKeyType(enterKeyType);
@@ -211,6 +238,91 @@ public class QtEditText extends View
                 break;
         }
         return imeOptions;
+    }
+
+    int getSelectionHandleBottom()
+    {
+        if (m_cursorHandle != null)
+            return m_cursorHandle.bottom();
+        if (m_leftSelectionHandle != null && m_rightSelectionHandle != null)
+            return Math.max(m_leftSelectionHandle.bottom(), m_rightSelectionHandle.bottom());
+
+        return 0;
+    }
+
+    int getSelectionHandleWidth()
+    {
+        if (m_leftSelectionHandle != null && m_rightSelectionHandle != null)
+            return Math.max(m_leftSelectionHandle.width(), m_rightSelectionHandle.width());
+        if (m_cursorHandle != null)
+            return m_cursorHandle.width();
+
+        return 0;
+    }
+
+    void updateHandles(int mode, int editX, int editY, int editButtons,
+                       int x1, int y1, int x2, int y2, boolean rtl)
+    {
+        switch (mode & 0xff)
+        {
+        case CursorHandleNotShown:
+            if (m_cursorHandle != null) {
+                m_cursorHandle.hide();
+                m_cursorHandle = null;
+            }
+            if (m_rightSelectionHandle != null) {
+                m_rightSelectionHandle.hide();
+                m_leftSelectionHandle.hide();
+                m_rightSelectionHandle = null;
+                m_leftSelectionHandle = null;
+            }
+            break;
+        case CursorHandleShowNormal:
+            if (m_cursorHandle == null) {
+                m_cursorHandle = new CursorHandle((Activity) getContext(), this,
+                        CursorHandle.IdCursorHandle,
+                        android.R.attr.textSelectHandle, false);
+            }
+            m_cursorHandle.setPosition(x1, y1);
+            if (m_rightSelectionHandle != null) {
+                m_rightSelectionHandle.hide();
+                m_leftSelectionHandle.hide();
+                m_rightSelectionHandle = null;
+                m_leftSelectionHandle = null;
+            }
+            break;
+        case CursorHandleShowSelection:
+            if (m_rightSelectionHandle == null) {
+                m_leftSelectionHandle = new CursorHandle((Activity) getContext(), this,
+                        CursorHandle.IdLeftHandle,
+                        !rtl ? android.R.attr.textSelectHandleLeft :
+                                android.R.attr.textSelectHandleRight,
+                        rtl);
+                m_rightSelectionHandle = new CursorHandle((Activity) getContext(), this,
+                        CursorHandle.IdRightHandle,
+                        !rtl ? android.R.attr.textSelectHandleRight :
+                                android.R.attr.textSelectHandleLeft,
+                        rtl);
+            }
+            m_leftSelectionHandle.setPosition(x1,y1);
+            m_rightSelectionHandle.setPosition(x2,y2);
+            if (m_cursorHandle != null) {
+                m_cursorHandle.hide();
+                m_cursorHandle = null;
+            }
+            mode |= CursorHandleShowEdit;
+            break;
+        }
+
+        if (!QtClipboardManager.hasClipboardText(getContext()))
+            editButtons &= ~EditContextView.PASTE_BUTTON;
+
+        final boolean setEditPopupPosition = (mode & QtEditText.CursorHandleShowEdit) ==
+                                             QtEditText.CursorHandleShowEdit && editButtons != 0;
+        if (setEditPopupPosition)
+            m_editPopupMenu.setPosition(editX, editY, editButtons);
+        else
+            m_editPopupMenu.hide();
     }
 
     private boolean isDisablePredictiveTextWorkaround(int inputHints)

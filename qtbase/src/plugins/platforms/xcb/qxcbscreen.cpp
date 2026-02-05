@@ -1,5 +1,6 @@
 // Copyright (C) 2016 The Qt Company Ltd.
 // SPDX-License-Identifier: LicenseRef-Qt-Commercial OR LGPL-3.0-only OR GPL-2.0-only OR GPL-3.0-only
+// Qt-Security score:significant reason:default
 
 #include "qxcbscreen.h"
 #include "qxcbwindow.h"
@@ -499,7 +500,6 @@ QXcbScreen::QXcbScreen(QXcbConnection *connection, QXcbVirtualDesktop *virtualDe
     , m_cursor(std::make_unique<QXcbCursor>(connection, this))
 {
     if (connection->isAtLeastXRandR12()) {
-        xcb_randr_select_input(xcb_connection(), screen()->root, true);
         auto crtc = Q_XCB_REPLY_UNCHECKED(xcb_randr_get_crtc_info, xcb_connection(),
                                           m_crtc, output ? output->timestamp : 0);
         if (crtc) {
@@ -605,8 +605,6 @@ void QXcbScreen::setMonitor(xcb_randr_monitor_info_t *monitorInfo, xcb_timestamp
         return;
     }
 
-    xcb_randr_select_input(xcb_connection(), screen()->root, true);
-
     m_monitor = monitorInfo;
     qCDebug(lcQpaScreen) << "xcb_randr_monitor_info_t: primary=" << m_monitor->primary << ", x=" << m_monitor->x << ", y=" << m_monitor->y
         << ", width=" << m_monitor->width << ", height=" << m_monitor->height
@@ -654,12 +652,16 @@ void QXcbScreen::setMonitor(xcb_randr_monitor_info_t *monitorInfo, xcb_timestamp
     if (m_crtcs.size() == 1) {
         auto crtc = Q_XCB_REPLY(xcb_randr_get_crtc_info,
                                 xcb_connection(), m_crtcs[0], timestamp);
-        m_singlescreen = (monitorGeometry == (QRect(crtc->x, crtc->y, crtc->width, crtc->height)));
-        if (m_singlescreen) {
-            if (crtc->mode) {
-                updateGeometry(QRect(crtc->x, crtc->y, crtc->width, crtc->height), crtc->rotation);
-                if (mode() != crtc->mode)
-                    updateRefreshRate(crtc->mode);
+        if (crtc == XCB_NONE) {
+            qCDebug(lcQpaScreen, "Didn't get crtc info when m_crtcs.size() == 1");
+        } else {
+            m_singlescreen = (monitorGeometry == (QRect(crtc->x, crtc->y, crtc->width, crtc->height)));
+            if (m_singlescreen) {
+                if (crtc->mode) {
+                    updateGeometry(QRect(crtc->x, crtc->y, crtc->width, crtc->height), crtc->rotation);
+                    if (mode() != crtc->mode)
+                        updateRefreshRate(crtc->mode);
+                }
             }
         }
     }

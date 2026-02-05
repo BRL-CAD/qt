@@ -1,10 +1,10 @@
 # Copyright (C) 2022 The Qt Company Ltd.
 # SPDX-License-Identifier: BSD-3-Clause
 
-qt_find_package(Libinput)
-qt_find_package(XKB)
-qt_find_package(Tslib)
-qt_find_package(Mtdev)
+qt_find_package(Libinput MODULE)
+qt_find_package(XKB MODULE)
+qt_find_package(Tslib MODULE)
+qt_find_package(Mtdev MODULE)
 
 #####################################################################
 ## InputSupportPrivate Module:
@@ -22,6 +22,7 @@ qt_internal_add_module(InputSupportPrivate
         Qt::GuiPrivate
     PRECOMPILED_HEADER
         "../../corelib/global/qt_pch.h"
+    NO_GENERATE_CPP_EXPORTS
 )
 
 ## Scopes:
@@ -35,7 +36,6 @@ qt_internal_extend_target(InputSupportPrivate CONDITION QT_FEATURE_evdev
         evdevmouse/qevdevmousehandler.cpp evdevmouse/qevdevmousehandler_p.h
         evdevmouse/qevdevmousemanager.cpp evdevmouse/qevdevmousemanager_p.h
         evdevtouch/qevdevtouchhandler.cpp evdevtouch/qevdevtouchhandler_p.h
-        evdevtouch/qevdevtouchfilter_p.h
         evdevtouch/qevdevtouchmanager.cpp evdevtouch/qevdevtouchmanager_p.h
     INCLUDE_DIRECTORIES
         evdevtouch/../shared
@@ -60,6 +60,19 @@ qt_internal_extend_target(InputSupportPrivate CONDITION QT_FEATURE_evdev AND QT_
 qt_internal_extend_target(InputSupportPrivate CONDITION QT_FEATURE_evdev AND QT_FEATURE_mtdev
     LIBRARIES
         PkgConfig::Mtdev
+)
+
+qt_internal_extend_target(InputSupportPrivate CONDITION QT_FEATURE_vxworksevdev
+    SOURCES
+        vxkeyboard/qvxkeyboard_defaultmap_p.h
+        vxkeyboard/qvxkeyboardhandler.cpp vxkeyboard/qvxkeyboardhandler_p.h
+        vxkeyboard/qvxkeyboardmanager.cpp vxkeyboard/qvxkeyboardmanager_p.h
+        vxmouse/qvxmousehandler.cpp vxmouse/qvxmousehandler_p.h
+        vxmouse/qvxmousemanager.cpp vxmouse/qvxmousemanager_p.h
+        vxtouch/qvxtouchhandler.cpp vxtouch/qvxtouchhandler_p.h
+        vxtouch/qvxtouchmanager.cpp vxtouch/qvxtouchmanager_p.h
+    INCLUDE_DIRECTORIES
+        shared
 )
 
 qt_internal_extend_target(InputSupportPrivate CONDITION QT_FEATURE_tslib
@@ -87,11 +100,15 @@ qt_internal_extend_target(InputSupportPrivate CONDITION QT_FEATURE_libinput AND 
         XKB::XKB
 )
 
-qt_internal_extend_target(InputSupportPrivate CONDITION QT_FEATURE_evdev OR QT_FEATURE_libinput
+qt_internal_extend_target(InputSupportPrivate CONDITION QT_FEATURE_evdev OR QT_FEATURE_libinput OR QT_FEATURE_vxworksevdev
     SOURCES
         shared/devicehandlerlist_p.h
         shared/qevdevutil.cpp shared/qevdevutil_p.h
+        shared/qfdcontainer.cpp shared/qfdcontainer_p.h
+        shared/qkeyboardmap_p.h
+        shared/qkeycodeaction_p.h
         shared/qoutputmapping.cpp shared/qoutputmapping_p.h
+        shared/qtouchfilter_p.h
 )
 
 qt_internal_extend_target(InputSupportPrivate CONDITION QT_FEATURE_integrityhid

@@ -21,6 +21,7 @@ private slots:
     void expr();
     void import();
     void media();
+    void animation();
     void page();
     void ruleset();
     void selector_data();
@@ -50,12 +51,24 @@ private slots:
     void gradient();
     void extractFontFamily_data();
     void extractFontFamily();
+    void extractFontSize_data();
+    void extractFontSize();
     void extractBorder_data();
     void extractBorder();
+    void extractBorderImage_data();
+    void extractBorderImage();
+    void extractBorderImageCuts_data();
+    void extractBorderImageCuts();
     void noTextDecoration();
     void quotedAndUnquotedIdentifiers();
     void whitespaceValues_data();
     void whitespaceValues();
+    void strokeLineCapValues_data();
+    void strokeLineCapValues();
+    void strokeLineJoinValues_data();
+    void strokeLineJoinValues();
+    void borderColor_data();
+    void borderColor();
 };
 
 void tst_QCssParser::scanner_data()
@@ -285,8 +298,12 @@ void tst_QCssParser::term_data()
     val.type = QCss::Value::Uri;
     val.variant = QString("www.kde.org");
     QTest::newRow("uri1") << true << "url(\"www.kde.org\")" << val;
-
     QTest::newRow("uri2") << true << "url(www.kde.org)" << val;
+
+    val.type = QCss::Value::Uri;
+    val.variant = QString("www.kde.org/test?key=value&v=123");
+    QTest::newRow("uri_query_quoted") << true << "url(\"www.kde.org/test?key=value&v=123\")" << val;
+    QTest::newRow("uri_query_unquoted") << true << "url(www.kde.org/test?key=value&v=123)" << val;
 
     val.type = QCss::Value::KnownIdentifier;
     val.variant = int(QCss::Value_Italic);
@@ -306,6 +323,7 @@ void tst_QCssParser::term()
     QCss::Parser parser(css);
     QCss::Value val;
     QVERIFY(parser.testTerm());
+    QEXPECT_FAIL("uri_query_unquoted", "QTBUG-131842", Abort);
     QCOMPARE(parser.parseTerm(&val), parseSuccess);
     if (parseSuccess) {
         QCOMPARE(int(val.type), int(expectedValue.type));
@@ -388,6 +406,52 @@ void tst_QCssParser::media()
     QCOMPARE(rule.media.at(0), QString("print"));
     QCOMPARE(rule.media.at(1), QString("screen"));
     QVERIFY(rule.styleRules.isEmpty());
+}
+
+void tst_QCssParser::animation()
+{
+    QCss::Parser parser("@keyframes emptyAnimation{} "
+                        "@keyframes motion{from {x : 10;} to {x : 50;}} "
+                        "@keyframes color{0% {fill : blue;} 25% {fill : yellow;} 100% {fill : red;}}");
+
+    {
+        QCss::AnimationRule rule;
+        QVERIFY(parser.testAnimation());
+        QVERIFY(parser.parseAnimation(&rule));
+        QCOMPARE(rule.animName, QStringLiteral("emptyAnimation"));
+        QCOMPARE(rule.ruleSets.size(), 0);
+    }
+
+    {
+        QCss::AnimationRule rule;
+        QVERIFY(parser.testAnimation());
+        QVERIFY(parser.parseAnimation(&rule));
+        QCOMPARE(rule.animName, QStringLiteral("motion"));
+        QCOMPARE(rule.ruleSets.size(), 2);
+        QCOMPARE(rule.ruleSets[0].keyFrame, 0);
+        QCOMPARE(rule.ruleSets[1].keyFrame, 1);
+        QCOMPARE(rule.ruleSets[0].declarations[0].d->property, QStringLiteral("x"));
+        QCOMPARE(rule.ruleSets[0].declarations[0].d->values[0].toString(), QStringLiteral("10"));
+        QCOMPARE(rule.ruleSets[1].declarations[0].d->property, QStringLiteral("x"));
+        QCOMPARE(rule.ruleSets[1].declarations[0].d->values[0].toString(), QStringLiteral("50"));
+    }
+
+    {
+        QCss::AnimationRule rule;
+        QVERIFY(parser.testAnimation());
+        QVERIFY(parser.parseAnimation(&rule));
+        QCOMPARE(rule.animName, QStringLiteral("color"));
+        QCOMPARE(rule.ruleSets.size(), 3);
+        QCOMPARE(rule.ruleSets[0].keyFrame, 0);
+        QCOMPARE(rule.ruleSets[1].keyFrame, 0.25);
+        QCOMPARE(rule.ruleSets[2].keyFrame, 1);
+        QCOMPARE(rule.ruleSets[0].declarations[0].d->property, QStringLiteral("fill"));
+        QCOMPARE(rule.ruleSets[0].declarations[0].d->values[0].toString(), QStringLiteral("blue"));
+        QCOMPARE(rule.ruleSets[1].declarations[0].d->property, QStringLiteral("fill"));
+        QCOMPARE(rule.ruleSets[1].declarations[0].d->values[0].toString(), QStringLiteral("yellow"));
+        QCOMPARE(rule.ruleSets[2].declarations[0].d->property, QStringLiteral("fill"));
+        QCOMPARE(rule.ruleSets[2].declarations[0].d->values[0].toString(), QStringLiteral("red"));
+    }
 }
 
 void tst_QCssParser::page()
@@ -835,6 +899,7 @@ void tst_QCssParser::colorValue_data()
     QTest::newRow("invalid7") << "color: hsla(1, a, 1, 21)" << QColor();
     QTest::newRow("role") << "color: palette(base)" << qApp->palette().color(QPalette::Base);
     QTest::newRow("role2") << "color: palette( window-text ) " << qApp->palette().color(QPalette::WindowText);
+    QTest::newRow("role3") << "color: palette(accent)" << qApp->palette().color(QPalette::Accent);
     QTest::newRow("transparent") << "color: transparent" << QColor(Qt::transparent);
 
     QTest::newRow("rgb-invalid") << "color: rgb(10, 20, 30, 40)" << QColor();
@@ -1356,6 +1421,12 @@ void tst_QCssParser::shorthandBackgroundProperty_data()
     QTest::newRow("multi") << "background: left url(blah.png) repeat-x" << QBrush() << QString("blah.png") << int(QCss::Repeat_X) << int(Qt::AlignLeft | Qt::AlignVCenter);
     QTest::newRow("multi2") << "background: url(blah.png) repeat-x top" << QBrush() << QString("blah.png") << int(QCss::Repeat_X) << int(Qt::AlignTop | Qt::AlignHCenter);
     QTest::newRow("multi3") << "background: url(blah.png) top right" << QBrush() << QString("blah.png") << int(QCss::Repeat_XY) << int(Qt::AlignTop | Qt::AlignRight);
+    QTest::newRow("url-query-quoted") << "background: url(\"https://placecats.com/300/200?fit=contain&position=top\")"
+                                                                    << QBrush() << QString("https://placecats.com/300/200?fit=contain&position=top")
+                                                                    << int(QCss::Repeat_XY) << int(Qt::AlignTop | Qt::AlignLeft);
+    QTest::newRow("url-query-unquoted") << "background: url(https://placecats.com/300/200?fit=contain&position=top)"
+                                                                    << QBrush() << QString("https://placecats.com/300/200?fit=contain&position=top")
+                                                                    << int(QCss::Repeat_XY) << int(Qt::AlignTop | Qt::AlignLeft);
 }
 
 void tst_QCssParser::shorthandBackgroundProperty()
@@ -1370,6 +1441,7 @@ void tst_QCssParser::shorthandBackgroundProperty()
 
     QCss::Parser parser(css);
     QCss::StyleSheet sheet;
+    QEXPECT_FAIL("url-query-unquoted", "QTBUG-131842", Abort);
     QVERIFY(parser.parse(&sheet));
 
     DomStyleSelector testSelector(doc, sheet);
@@ -1620,6 +1692,65 @@ void tst_QCssParser::extractFontFamily()
     QTEST(info.family(), "expectedFamily");
 }
 
+void tst_QCssParser::extractFontSize_data()
+{
+    QTest::addColumn<QString>("css");
+    QTest::addColumn<int>("expectedPixelSize");
+    QTest::addColumn<int>("expectedPointSize");
+    QTest::addColumn<qreal>("expectedPointSizeF");
+
+    QTest::newRow("integer point size") << "font-size: 12pt" << -1 << 12 << 12.0;
+    QTest::newRow("float point size round down") << "font-size: 12.3pt" << -1 << 12 << 12.3;
+    QTest::newRow("float point size midpoint") << "font-size: 12.5pt" << -1 << 13 << 12.5;
+    QTest::newRow("float point size round up") << "font-size: 12.7pt" << -1 << 13 << 12.7;
+
+    QTest::newRow("integer pixel size") << "font-size: 12px" << 12 << -1 << -1.0;
+    QTest::newRow("float pixel size round down") << "font-size: 12.3px" << 12 << -1 << -1.0;
+    QTest::newRow("float pixel size midpoint") << "font-size: 12.5px" << 13 << -1 << -1.0;
+    QTest::newRow("float pixel size round up") << "font-size: 12.7px" << 13 << -1 << -1.0;
+
+    QTest::newRow("shorthand integer point size") << "font: 12pt Arial" << -1 << 12 << 12.0;
+    QTest::newRow("shorthand float point size round down") << "font: 12.3pt Arial" << -1 << 12 << 12.3;
+    QTest::newRow("shorthand float point size midpoint") << "font: 12.5pt Arial" << -1 << 13 << 12.5;
+    QTest::newRow("shorthand float point size round up") << "font: 12.7pt Arial" << -1 << 13 << 12.7;
+
+    QTest::newRow("shorthand integer pixel size") << "font: 12px Arial" << 12 << -1 << -1.0;
+    QTest::newRow("shorthand float pixel size round down") << "font: 12.3px Arial" << 12 << -1 << -1.0;
+    QTest::newRow("shorthand float pixel size midpoint") << "font: 12.5px Arial" << 13 << -1 << -1.0;
+    QTest::newRow("shorthand float pixel size round up") << "font: 12.7px Arial" << 13 << -1 << -1.0;
+}
+
+void tst_QCssParser::extractFontSize()
+{
+    QFETCH(QString, css);
+    css.prepend("dummy {");
+    css.append(QLatin1Char('}'));
+
+    QCss::Parser parser(css);
+    QCss::StyleSheet sheet;
+    QVERIFY(parser.parse(&sheet));
+
+    QCOMPARE(sheet.styleRules.size() + sheet.nameIndex.size(), 1);
+    QCss::StyleRule rule = (!sheet.styleRules.isEmpty()) ?
+            sheet.styleRules.at(0) : *sheet.nameIndex.begin();
+
+    const QList<QCss::Declaration> decls = rule.declarations;
+    QVERIFY(!decls.isEmpty());
+    QCss::ValueExtractor extractor(decls);
+
+    int adjustment = 0;
+    QFont font;
+    extractor.extractFont(&font, &adjustment);
+
+    QFETCH(int, expectedPixelSize);
+    QFETCH(int, expectedPointSize);
+    QFETCH(qreal, expectedPointSizeF);
+
+    QCOMPARE(font.pixelSize(), expectedPixelSize);
+    QCOMPARE(font.pointSize(), expectedPointSize);
+    QCOMPARE(font.pointSizeF(), expectedPointSizeF);
+}
+
 void tst_QCssParser::extractBorder_data()
 {
     QTest::addColumn<QString>("css");
@@ -1684,6 +1815,118 @@ void tst_QCssParser::extractBorder()
     QCOMPARE(widths[QCss::TopEdge], expectedTopWidth);
     QCOMPARE(int(styles[QCss::TopEdge]), expectedTopStyle);
     QCOMPARE(colors[QCss::TopEdge].color(), expectedTopColor);
+}
+
+void tst_QCssParser::extractBorderImage_data()
+{
+    QTest::addColumn<QString>("css");
+    QTest::addColumn<QString>("imgUrl");
+    QTest::addColumn<QCss::TileMode>("tileMode1");
+    QTest::addColumn<QCss::TileMode>("tileMode2");
+
+    QTest::newRow("no valid url, 1 stretch")
+        << "border-image: stretch" << QString()
+        << QCss::TileMode::TileMode_Stretch
+        << QCss::TileMode::TileMode_Stretch;
+    QTest::newRow("tilemode stretch")
+        << "border-image: url(:/image.png) 1 stretch"  << ":/image.png"
+        << QCss::TileMode::TileMode_Stretch
+        << QCss::TileMode::TileMode_Stretch;
+    QTest::newRow("tilemode repeat")
+        << "border-image: url(:/image.png) 1 2 repeat" << ":/image.png"
+        << QCss::TileMode::TileMode_Repeat
+        << QCss::TileMode::TileMode_Repeat;
+    QTest::newRow("tilemode repeat and stretch")
+        << "border-image: url(:/image.png) 1 2 3 repeat stretch" << ":/image.png"
+        << QCss::TileMode::TileMode_Repeat
+        << QCss::TileMode::TileMode_Stretch;
+}
+
+void tst_QCssParser::extractBorderImage()
+{
+    QFETCH(QString, css);
+    QFETCH(QString, imgUrl);
+    QFETCH(QCss::TileMode, tileMode1);
+    QFETCH(QCss::TileMode, tileMode2);
+
+    css.prepend("dummy {");
+    css.append(QLatin1Char('}'));
+
+    QCss::Parser parser(css);
+    QCss::StyleSheet sheet;
+    QVERIFY(parser.parse(&sheet));
+
+    QCOMPARE(sheet.styleRules.size() + sheet.nameIndex.size(), 1);
+    QCss::StyleRule rule =  (!sheet.styleRules.isEmpty()) ?
+            sheet.styleRules.at(0) : *sheet.nameIndex.begin();
+    const QList<QCss::Declaration> decls = rule.declarations;
+    QVERIFY(!decls.isEmpty());
+
+    QString uri;
+    QCss::TileMode horizStretch, vertStretch;
+    int cuts[4];
+    for (const auto& decl : decls) {
+        if (decl.d->propertyId == QCss::BorderImage) {
+            decl.borderImageValue(&uri, cuts, &horizStretch, &vertStretch);
+            QCOMPARE(uri, imgUrl);
+            QCOMPARE(horizStretch, tileMode1);
+            QCOMPARE(vertStretch, tileMode2);
+        }
+    }
+}
+void tst_QCssParser::extractBorderImageCuts_data()
+{
+    QTest::addColumn<QString>("css");
+    QTest::addColumn<int>("expCut1");
+    QTest::addColumn<int>("expCut2");
+    QTest::addColumn<int>("expCut3");
+    QTest::addColumn<int>("expCut4");
+
+    const QString url = "border-image: url(:/image.png)";
+    QTest::newRow("no cuts") << url << -1 << -1 << -1 << -1;
+    QTest::newRow("1 cut, valid") << url + " 2" << 2 << 2 << 2 << 2;
+    QTest::newRow("1 cut, invalid") << url + " -42" << -1 << -1 << -1 << -1;
+    QTest::newRow("2 cuts, valid") << url + " 2 3" << 2 << 3 << 2 << 3;
+    QTest::newRow("2 cuts, invalid") << url + " 2 -3" << -1 << -1 << -1 << -1;
+    QTest::newRow("3 cuts, valid") << url + " 2 3 4" << 2 << 3 << 4 << 3;
+    QTest::newRow("3 cuts, invalid") << url + " 2 3 -4" << -1 << -1 << -1 << -1;
+    QTest::newRow("4 cuts, valid") << url + " 2 3 4 5" << 2 << 3 << 4 << 5;
+    QTest::newRow("4 cuts, invalid") << url + " 2 3 4 -5" << -1 << -1 << -1 << -1;
+}
+
+void tst_QCssParser::extractBorderImageCuts()
+{
+    QFETCH(QString, css);
+    QFETCH(int, expCut1);
+    QFETCH(int, expCut2);
+    QFETCH(int, expCut3);
+    QFETCH(int, expCut4);
+
+    css.prepend("dummy {");
+    css.append(QLatin1Char('}'));
+
+    QCss::Parser parser(css);
+    QCss::StyleSheet sheet;
+    QVERIFY(parser.parse(&sheet));
+
+    QCOMPARE(sheet.styleRules.size() + sheet.nameIndex.size(), 1);
+    QCss::StyleRule rule =  (!sheet.styleRules.isEmpty()) ?
+            sheet.styleRules.at(0) : *sheet.nameIndex.begin();
+    const QList<QCss::Declaration> decls = rule.declarations;
+    QVERIFY(!decls.isEmpty());
+
+    QString uri;
+    QCss::TileMode horizStretch, vertStretch;
+    int cuts[4];
+    for (const auto& decl : decls) {
+        if (decl.d->propertyId == QCss::BorderImage) {
+            decl.borderImageValue(&uri, cuts, &horizStretch, &vertStretch);
+            QCOMPARE(cuts[0], expCut1);
+            QCOMPARE(cuts[1], expCut2);
+            QCOMPARE(cuts[2], expCut3);
+            QCOMPARE(cuts[3], expCut4);
+        }
+    }
 }
 
 void tst_QCssParser::noTextDecoration()
@@ -1757,6 +2000,108 @@ void tst_QCssParser::whitespaceValues()
 
     QCOMPARE(rule.declarations.at(0).d->property, QLatin1String("white-space"));
     QCOMPARE(rule.declarations.at(0).d->values.first().toString(), value);
+}
+
+void tst_QCssParser::strokeLineCapValues_data()
+{
+    QTest::addColumn<QString>("value");
+
+    QTest::newRow("flatcap") << "flatcap";
+    QTest::newRow("roundcap") << "roundcap";
+    QTest::newRow("squarecap") << "squarecap";
+}
+
+void tst_QCssParser::strokeLineCapValues()
+{
+    QFETCH(QString, value);
+    QCss::Parser parser(QString("foo { -qt-stroke-linecap: %1 }").arg(value));
+    QCss::StyleSheet sheet;
+    QVERIFY(parser.parse(&sheet));
+
+    QCss::StyleRule rule = (!sheet.styleRules.isEmpty()) ?
+            sheet.styleRules.at(0) : *sheet.nameIndex.begin();
+    QCOMPARE(rule.declarations.size(), 1);
+
+    QCOMPARE(rule.declarations.at(0).d->property, QLatin1String("-qt-stroke-linecap"));
+    QCOMPARE(rule.declarations.at(0).d->values.first().type, QCss::Value::KnownIdentifier);
+    QCOMPARE(rule.declarations.at(0).d->values.first().toString(), value);
+}
+
+void tst_QCssParser::strokeLineJoinValues_data()
+{
+    QTest::addColumn<QString>("value");
+
+    QTest::newRow("beveljoin") << "beveljoin";
+    QTest::newRow("miterjoin") << "miterjoin";
+    QTest::newRow("roundjoin") << "roundjoin";
+    QTest::newRow("svgmiterjoin") << "svgmiterjoin";
+}
+
+void tst_QCssParser::strokeLineJoinValues()
+{
+    QFETCH(QString, value);
+    QCss::Parser parser(QString("foo { -qt-stroke-linejoin: %1 }").arg(value));
+    QCss::StyleSheet sheet;
+    QVERIFY(parser.parse(&sheet));
+
+    QCss::StyleRule rule = (!sheet.styleRules.isEmpty()) ?
+            sheet.styleRules.at(0) : *sheet.nameIndex.begin();
+    QCOMPARE(rule.declarations.size(), 1);
+
+    QCOMPARE(rule.declarations.at(0).d->property, QLatin1String("-qt-stroke-linejoin"));
+    QCOMPARE(rule.declarations.at(0).d->values.first().type, QCss::Value::KnownIdentifier);
+    QCOMPARE(rule.declarations.at(0).d->values.first().toString(), value);
+}
+
+void tst_QCssParser::borderColor_data()
+{
+    QTest::addColumn<QString>("css");
+    QTest::addColumn<QColor>("expectedTopColor");
+    QTest::addColumn<QColor>("expectedRightColor");
+    QTest::addColumn<QColor>("expectedBottomColor");
+    QTest::addColumn<QColor>("expectedLeftColor");
+
+    QTest::newRow("four values") << "border-color: red green blue white" << QColor("red") << QColor("green") << QColor("blue") << QColor("white");
+    QTest::newRow("three values") << "border-color: red green blue" << QColor("red") << QColor("green") << QColor("blue") << QColor("green");
+    QTest::newRow("two values") << "border-color: red green" << QColor("red") << QColor("green") << QColor("red") << QColor("green");
+    QTest::newRow("one value") << "border-color: red" << QColor("red") << QColor("red") << QColor("red") << QColor("red");
+}
+
+void tst_QCssParser::borderColor()
+{
+    QFETCH(QString, css);
+    QFETCH(QColor, expectedTopColor);
+    QFETCH(QColor, expectedRightColor);
+    QFETCH(QColor, expectedBottomColor);
+    QFETCH(QColor, expectedLeftColor);
+
+    css.prepend("dummy {");
+    css.append(QLatin1Char('}'));
+
+    QCss::Parser parser(css);
+    QCss::StyleSheet sheet;
+    QVERIFY(parser.parse(&sheet));
+
+    QCOMPARE(sheet.styleRules.size() + sheet.nameIndex.size(), 1);
+    QCss::StyleRule rule =  (!sheet.styleRules.isEmpty()) ?
+            sheet.styleRules.at(0) : *sheet.nameIndex.begin();
+    const QList<QCss::Declaration> decls = rule.declarations;
+    QVERIFY(decls.size() == 1);
+    QVERIFY(decls[0].d->propertyId == QCss::BorderColor);
+
+    QBrush colors[4];
+
+    decls[0].brushValues(colors);
+    QCOMPARE(colors[QCss::TopEdge].color(), expectedTopColor);
+    QCOMPARE(colors[QCss::RightEdge].color(), expectedRightColor);
+    QCOMPARE(colors[QCss::BottomEdge].color(), expectedBottomColor);
+    QCOMPARE(colors[QCss::LeftEdge].color(), expectedLeftColor);
+
+    //QTBUG-126381 : a second evaluation should give the same results
+    QCOMPARE(colors[QCss::TopEdge].color(), expectedTopColor);
+    QCOMPARE(colors[QCss::RightEdge].color(), expectedRightColor);
+    QCOMPARE(colors[QCss::BottomEdge].color(), expectedBottomColor);
+    QCOMPARE(colors[QCss::LeftEdge].color(), expectedLeftColor);
 }
 
 QTEST_MAIN(tst_QCssParser)

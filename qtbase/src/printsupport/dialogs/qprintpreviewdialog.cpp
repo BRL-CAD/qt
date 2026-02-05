@@ -1,5 +1,6 @@
 // Copyright (C) 2016 The Qt Company Ltd.
 // SPDX-License-Identifier: LicenseRef-Qt-Commercial OR LGPL-3.0-only OR GPL-2.0-only OR GPL-3.0-only
+// Qt-Security score:significant reason:default
 
 #include "qprintpreviewdialog.h"
 #include "qprintpreviewwidget.h"
@@ -141,6 +142,7 @@ public:
     void layoutPages();
     void setupActions();
     void updateNavActions();
+    QString formattedZoomFactor(double value);
     void setFitting(bool on);
     bool isFitting();
     void updatePageNumLabel();
@@ -223,7 +225,7 @@ void QPrintPreviewDialogPrivate::init(QPrinter *_printer)
     zoomFactor->setLineEdit(zoomEditor);
     static const short factorsX2[] = { 25, 50, 100, 200, 250, 300, 400, 800, 1600 };
     for (auto factorX2 : factorsX2)
-        zoomFactor->addItem(QPrintPreviewDialog::tr("%1%").arg(factorX2 / 2.0));
+        zoomFactor->addItem(formattedZoomFactor(factorX2 / 2.0));
     QObject::connect(zoomFactor->lineEdit(), SIGNAL(editingFinished()),
                      q, SLOT(_q_zoomFactorChanged()));
     QObject::connect(zoomFactor, SIGNAL(currentIndexChanged(int)),
@@ -250,7 +252,7 @@ void QPrintPreviewDialogPrivate::init(QPrinter *_printer)
     QWidget *pageEdit = new QWidget(toolbar);
     QVBoxLayout *vboxLayout = new QVBoxLayout;
     vboxLayout->setContentsMargins(0, 0, 0, 0);
-#ifdef Q_OS_MAC
+#ifdef Q_OS_MACOS
     // We query the widgets about their size and then we fix the size.
     // This should do the trick for the laying out part...
     QSize pageNumEditSize, pageNumLabelSize;
@@ -260,7 +262,7 @@ void QPrintPreviewDialogPrivate::init(QPrinter *_printer)
     pageNumLabel->resize(pageNumLabelSize);
 #endif
     QFormLayout *formLayout = new QFormLayout;
-#ifdef Q_OS_MAC
+#ifdef Q_OS_MACOS
     // We have to change the growth policy in Mac.
     formLayout->setFieldGrowthPolicy(QFormLayout::AllNonFixedFieldsGrow);
 #endif
@@ -310,7 +312,7 @@ void QPrintPreviewDialogPrivate::init(QPrinter *_printer)
     q->setWindowTitle(caption);
 
     if (!printer->isValid()
-#if defined(Q_OS_WIN) || defined(Q_OS_MAC)
+#if defined(Q_OS_WIN) || defined(Q_OS_APPLE)
         || printer->outputFormat() != QPrinter::NativeFormat
 #endif
         )
@@ -436,6 +438,12 @@ void QPrintPreviewDialogPrivate::setFitting(bool on)
     }
 }
 
+QString QPrintPreviewDialogPrivate::formattedZoomFactor(double value)
+{
+    //: Zoom factor percentage value, % is the percent sign
+    return QPrintPreviewDialog::tr("%1%").arg(QLocale().toString(value, 'f', 1));
+}
+
 void QPrintPreviewDialogPrivate::updateNavActions()
 {
     int curPage = preview->currentPage();
@@ -464,7 +472,7 @@ void QPrintPreviewDialogPrivate::updatePageNumLabel()
 
 void QPrintPreviewDialogPrivate::updateZoomFactor()
 {
-    zoomFactor->lineEdit()->setText(QString::asprintf("%.1f%%", preview->zoomFactor()*100));
+    zoomFactor->lineEdit()->setText(formattedZoomFactor(preview->zoomFactor() * 100));
 }
 
 void QPrintPreviewDialogPrivate::_q_fit(QAction* action)
@@ -539,7 +547,7 @@ void QPrintPreviewDialogPrivate::_q_print()
 {
     Q_Q(QPrintPreviewDialog);
 
-#if defined(Q_OS_WIN) || defined(Q_OS_MAC)
+#if defined(Q_OS_WIN) || defined(Q_OS_APPLE)
     if (printer->outputFormat() != QPrinter::NativeFormat) {
         QString title = QCoreApplication::translate("QPrintPreviewDialog", "Export to PDF");
         QString suffix = ".pdf"_L1;
@@ -601,7 +609,7 @@ void QPrintPreviewDialogPrivate::_q_zoomFactorChanged()
     factor = qMax(qreal(1.0), qMin(qreal(1000.0), factor));
     if (ok) {
         preview->setZoomFactor(factor/100.0);
-        zoomFactor->setEditText(QString::fromLatin1("%1%").arg(factor));
+        zoomFactor->setEditText(formattedZoomFactor(factor));
         setFitting(false);
     }
 }

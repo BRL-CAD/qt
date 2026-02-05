@@ -254,6 +254,13 @@ void q_relocate_overlap_n(T *first, N n, T *d_first)
     }
 }
 
+template <typename T>
+struct ArrowProxy
+{
+    T t;
+    T *operator->() noexcept { return &t; }
+};
+
 template <typename Iterator>
 using IfIsInputIterator = typename std::enable_if<
     std::is_convertible<typename std::iterator_traits<Iterator>::iterator_category, std::input_iterator_tag>::value,
@@ -292,8 +299,8 @@ using KeyAndValueTest = decltype(
 
 template <typename Iterator>
 using FirstAndSecondTest = decltype(
-    std::declval<Iterator &>()->first,
-    std::declval<Iterator &>()->second
+    (*std::declval<Iterator &>()).first,
+    (*std::declval<Iterator &>()).second
 );
 
 template <typename Iterator>
@@ -365,7 +372,7 @@ template <typename Container, typename T>
 auto sequential_erase(Container &c, const T &t)
 {
     // use the equivalence relation from http://eel.is/c++draft/list.erasure#1
-    auto cmp = [&](auto &e) { return e == t; };
+    auto cmp = [&](const auto &e) -> bool { return e == t; };
     return sequential_erase_if(c, cmp); // can't pass rvalues!
 }
 
@@ -391,12 +398,13 @@ template <typename T, typename Predicate>
 qsizetype qset_erase_if(QSet<T> &set, Predicate &pred)
 {
     qsizetype result = 0;
-    auto it = set.begin();
-    const auto e = set.end();
+    auto it = set.cbegin();
+    auto e = set.cend(); // stable across detach (QHash::end() is a stateless sentinel)...
     while (it != e) {
         if (pred(*it)) {
             ++result;
             it = set.erase(it);
+            e = set.cend(); // ...but re-set nonetheless, in case at some point it won't be
         } else {
             ++it;
         }
@@ -449,7 +457,7 @@ auto associative_erase_if(Container &c, Predicate &pred)
                 ++it;
             }
         } else {
-            static_assert(sizeof(Container) == 0, "Predicate has an incompatible signature");
+            static_assert(type_dependent_false<Container>(), "Predicate has an incompatible signature");
         }
     }
 

@@ -1,5 +1,6 @@
 // Copyright (C) 2016 The Qt Company Ltd.
 // SPDX-License-Identifier: LicenseRef-Qt-Commercial OR LGPL-3.0-only OR GPL-2.0-only OR GPL-3.0-only
+// Qt-Security score:significant reason:default
 
 /*!
     \class QGraphicsScene
@@ -186,7 +187,6 @@
 #include <QtCore/qrect.h>
 #include <QtCore/qset.h>
 #include <QtCore/qstack.h>
-#include <QtCore/qtimer.h>
 #include <QtCore/qvarlengtharray.h>
 #include <QtCore/QMetaMethod>
 #include <QtWidgets/qapplication.h>
@@ -4772,7 +4772,7 @@ static inline void setClip(QPainter *painter, QGraphicsItem *item)
     QRectF clipRect;
     const QPainterPath clipPath(item->shape());
     if (QPathClipper::pathToRect(clipPath, &clipRect))
-        painter->setClipRect(clipRect, Qt::IntersectClip);
+        painter->setClipRect(clipRect.normalized(), Qt::IntersectClip);
     else
         painter->setClipPath(clipPath, Qt::IntersectClip);
 }
@@ -5832,7 +5832,7 @@ int QGraphicsScenePrivate::findClosestTouchPointId(const QPointF &scenePos)
 
 void QGraphicsScenePrivate::touchEventHandler(QTouchEvent *sceneTouchEvent)
 {
-    typedef QPair<QEventPoint::States, QList<QEventPoint> > StatesAndTouchPoints;
+    typedef std::pair<QEventPoint::States, QList<QEventPoint> > StatesAndTouchPoints;
     QHash<QGraphicsItem *, StatesAndTouchPoints> itemsNeedingEvents;
 
     const auto &touchPoints = sceneTouchEvent->points();

@@ -1,5 +1,6 @@
 // Copyright (C) 2013 David Faure <faure@kde.org>
 // SPDX-License-Identifier: LicenseRef-Qt-Commercial OR LGPL-3.0-only OR GPL-2.0-only OR GPL-3.0-only
+// Qt-Security score:significant reason:header-decls-only
 
 #ifndef QSAVEFILE_P_H
 #define QSAVEFILE_P_H
@@ -15,9 +16,9 @@
 // We mean it.
 //
 
-#include <QtCore/qglobal.h>
+#include <QtCore/qsavefile.h>
 
-#ifndef QT_NO_TEMPORARYFILE
+#if QT_CONFIG(temporaryfile)
 
 #include "private/qfiledevice_p.h"
 
@@ -42,6 +43,6 @@ protected:
 
 QT_END_NAMESPACE
 
-#endif // QT_NO_TEMPORARYFILE
+#endif // QT_CONFIG(temporaryfile)
 
 #endif // QSAVEFILE_P_H

@@ -1,5 +1,6 @@
 // Copyright (C) 2016 The Qt Company Ltd.
 // SPDX-License-Identifier: LicenseRef-Qt-Commercial OR LGPL-3.0-only OR GPL-2.0-only OR GPL-3.0-only
+// Qt-Security score:significant reason:default
 
 #ifndef QTOOLBARLAYOUT_P_H
 #define QTOOLBARLAYOUT_P_H
@@ -38,7 +39,7 @@ public:
     bool customWidget;
 };
 
-class QToolBarLayout : public QLayout
+class Q_AUTOTEST_EXPORT QToolBarLayout : public QLayout
 {
     Q_OBJECT
 

@@ -1,5 +1,6 @@
 // Copyright (C) 2016 The Qt Company Ltd.
 // SPDX-License-Identifier: LicenseRef-Qt-Commercial OR LGPL-3.0-only OR GPL-2.0-only OR GPL-3.0-only
+// Qt-Security score:critical reason:network-protocol
 
 #include "http2frames_p.h"
 
@@ -33,7 +34,8 @@ FrameType Frame::type() const
 quint32 Frame::streamID() const
 {
     Q_ASSERT(buffer.size() >= frameHeaderSize);
-    return qFromBigEndian<quint32>(&buffer[5]);
+    // RFC 9113, 4.1: 31-bit Stream ID; lastValidStreamID(0x7FFFFFFF) masks out the reserved MSB
+    return qFromBigEndian<quint32>(&buffer[5]) & lastValidStreamID;
 }
 
 FrameFlags Frame::flags() const

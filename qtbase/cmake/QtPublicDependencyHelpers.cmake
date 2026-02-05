@@ -34,6 +34,41 @@ macro(_qt_internal_find_third_party_dependencies target target_dep_list)
             find_package(${__qt_${target}_find_package_args})
         else()
             find_dependency(${__qt_${target}_find_package_args})
+            if(NOT ${__qt_${target}_pkg}_FOUND)
+                list(APPEND __qt_${target}_missing_deps "${__qt_${target}_pkg}")
+            endif()
+        endif()
+
+        _qt_internal_get_package_components_id(
+            PACKAGE_NAME "${__qt_${target}_pkg}"
+            COMPONENTS ${__qt_${target}_components}
+            OPTIONAL_COMPONENTS ${__qt_${target}_optional_components}
+            OUT_VAR_KEY __qt_${target}_package_components_id
+        )
+        if(${__qt_${target}_pkg}_FOUND
+                AND __qt_${target}_third_party_package_${__qt_${target}_package_components_id}_provided_targets)
+            set(__qt_${target}_sbom_args "")
+
+            if(${__qt_${target}_pkg}_VERSION)
+                list(APPEND __qt_${target}_sbom_args
+                    PACKAGE_VERSION "${${__qt_${target}_pkg}_VERSION}"
+                )
+            endif()
+
+            foreach(__qt_${target}_provided_target
+                    IN LISTS
+                    __qt_${target}_third_party_package_${__qt_${target}_package_components_id}_provided_targets)
+
+                _qt_internal_promote_3rd_party_provided_target_and_3rd_party_deps_to_global(
+                    "${__qt_${target}_provided_target}")
+
+                _qt_internal_sbom_record_system_library_usage(
+                    "${__qt_${target}_provided_target}"
+                    SBOM_ENTITY_TYPE SYSTEM_LIBRARY
+                    FRIENDLY_PACKAGE_NAME "${__qt_${target}_pkg}"
+                    ${__qt_${target}_sbom_args}
+                )
+            endforeach()
         endif()
     endforeach()
 endmacro()
@@ -51,14 +86,14 @@ macro(_qt_internal_find_tool_dependencies target target_dep_list)
              "${_qt_additional_host_packages_root_paths}")
     endif()
 
+    unset(__qt_${target}_find_package_args)
+    if(${CMAKE_FIND_PACKAGE_NAME}_FIND_QUIETLY)
+        list(APPEND __qt_${target}_find_package_args QUIET)
+    endif()
+
     foreach(__qt_${target}_target_dep IN LISTS ${target_dep_list})
         list(GET __qt_${target}_target_dep 0 __qt_${target}_pkg)
         list(GET __qt_${target}_target_dep 1 __qt_${target}_version)
-
-        unset(__qt_${target}_find_package_args)
-        if(${CMAKE_FIND_PACKAGE_NAME}_FIND_QUIETLY)
-            list(APPEND __qt_${target}_find_package_args QUIET)
-        endif()
 
         _qt_internal_save_find_package_context_for_debugging(${target})
 
@@ -92,42 +127,34 @@ endmacro()
 # contain preformed dependencies. See foreach block for reference.
 # The same applies for find_dependency_path_list.
 macro(_qt_internal_find_qt_dependencies target target_dep_list find_dependency_path_list)
+    list(APPEND __qt_${target}_find_qt_dependencies_save_QT_NO_PRIVATE_MODULE_WARNING
+        ${QT_NO_PRIVATE_MODULE_WARNING}
+    )
+    set(QT_NO_PRIVATE_MODULE_WARNING ON)
+
     foreach(__qt_${target}_target_dep IN LISTS ${target_dep_list})
         list(GET __qt_${target}_target_dep 0 __qt_${target}_pkg)
         list(GET __qt_${target}_target_dep 1 __qt_${target}_version)
 
         if (NOT ${__qt_${target}_pkg}_FOUND)
-
-            # TODO: Remove Private handling once sufficient time has passed, aka all developers
-            # updated their builds not to contain stale FooDependencies.cmake files without the
-            # _qt_package_name property.
-            set(__qt_${target}_pkg_names ${__qt_${target}_pkg})
-            if(__qt_${target}_pkg MATCHES "(.*)Private$")
-                set(__qt_${target}_pkg_names "${CMAKE_MATCH_1};${__qt_${target}_pkg}")
-            endif()
-
             _qt_internal_save_find_package_context_for_debugging(${target})
 
             find_dependency(${__qt_${target}_pkg} ${__qt_${target}_version}
-                NAMES
-                    ${__qt_${target}_pkg_names}
                 PATHS
                     ${QT_BUILD_CMAKE_PREFIX_PATH}
                     ${${find_dependency_path_list}}
                     ${_qt_additional_packages_prefix_paths}
                 ${__qt_use_no_default_path_for_qt_packages}
             )
+            if(NOT ${__qt_${target}_pkg}_FOUND)
+                list(APPEND __qt_${target}_missing_deps "${__qt_${target}_pkg}")
+            endif()
         endif()
     endforeach()
-endmacro()
 
-
-# TODO: Remove once a dependency update completes and most developers have the Dependencies.cmake
-# files updated in their builds.
-# The name is too generic, it doesn't look for any kind of dependencies but only Qt package
-# dependencies.
-macro(_qt_internal_find_dependencies target_dep_list find_dependency_path_list)
-    _qt_internal_find_qt_dependencies("none" "${target_dep_list}" "${find_dependency_path_list}")
+    list(POP_BACK __qt_${target}_find_qt_dependencies_save_QT_NO_PRIVATE_MODULE_WARNING
+        QT_NO_PRIVATE_MODULE_WARNING
+    )
 endmacro()
 
 # If a dependency package was not found, provide some hints in the error message on how to debug
@@ -211,9 +238,9 @@ function(_qt_internal_determine_if_host_info_package_needed out_var)
     set(${out_var} "${needed}" PARENT_SCOPE)
 endfunction()
 
-macro(_qt_internal_find_host_info_package platform_requires_host_info)
+macro(_qt_internal_find_host_info_package platform_requires_host_info install_namespace)
     if(${platform_requires_host_info})
-        find_package(Qt6HostInfo
+        find_package(${install_namespace}HostInfo
                      CONFIG
                      REQUIRED
                      PATHS "${QT_HOST_PATH}"
@@ -233,6 +260,8 @@ macro(_qt_internal_setup_qt_host_path
     # Requiredness can be overridden via variable.
     if(DEFINED QT_REQUIRE_HOST_PATH_CHECK)
         set(_qt_platform_host_path_required "${QT_REQUIRE_HOST_PATH_CHECK}")
+    elseif(DEFINED ENV{QT_REQUIRE_HOST_PATH_CHECK})
+        set(_qt_platform_host_path_required "$ENV{QT_REQUIRE_HOST_PATH_CHECK}")
     else()
         set(_qt_platform_host_path_required "${host_path_required}")
     endif()
@@ -292,3 +321,23 @@ macro(_qt_internal_setup_qt_host_path
         endif()
     endif()
 endmacro()
+
+function(_qt_internal_show_private_module_warning module)
+    if(DEFINED QT_REPO_MODULE_VERSION OR QT_NO_PRIVATE_MODULE_WARNING OR QT_FIND_PRIVATE_MODULES)
+        return()
+    endif()
+
+    get_cmake_property(warning_shown __qt_private_module_${module}_warning_shown)
+    if(warning_shown)
+        return()
+    endif()
+
+    message(WARNING
+        "This project is using headers of the ${module} module and will therefore be tied "
+        "to this specific Qt module build version. "
+        "Running this project against other versions of the Qt modules may crash at any arbitrary "
+        "point. This is not a bug, but a result of using Qt internals. You have been warned! "
+        "\nYou can disable this warning by setting QT_NO_PRIVATE_MODULE_WARNING to ON."
+    )
+    set_property(GLOBAL PROPERTY __qt_private_module_${module}_warning_shown TRUE)
+endfunction()

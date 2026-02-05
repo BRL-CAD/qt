@@ -26,6 +26,7 @@ qt_internal_add_module(Sql
         QT_NO_CONTEXTLESS_CONNECT
         QT_NO_FOREACH
         QT_NO_USING_NAMESPACE
+        QT_USE_NODISCARD_FILE_OPEN
     LIBRARIES
         Qt::CorePrivate
     PUBLIC_LIBRARIES
@@ -36,7 +37,6 @@ qt_internal_add_module(Sql
         "compat/removed_api.cpp"
     PRECOMPILED_HEADER
         "../corelib/global/qt_pch.h"
-    GENERATE_CPP_EXPORTS
 )
 
 ## Scopes:
@@ -58,8 +58,7 @@ qt_internal_add_docs(Sql
     doc/qtsql.qdocconf
 )
 
-# include the snippet projects for developer-builds
-if(QT_FEATURE_private_tests)
+if(QT_FEATURE_doc_snippets)
     add_subdirectory(doc/snippets/code)
     add_subdirectory(doc/snippets/sqldatabase)
 endif()

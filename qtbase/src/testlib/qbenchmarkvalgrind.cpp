@@ -10,7 +10,7 @@
 #include <QtCore/qdir.h>
 #include <QtCore/qregularexpression.h>
 #include <QtCore/qset.h>
-#include <QtTest/private/callgrind_p.h>
+#include "3rdparty/valgrind/callgrind_p.h"
 
 #include <charconv>
 #include <optional>
@@ -45,7 +45,10 @@ bool QBenchmarkValgrindUtils::rerunThroughCallgrind(const QStringList &origAppAr
 static void dumpOutput(const QByteArray &data, FILE *fh)
 {
     QFile file;
-    file.open(fh, QIODevice::WriteOnly);
+    if (!file.open(fh, QIODevice::WriteOnly)) {
+        qFatal("Could not open filehandle for dumping output: %s",
+               qPrintable(file.errorString()));
+    }
     file.write(data);
 }
 
@@ -57,8 +60,8 @@ qint64 QBenchmarkValgrindUtils::extractResult(const QString &fileName)
     Q_UNUSED(openOk);
 
     std::optional<qint64> val = std::nullopt;
-    while (!file.atEnd()) {
-        const QByteArray line = file.readLine();
+    QByteArray line;
+    while (file.readLineInto(&line)) {
         constexpr QByteArrayView tag = "summary: ";
         if (line.startsWith(tag)) {
             const auto maybeNumber = line.data() + tag.size();

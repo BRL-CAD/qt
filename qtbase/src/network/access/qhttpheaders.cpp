@@ -1,7 +1,10 @@
 // Copyright (C) 2023 The Qt Company Ltd.
 // SPDX-License-Identifier: LicenseRef-Qt-Commercial OR LGPL-3.0-only OR GPL-2.0-only OR GPL-3.0-only
+// Qt-Security score:significant reason:default
 
 #include "qhttpheaders.h"
+
+#include <QtNetwork/private/qnetworkrequest_p.h>
 
 #include <private/qoffsetstringarray_p.h>
 
@@ -11,6 +14,7 @@
 #include <QtCore/qmap.h>
 #include <QtCore/qset.h>
 #include <QtCore/qttypetraits.h>
+#include <QtCore/qxpfunctional.h>
 
 #include <q20algorithm.h>
 #include <string_view>
@@ -18,7 +22,7 @@
 
 QT_BEGIN_NAMESPACE
 
-Q_LOGGING_CATEGORY(lcQHttpHeaders, "qt.network.http.headers");
+Q_STATIC_LOGGING_CATEGORY(lcQHttpHeaders, "qt.network.http.headers");
 
 /*!
     \class QHttpHeaders
@@ -483,9 +487,11 @@ static constexpr quint8 orderedHeaderNameIndexes[] = {
     171, // x-frame-options
 };
 static_assert(std::size(orderedHeaderNameIndexes) == size_t(headerNames.count()));
+#if !defined(Q_CC_GNU_ONLY) || Q_CC_GNU_ONLY >= 1000
 static_assert(q20::is_sorted(std::begin(orderedHeaderNameIndexes),
                              std::end(orderedHeaderNameIndexes),
                              ByIndirectHeaderName{}));
+#endif
 
 /*!
     \enum QHttpHeaders::WellKnownHeader
@@ -789,10 +795,14 @@ public:
     // we can define common methods which 'detach()' the private itself.
     using Self = QExplicitlySharedDataPointer<QHttpHeadersPrivate>;
     static void removeAll(Self &d, const HeaderName &name);
+    static void replaceOrAppend(Self &d, const HeaderName &name, QByteArray value);
 
     void combinedValue(const HeaderName &name, QByteArray &result) const;
     void values(const HeaderName &name, QList<QByteArray> &result) const;
     QByteArrayView value(const HeaderName &name, QByteArrayView defaultValue) const noexcept;
+    void forEachHeader(QAnyStringView name,
+                       qxp::function_ref<void(QByteArrayView)> yield);
+    std::optional<QByteArrayView> findValue(const HeaderName &name) const noexcept;
 
     QList<Header> headers;
 };
@@ -801,7 +811,7 @@ QT_DEFINE_QESDP_SPECIALIZATION_DTOR(QHttpHeadersPrivate)
 template <> void QExplicitlySharedDataPointer<QHttpHeadersPrivate>::detach()
 {
     if (!d) {
-        d = new QHttpHeadersPrivate();
+        d.reset(new QHttpHeadersPrivate());
         d->ref.ref();
     } else if (d->ref.loadRelaxed() != 1) {
         detach_helper();
@@ -850,6 +860,41 @@ QByteArrayView QHttpHeadersPrivate::value(const HeaderName &name, QByteArrayView
             return h.value;
     }
     return defaultValue;
+}
+
+void QHttpHeadersPrivate::replaceOrAppend(Self &d, const HeaderName &name, QByteArray value)
+{
+    d.detach();
+    auto it = std::find_if(d->headers.begin(), d->headers.end(), headerNameMatches(name));
+    if (it != d->headers.end()) {
+        // Found something to replace => replace, and then rearrange any remaining
+        // matches to the end and erase them
+        it->value = std::move(value);
+        d->headers.erase(
+                std::remove_if(it + 1, d->headers.end(), headerNameMatches(name)),
+                d->headers.end());
+    } else {
+        // Found nothing to replace => append
+        d->headers.append(Header{name, std::move(value)});
+    }
+}
+
+void QHttpHeadersPrivate::forEachHeader(QAnyStringView name,
+                                        qxp::function_ref<void(QByteArrayView)> yield)
+{
+    for (const auto &h : std::as_const(headers)) {
+        if (h.name.asView() == name)
+            yield(h.value);
+    }
+}
+
+std::optional<QByteArrayView> QHttpHeadersPrivate::findValue(const HeaderName &name) const noexcept
+{
+    for (const auto &h : headers) {
+        if (h.name == name)
+            return h.value;
+    }
+    return std::nullopt;
 }
 
 /*!
@@ -939,9 +984,7 @@ QHttpHeaders &QHttpHeaders::operator=(const QHttpHeaders &other)
 
 /*!
     \fn void QHttpHeaders::swap(QHttpHeaders &other)
-
-    Swaps this QHttpHeaders with \a other. This function is very fast and
-    never fails.
+    \memberswap{QHttpHeaders}
 */
 
 #ifndef QT_NO_DEBUG_STREAM
@@ -969,50 +1012,6 @@ QDebug operator<<(QDebug debug, const QHttpHeaders &headers)
     return debug;
 }
 #endif
-
-// A clarification on string encoding:
-// Setters and getters only accept names and values that are Latin-1 representable:
-// Either they are directly ASCII/Latin-1, or if they are UTF-X, they only use first 256
-// of the unicode points. For example using a '€' (U+20AC) in value would yield a warning
-// and the call is ignored.
-// Furthermore the 'name' has more strict rules than the 'value'
-
-// TODO FIXME REMOVEME once this is merged:
-// https://codereview.qt-project.org/c/qt/qtbase/+/508829
-static bool isUtf8Latin1Representable(QUtf8StringView s) noexcept
-{
-    // L1 encoded in UTF8 has at most the form
-    // - 0b0XXX'XXXX - US-ASCII
-    // - 0b1100'00XX 0b10XX'XXXX - at most 8 non-zero LSB bits allowed in L1
-    bool inMultibyte = false;
-    for (unsigned char c : s) {
-        if (c < 128) { // US-ASCII
-            if (inMultibyte)
-                return false; // invalid sequence
-        } else {
-            // decode as UTF-8:
-            if ((c & 0b1110'0000) == 0b1100'0000) { // two-octet UTF-8 leader
-                if (inMultibyte)
-                    return false; // invalid sequence
-                inMultibyte = true;
-                const auto bits_7_to_11 = c & 0b0001'1111;
-                if (bits_7_to_11 < 0b10)
-                    return false; // invalid sequence (US-ASCII encoded in two octets)
-                if (bits_7_to_11 > 0b11) // more than the two LSB
-                    return false; // outside L1
-            } else if ((c & 0b1100'0000) == 0b1000'0000) { // trailing UTF-8 octet
-                if (!inMultibyte)
-                    return false; // invalid sequence
-                inMultibyte = false; // only one continuation allowed
-            } else {
-                return false; // invalid sequence or outside of L1
-            }
-        }
-    }
-    if (inMultibyte)
-        return false; // invalid sequence: premature end
-    return true;
-}
 
 static constexpr auto isValidHttpHeaderNameChar = [](uchar c) noexcept
 {
@@ -1088,8 +1087,10 @@ static bool headerValueValidImpl(QLatin1StringView value) noexcept
 
 static bool headerValueValidImpl(QUtf8StringView value) noexcept
 {
-    if (!isUtf8Latin1Representable(value)) // TODO FIXME see the function
-        return false;
+    // UTF-8 byte sequences are also used as values directly
+    // => allow them as such. UTF-8 byte sequences for characters
+    // outside of ASCII should all fit into obs-text (>= 0x80)
+    // (see  isValidHttpHeaderValueChar)
     return std::all_of(value.begin(), value.end(), isValidHttpHeaderValueChar);
 }
 
@@ -1213,6 +1214,47 @@ bool QHttpHeaders::replace(qsizetype i, WellKnownHeader name, QAnyStringView new
 
     d.detach();
     d->headers.replace(i, {HeaderName{name}, normalizedValue(newValue)});
+    return true;
+}
+
+/*!
+    \since 6.8
+
+    If QHttpHeaders already contains \a name, replaces its value with
+    \a newValue and removes possible additional \a name entries.
+    If \a name didn't exist, appends a new entry. Returns \c true
+    if successful.
+
+    This function is a convenience method for setting a unique
+    \a name : \a newValue header. For most headers the relative order does not
+    matter, which allows reusing an existing entry if one exists.
+
+    \sa replaceOrAppend(QAnyStringView, QAnyStringView)
+*/
+bool QHttpHeaders::replaceOrAppend(WellKnownHeader name, QAnyStringView newValue)
+{
+    if (isEmpty())
+        return append(name, newValue);
+
+    if (!isValidHttpHeaderValueField(newValue))
+        return false;
+
+    QHttpHeadersPrivate::replaceOrAppend(d, HeaderName{name}, normalizedValue(newValue));
+    return true;
+}
+
+/*!
+    \overload replaceOrAppend(WellKnownHeader, QAnyStringView)
+*/
+bool QHttpHeaders::replaceOrAppend(QAnyStringView name, QAnyStringView newValue)
+{
+    if (isEmpty())
+        return append(name, newValue);
+
+    if (!isValidHttpHeaderNameField(name) || !isValidHttpHeaderValueField(newValue))
+        return false;
+
+    QHttpHeadersPrivate::replaceOrAppend(d, HeaderName{name}, normalizedValue(newValue));
     return true;
 }
 
@@ -1391,6 +1433,191 @@ QByteArray QHttpHeaders::combinedValue(WellKnownHeader name) const
 
     d->combinedValue(HeaderName{name}, result);
     return result;
+}
+
+/*!
+    \since 6.10
+
+    Returns the value of the first valid header \a name interpreted as a
+    64-bit integer.
+    If the header does not exist or cannot be parsed as an integer, returns
+    \c std::nullopt.
+
+    \sa intValues(QAnyStringView name), intValueAt(qsizetype i)
+*/
+std::optional<qint64> QHttpHeaders::intValue(QAnyStringView name) const noexcept
+{
+    std::optional<QByteArrayView> v = d->findValue(HeaderName{name});
+    if (!v)
+        return std::nullopt;
+    bool ok = false;
+    const qint64 result = v->toLongLong(&ok);
+    if (ok)
+        return result;
+    return std::nullopt;
+}
+
+/*!
+    \since 6.10
+    \overload intValue(QAnyStringView)
+*/
+std::optional<qint64> QHttpHeaders::intValue(WellKnownHeader name) const noexcept
+{
+    return intValue(wellKnownHeaderName(name));
+}
+
+/*!
+    \since 6.10
+
+    Returns the values of the header \a name interpreted as 64-bit integer
+    in a list. If the header does not exist or cannot be parsed as an integer,
+    returns \c std::nullopt.
+
+    \sa intValue(QAnyStringView name), intValueAt(qsizetype i)
+*/
+std::optional<QList<qint64>> QHttpHeaders::intValues(QAnyStringView name) const
+{
+    QList<qint64> results;
+    d->forEachHeader(name, [&](QByteArrayView value) {
+        bool ok = false;
+        qint64 result = value.toLongLong(&ok);
+        if (ok)
+            results.append(result);
+    });
+    return results.isEmpty() ? std::nullopt :
+                               std::make_optional(std::move(results));
+}
+
+/*!
+    \since 6.10
+    \overload intValues(QAnyStringView)
+*/
+std::optional<QList<qint64>> QHttpHeaders::intValues(WellKnownHeader name) const
+{
+    return intValues(wellKnownHeaderName(name));
+}
+
+/*!
+    \since 6.10
+
+    Returns the header value interpreted as 64-bit integer at index \a i.
+    The index \a i must be valid.
+
+    \sa intValues(QAnyStringView name), intValue(QAnyStringView name)
+*/
+std::optional<qint64> QHttpHeaders::intValueAt(qsizetype i) const noexcept
+{
+    verify(i);
+    QByteArrayView v = valueAt(i);
+    if (v.isEmpty())
+        return std::nullopt;
+    bool ok = false;
+    const qint64 result = v.toLongLong(&ok);
+    return ok ? std::optional<qint64>(result) :
+                std::nullopt;
+}
+
+/*!
+    \since 6.10
+
+    Converts the first found header value of \a name to a QDateTime object, following
+    the standard HTTP date formats. If the header does not exist or contains an invalid
+    QDateTime, returns \c std::nullopt.
+
+    \sa dateTimeValues(QAnyStringView name), dateTimeValueAt(qsizetype i)
+*/
+std::optional<QDateTime> QHttpHeaders::dateTimeValue(QAnyStringView name) const
+{
+    std::optional<QByteArrayView> v = d->findValue(HeaderName{name});
+    if (!v)
+        return std::nullopt;
+    QDateTime dt = QNetworkHeadersPrivate::fromHttpDate(*v);
+    if (dt.isValid())
+        return dt;
+    return std::nullopt;
+}
+
+/*!
+    \since 6.10
+    \overload dateTimeValue(QAnyStringView)
+*/
+std::optional<QDateTime> QHttpHeaders::dateTimeValue(WellKnownHeader name) const
+{
+    return dateTimeValue(wellKnownHeaderName(name));
+}
+
+/*!
+    \since 6.10
+
+    Sets the value of the header name \a name to \a dateTime,
+    following the
+    \l {https://datatracker.ietf.org/doc/html/rfc9110#name-date-time-formats}{standard HTTP IMF-fixdate format}.
+    If the header does not exist, adds a new one.
+
+    \sa dateTimeValue(QAnyStringView name), dateTimeValueAt(qsizetype i)
+ */
+void QHttpHeaders::setDateTimeValue(QAnyStringView name, const QDateTime &dateTime)
+{
+    if (!dateTime.isValid()) {
+        qWarning("QHttpHeaders::setDateTimeValue: invalid QDateTime value received");
+        return;
+    }
+    replaceOrAppend(name, QNetworkHeadersPrivate::toHttpDate(dateTime));
+}
+
+/*!
+    \since 6.10
+    \overload setDateTimeValue(QAnyStringView)
+*/
+void QHttpHeaders::setDateTimeValue(WellKnownHeader name, const QDateTime &dateTime)
+{
+    setDateTimeValue(wellKnownHeaderName(name), dateTime);
+}
+
+/*!
+    \since 6.10
+
+    Returns all the header values of \a name in a list of QDateTime objects, following
+    the standard HTTP date formats. If no valid date-time values are found, returns
+    \c std::nullopt.
+
+    \sa dateTimeValue(QAnyStringView name), dateTimeValueAt(qsizetype i)
+*/
+std::optional<QList<QDateTime>> QHttpHeaders::dateTimeValues(QAnyStringView name) const
+{
+    QList<QDateTime> results;
+    d->forEachHeader(name, [&](QByteArrayView value) {
+        QDateTime dt = QNetworkHeadersPrivate::fromHttpDate(value);
+        if (dt.isValid())
+            results.append(std::move(dt));
+    });
+    return results.isEmpty() ? std::nullopt :
+                               std::make_optional(std::move(results));
+}
+
+/*!
+    \since 6.10
+    \overload dateTimeValues(QAnyStringView)
+*/
+std::optional<QList<QDateTime>> QHttpHeaders::dateTimeValues(WellKnownHeader name) const
+{
+    return dateTimeValues(wellKnownHeaderName(name));
+}
+
+/*!
+    \since 6.10
+
+    Converts the header value at index \a i to a QDateTime object following the standard
+    HTTP date formats. The index \a i must be valid.
+
+    \sa dateTimeValue(QAnyStringView name), dateTimeValues(QAnyStringView name)
+*/
+std::optional<QDateTime> QHttpHeaders::dateTimeValueAt(qsizetype i) const
+{
+    verify(i);
+    QDateTime dt = QNetworkHeadersPrivate::fromHttpDate(valueAt(i));
+    return dt.isValid() ? std::make_optional(std::move(dt)) :
+                          std::nullopt;
 }
 
 /*!

@@ -1,6 +1,7 @@
 // Copyright (C) 2016 The Qt Company Ltd.
 // Copyright (C) 2015 Klaralvdalens Datakonsult AB, a KDAB Group company, info@kdab.com, author David Faure <david.faure@kdab.com>
 // SPDX-License-Identifier: LicenseRef-Qt-Commercial OR LGPL-3.0-only OR GPL-2.0-only OR GPL-3.0-only
+// Qt-Security score:significant reason:default
 
 #ifndef QMIMETYPE_H
 #define QMIMETYPE_H
@@ -49,14 +50,14 @@ public:
     }
     explicit QMimeType(const QMimeTypePrivate &dd);
     ~QMimeType();
-
+#if QT_CORE_REMOVED_SINCE(6, 8)
     bool operator==(const QMimeType &other) const;
 
     inline bool operator!=(const QMimeType &other) const
     {
         return !operator==(other);
     }
-
+#endif
     bool isValid() const;
 
     bool isDefault() const;
@@ -86,6 +87,10 @@ protected:
     friend Q_CORE_EXPORT size_t qHash(const QMimeType &key, size_t seed) noexcept;
 
     QExplicitlySharedDataPointer<QMimeTypePrivate> d;
+
+private:
+    friend Q_CORE_EXPORT bool comparesEqual(const QMimeType &lhs, const QMimeType &rhs) noexcept;
+    Q_DECLARE_EQUALITY_COMPARABLE(QMimeType)
 };
 
 Q_DECLARE_SHARED(QMimeType)

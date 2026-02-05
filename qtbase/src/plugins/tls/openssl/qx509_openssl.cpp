@@ -1,5 +1,6 @@
 // Copyright (C) 2021 The Qt Company Ltd.
 // SPDX-License-Identifier: LicenseRef-Qt-Commercial OR LGPL-3.0-only OR GPL-2.0-only OR GPL-3.0-only
+// Qt-Security score:critical reason:cryptography
 
 #include "qsslsocket_openssl_symbols_p.h"
 #include "qtlsbackend_openssl_p.h"
@@ -256,7 +257,7 @@ QVariant x509ExtensionToValue(X509_EXTENSION *ext)
         else if (meth->ext_free)
             meth->ext_free(ext_internal);
         else
-            qWarning(lcTlsBackend, "Cannot free an extension, a potential memory leak?");
+            qCWarning(lcTlsBackend, "Cannot free an extension, a potential memory leak?");
     });
 
     const char * hexString = nullptr; // The value returned by meth->i2s.
@@ -352,7 +353,7 @@ QVariant x509ExtensionToValue(X509_EXTENSION *ext)
 
 } // Unnamed namespace
 
-extern "C" int qt_X509Callback(int ok, X509_STORE_CTX *ctx)
+int qt_X509Callback(int ok, X509_STORE_CTX *ctx)
 {
     if (!ok) {
         // Store the error and at which depth the error was detected.

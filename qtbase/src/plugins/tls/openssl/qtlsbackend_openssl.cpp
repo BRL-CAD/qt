@@ -1,5 +1,6 @@
 // Copyright (C) 2021 The Qt Company Ltd.
 // SPDX-License-Identifier: LicenseRef-Qt-Commercial OR LGPL-3.0-only OR GPL-2.0-only OR GPL-3.0-only
+// Qt-Security score:significant reason:default
 
 #include "qsslsocket_openssl_symbols_p.h"
 #include "qtlsbackend_openssl_p.h"
@@ -17,7 +18,7 @@
 #include <QtNetwork/qssl.h>
 
 #include <QtCore/qdir.h>
-#include <QtCore/qdiriterator.h>
+#include <QtCore/qdirlisting.h>
 #include <QtCore/qlist.h>
 #include <QtCore/qmutex.h>
 #include <QtCore/qscopeguard.h>
@@ -204,11 +205,12 @@ void QTlsBackendOpenSSL::ensureCiphersAndCertsLoaded() const
 #elif defined(Q_OS_UNIX) && !defined(Q_OS_DARWIN)
     // check whether we can enable on-demand root-cert loading (i.e. check whether the sym links are there)
     const QList<QByteArray> dirs = QSslSocketPrivate::unixRootCertDirectories();
-    QStringList symLinkFilter;
-    symLinkFilter << "[0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f].[0-9]"_L1;
+    const QStringList symLinkFilter{
+        u"[0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f].[0-9]"_s};
     for (const auto &dir : dirs) {
-        QDirIterator iterator(QLatin1StringView(dir), symLinkFilter, QDir::Files);
-        if (iterator.hasNext()) {
+        QDirListing dirList(QString::fromLatin1(dir), symLinkFilter,
+                            QDirListing::IteratorFlag::FilesOnly);
+        if (dirList.cbegin() != dirList.cend()) { // Not empty
             QSslSocketPrivate::setRootCertOnDemandLoadingSupported(true);
             break;
         }
@@ -387,21 +389,35 @@ QList<QSslCertificate> systemCaCertificates()
     {
         const QList<QByteArray> directories = QSslSocketPrivate::unixRootCertDirectories();
         QSet<QString> certFiles = {
-            QStringLiteral("/etc/pki/tls/certs/ca-bundle.crt"), // Fedora, Mandriva
+            QStringLiteral("/etc/pki/ca-trust/extracted/pem/tls-ca-bundle.pem"), // Red Hat 2013+
+            QStringLiteral("/etc/pki/tls/certs/ca-bundle.crt"), // Red Hat older, Mandriva
             QStringLiteral("/usr/local/share/certs/ca-root-nss.crt") // FreeBSD's ca_root_nss
         };
-        QDir currentDir;
-        currentDir.setNameFilters(QStringList{QStringLiteral("*.pem"), QStringLiteral("*.crt")});
-        for (const auto &directory : directories) {
-            currentDir.setPath(QLatin1StringView(directory));
-            QDirIterator it(currentDir);
-            while (it.hasNext()) {
+
+        static const size_t extLen = strlen(".pem"); // or strlen(".crt")
+        auto hasMatchingExtension = [](const QString &fileName) {
+            if (size_t(fileName.size()) < extLen + 1)
+                return false;
+            auto ext = QStringView{fileName}.last(extLen);
+            return ext == ".pem"_L1 || ext == ".crt"_L1;
+        };
+
+        using F = QDirListing::IteratorFlag;
+        constexpr auto flags = F::FilesOnly | F::ResolveSymlinks; // Files and symlinks to files
+        for (const QByteArray &directory : directories) {
+            for (const auto &dirEntry : QDirListing(QFile::decodeName(directory), flags)) {
                 // use canonical path here to not load the same certificate twice if symlinked
-                certFiles.insert(it.nextFileInfo().canonicalFilePath());
+                if (hasMatchingExtension(dirEntry.fileName())) {
+                    QString canonicalPath = dirEntry.canonicalFilePath();
+                    // skip broken symlinks to not end up adding "" to the list which will then
+                    // just be rejected by `QSslCertificate::fromFile`
+                    if (!canonicalPath.isEmpty())
+                        certFiles.insert(canonicalPath);
+                }
             }
         }
         for (const QString& file : std::as_const(certFiles))
-            systemCerts.append(QSslCertificate::fromPath(file, QSsl::Pem));
+            systemCerts.append(QSslCertificate::fromFile(file, QSsl::Pem));
     }
 #endif // platform
 #ifdef QSSLSOCKET_DEBUG

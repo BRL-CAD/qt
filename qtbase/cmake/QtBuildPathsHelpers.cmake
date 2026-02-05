@@ -116,35 +116,42 @@ function(qt_configure_process_path name default docstring)
     endif()
 
     # No value provided, set the default.
+    # Make sure to process the paths even for the defaults to ensure we have canonicalized paths
+    # on the first configure run and thus don't regenerate qconfig.cpp on a subsequent
+    # configure run when the paths might become different if we didn't do it on first run.
+    # e.g. './plugins' would get turned to 'plugins'.
     if(NOT DEFINED "${name}")
-        set("${name}" "${default}" CACHE STRING "${docstring}")
-    else()
-        get_filename_component(given_path_as_abs "${${name}}" ABSOLUTE BASE_DIR
-                               "${CMAKE_INSTALL_PREFIX}")
-        file(RELATIVE_PATH rel_path "${CMAKE_INSTALL_PREFIX}"
-                                    "${given_path_as_abs}")
-
-        # If absolute path given, check that it's inside the prefix (error out if not).
-        # TODO: Figure out if we need to support paths that are outside the prefix.
-        #
-        # If relative path given, it's relative to the install prefix (rather than the binary dir,
-        # which is what qmake does for some reason).
-        # In both cases, store the value as a relative path.
-        if("${rel_path}" STREQUAL "")
-            # file(RELATIVE_PATH) returns an empty string if the given absolute paths are equal
-            set(rel_path ".")
-        elseif(rel_path MATCHES "^\.\./")
-            # INSTALL_SYSCONFDIR is allowed to be outside the prefix.
-            if(NOT name STREQUAL "INSTALL_SYSCONFDIR")
-                message(FATAL_ERROR
-                    "Path component '${name}' is outside computed install prefix: ${rel_path} ")
-                return()
-            endif()
-            set("${name}" "${${name}}" CACHE STRING "${docstring}" FORCE)
-        else()
-            set("${name}" "${rel_path}" CACHE STRING "${docstring}" FORCE)
-        endif()
+        set("${name}" "${default}")
     endif()
+
+    get_filename_component(given_path_as_abs "${${name}}" ABSOLUTE BASE_DIR
+                           "${CMAKE_INSTALL_PREFIX}")
+    file(RELATIVE_PATH rel_path "${CMAKE_INSTALL_PREFIX}"
+                                "${given_path_as_abs}")
+
+    # If absolute path given, check that it's inside the prefix (error out if not).
+    # If relative path given, it's relative to the install prefix (rather than the binary dir,
+    # which is what qmake does for some reason).
+    # In both cases, store the value as a relative path, unless we're processing INSTALL_SYSCONFDIR
+    # which should stay abslute.
+    if("${rel_path}" STREQUAL "")
+        # file(RELATIVE_PATH) returns an empty string if the given absolute paths are equal,
+        # so manually set it to '.'
+        set(new_value ".")
+    elseif(rel_path MATCHES "^\.\./")
+        # INSTALL_SYSCONFDIR is allowed to be outside the prefix.
+        if(NOT name STREQUAL "INSTALL_SYSCONFDIR")
+            message(FATAL_ERROR
+                "Path component '${name}' is outside computed install prefix: ${rel_path} ")
+        endif()
+        # Keep the absolute path.
+        set(new_value "${${name}}")
+    else()
+        # Use the canonicalized path.
+        set(new_value "${rel_path}")
+    endif()
+
+    set("${name}" "${new_value}" CACHE STRING "${docstring}" FORCE)
 endfunction()
 
 macro(qt_internal_setup_configure_install_paths)
@@ -153,6 +160,9 @@ macro(qt_internal_setup_configure_install_paths)
     qt_configure_process_path(INSTALL_INCLUDEDIR "include" "Header files [PREFIX/include]")
     qt_configure_process_path(INSTALL_LIBDIR "lib" "Libraries [PREFIX/lib]")
     qt_configure_process_path(INSTALL_MKSPECSDIR "mkspecs" "Mkspecs files [PREFIX/mkspecs]")
+    qt_configure_process_path(INSTALL_SHAREDIR "share" "Share files [PREFIX/share]")
+    qt_configure_process_path(INSTALL_QT_SHAREDIR "${INSTALL_SHAREDIR}/qt6"
+        "Qt namespaced sharedir [SHAREDIR/qt6]")
     qt_configure_process_path(INSTALL_ARCHDATADIR "." "Arch-dependent data [PREFIX]")
     qt_configure_process_path(INSTALL_PLUGINSDIR
                               "${INSTALL_ARCHDATADIR}/plugins"
@@ -193,6 +203,17 @@ macro(qt_internal_setup_configure_install_paths)
     qt_configure_process_path(INSTALL_DESCRIPTIONSDIR
                              "${INSTALL_ARCHDATADIR}/modules"
                               "Module description files directory")
+    qt_configure_process_path(INSTALL_SBOMDIR "${INSTALL_ARCHDATADIR}/sbom"
+        "SBOM [PREFIX/sbom]")
+
+    # INSTALL_PUBLICBINDIR is processed only if it is not empty
+    # See usage in qt_internal_generate_user_facing_tools_info
+    if(NOT "${INSTALL_PUBLICBINDIR}" STREQUAL "")
+        # A default value is not needed because it is always manually defined
+        # but as per the documentation it is typically `bin`
+        qt_configure_process_path(INSTALL_PUBLICBINDIR "bin"
+                "Symlinked user-facing executables")
+    endif()
 endmacro()
 
 macro(qt_internal_set_cmake_install_libdir)
@@ -214,6 +235,8 @@ macro(qt_internal_set_qt_apple_support_files_path)
             set(__qt_internal_cmake_apple_support_files_path "${QT_CMAKE_DIR}/macos")
         elseif(CMAKE_SYSTEM_NAME STREQUAL "iOS")
             set(__qt_internal_cmake_apple_support_files_path "${QT_CMAKE_DIR}/ios")
+        elseif(CMAKE_SYSTEM_NAME STREQUAL "visionOS")
+            set(__qt_internal_cmake_apple_support_files_path "${QT_CMAKE_DIR}/visionos")
         endif()
     endif()
 endmacro()
@@ -243,3 +266,20 @@ macro(qt_internal_setup_paths_and_prefixes)
 
     qt_internal_set_qt_apple_support_files_path()
 endmacro()
+
+# Returns the prefix for the variables defined by HostInfo package. The prefix
+# is based on version information provided by HostInfo. Falls back to current
+# project version if ${INSTALL_CMAKE_NAMESPACE}HostInfo_VERSION_MAJOR is not
+# defined.
+function(qt_internal_get_host_info_var_prefix out_var)
+    if(${INSTALL_CMAKE_NAMESPACE}HostInfo_VERSION_MAJOR)
+        set(${out_var} "QT${${INSTALL_CMAKE_NAMESPACE}HostInfo_VERSION_MAJOR}_HOST_INFO"
+            PARENT_SCOPE)
+    else()
+        # This is not a valid way to define the host info versioned prefix, but
+        # it's backward compatible with Qt versions older than 6.10.
+        #
+        # TODO: remove once Qt LTS versions older than 6.10 reach end of life.
+        set(${out_var} "QT${PROJECT_VERSION_MAJOR}_HOST_INFO" PARENT_SCOPE)
+    endif()
+endfunction()

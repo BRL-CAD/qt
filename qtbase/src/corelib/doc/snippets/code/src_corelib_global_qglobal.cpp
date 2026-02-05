@@ -653,6 +653,14 @@ bool readConfiguration(const QFile &file)
     qgetenv(varName).toInt(ok, 0)
 //! [to-int]
 
+//! [int-value_or]
+    qEnvironmentVariableIntegerValue(varName).value_or(0)
+//! [int-value_or]
+
+//! [int-eq0]
+    qEnvironmentVariableIntegerValue(varName) == 0
+//! [int-eq0]
+
 //! [is-null]
     !qgetenv(varName).isNull()
 //! [is-null]
@@ -685,10 +693,6 @@ bool readConfiguration(const QFile &file)
     for (QChar ch : qAsConst(funcReturningQString()))
         process(ch); // ERROR: ch is copied from deleted memory
 //! [as-const-4]
-
-//! [qterminate]
-    try { expr; } catch(...) { qTerminate(); }
-//! [qterminate]
 
 //! [qdecloverride]
     // generate error if this doesn't actually override anything:

@@ -11,6 +11,7 @@
 #include <QtCore/qmath.h>
 #include <QtCore/qnamespace.h>
 #include <QtCore/qtconfigmacros.h>
+#include <QtCore/qtformat_impl.h>
 #include <QtCore/qtypes.h>
 
 #include <limits>
@@ -53,18 +54,8 @@ class qfloat16
         constexpr inline explicit Wrap(int value) : b16(quint16(value)) {}
     };
 
-#ifdef QT_SUPPORTS_INT128
     template <typename T>
-    using IsIntegral = std::disjunction<std::is_integral<T>,
-                                        std::is_same<std::remove_const_t<T>, qint128>,
-                                        std::is_same<std::remove_const_t<T>, quint128>>;
-#else
-    template <typename T>
-    using IsIntegral = std::is_integral<T>;
-#endif
-    template <typename T>
-    using if_type_is_integral = std::enable_if_t<IsIntegral<std::remove_reference_t<T>>::value,
-                                                 bool>;
+    using if_type_is_integral = std::enable_if_t<std::is_integral_v<std::remove_reference_t<T>>, bool>;
 
 public:
     using NativeType = QtPrivate::NativeFloat16Type;
@@ -324,10 +315,10 @@ Q_CORE_EXPORT void qFloatFromFloat16(float *, const qfloat16 *, qsizetype length
 }
 
 // The remainder of these utility functions complement qglobal.h
-[[nodiscard]] inline int qRound(qfloat16 d) noexcept
+[[nodiscard]] inline int qRound(qfloat16 d)
 { return qRound(static_cast<float>(d)); }
 
-[[nodiscard]] inline qint64 qRound64(qfloat16 d) noexcept
+[[nodiscard]] inline qint64 qRound64(qfloat16 d)
 { return qRound64(static_cast<float>(d)); }
 
 [[nodiscard]] inline bool qFuzzyCompare(qfloat16 p1, qfloat16 p2) noexcept
@@ -368,7 +359,7 @@ inline qfloat16::qfloat16(float f) noexcept
 #if defined(QT_COMPILER_SUPPORTS_F16C) && defined(__F16C__)
     __m128 packsingle = _mm_set_ss(f);
     __m128i packhalf = _mm_cvtps_ph(packsingle, 0);
-    b16 = _mm_extract_epi16(packhalf, 0);
+    b16 = quint16(_mm_extract_epi16(packhalf, 0));
 #elif defined (__ARM_FP16_FORMAT_IEEE)
     __fp16 f16 = __fp16(f);
     memcpy(&b16, &f16, sizeof(quint16));
@@ -555,5 +546,51 @@ template<> class numeric_limits<const volatile QT_PREPEND_NAMESPACE(qfloat16)>
 // Adding overloads to std isn't allowed, so we can't extend this to support
 // for fpclassify(), isnormal() &c. (which, furthermore, are macros on MinGW).
 } // namespace std
+
+// std::format support
+#ifdef QT_SUPPORTS_STD_FORMAT
+
+QT_BEGIN_NAMESPACE
+
+namespace QtPrivate {
+
+// [format.formatter.spec] / 5
+template <typename T, typename CharT>
+constexpr bool FormatterDoesNotExist =
+        std::negation_v<
+                std::disjunction<
+                        std::is_default_constructible<std::formatter<T, CharT>>,
+                        std::is_copy_constructible<std::formatter<T, CharT>>,
+                        std::is_move_constructible<std::formatter<T, CharT>>,
+                        std::is_copy_assignable<std::formatter<T, CharT>>,
+                        std::is_move_assignable<std::formatter<T, CharT>>
+                        >
+                >;
+
+template <typename CharT>
+using QFloat16FormatterBaseType =
+        std::conditional_t<FormatterDoesNotExist<qfloat16::NearestFloat, CharT>,
+                           float,
+                           qfloat16::NearestFloat>;
+
+} // namespace QtPrivate
+
+QT_END_NAMESPACE
+
+namespace std {
+template <typename CharT>
+struct formatter<QT_PREPEND_NAMESPACE(qfloat16), CharT>
+    : std::formatter<QT_PREPEND_NAMESPACE(QtPrivate::QFloat16FormatterBaseType<CharT>), CharT>
+{
+    template <typename FormatContext>
+    auto format(QT_PREPEND_NAMESPACE(qfloat16) val, FormatContext &ctx) const
+    {
+        using FloatType = QT_PREPEND_NAMESPACE(QtPrivate::QFloat16FormatterBaseType<CharT>);
+        return std::formatter<FloatType, CharT>::format(FloatType(val), ctx);
+    }
+};
+} // namespace std
+
+#endif // QT_SUPPORTS_STD_FORMAT
 
 #endif // QFLOAT16_H

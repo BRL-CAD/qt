@@ -15,8 +15,6 @@
 // We mean it.
 //
 
-#include <QDebug>
-
 #include <qopenglpaintdevice.h>
 
 #include <private/qpaintengineex_p.h>
@@ -54,7 +52,7 @@ class QOpenGL2PaintEngineExPrivate;
 class QOpenGL2PaintEngineState : public QPainterState
 {
 public:
-    QOpenGL2PaintEngineState(QOpenGL2PaintEngineState &other);
+    QOpenGL2PaintEngineState(const QOpenGL2PaintEngineState &other);
     QOpenGL2PaintEngineState();
     ~QOpenGL2PaintEngineState();
 

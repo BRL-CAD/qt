@@ -27,6 +27,17 @@ public:
         const QModelIndex idx = index(0, 0, QModelIndex());
         Q_EMIT dataChanged(idx, idx, QList<int>() << 1);
     }
+
+    // Workaround QObject::isSignalConnected() being a protected method
+    bool isConnected(const QMetaMethod &m) const { return isSignalConnected(m); }
+};
+
+class IdentityProxyModel : public QIdentityProxyModel
+{
+public:
+    // The name has to be different than the method from the base class
+    void setHandleSLC(bool b) { setHandleSourceLayoutChanges(b); }
+    void setHandleSDC(bool b) { setHandleSourceDataChanges(b); }
 };
 
 class tst_QIdentityProxyModel : public QObject
@@ -53,6 +64,11 @@ private slots:
 
     void persistIndexOnLayoutChange();
     void createPersistentOnLayoutAboutToBeChanged();
+
+    void testSetHandleLayoutChanges();
+    void testSetHandleDataChanges();
+    void matchCustomRole();
+
 protected:
     void verifyIdentity(QAbstractItemModel *model, const QModelIndex &parent = QModelIndex());
 
@@ -342,10 +358,19 @@ void tst_QIdentityProxyModel::reset()
         resetCommand.doCommand();
     }
 
-    QVERIFY(modelBeforeSpy.size() == 1 && 1 == proxyBeforeSpy.size());
-    QVERIFY(modelAfterSpy.size() == 1 && 1 == proxyAfterSpy.size());
+    QCOMPARE(modelBeforeSpy.size(), 1);
+    QCOMPARE(modelAfterSpy.size(), 1);
+    QCOMPARE(proxyBeforeSpy.size(), 1);
+    QCOMPARE(proxyAfterSpy.size(), 1);
 
     verifyIdentity(&model);
+
+    // setSourceModel again shouldn't emit reset
+    m_proxy->setSourceModel(&model);
+
+    QCOMPARE(proxyBeforeSpy.size(), 1);
+    QCOMPARE(proxyAfterSpy.size(), 1);
+
     m_proxy->setSourceModel(0);
 }
 
@@ -511,6 +536,78 @@ void tst_QIdentityProxyModel::createPersistentOnLayoutAboutToBeChanged() // QTBU
     model.sort(0);
     QCOMPARE(layoutAboutToBeChangedSpy.size(), 1);
     QCOMPARE(layoutChangedSpy.size(), 1);
+}
+
+void tst_QIdentityProxyModel::testSetHandleLayoutChanges()
+{
+    const std::array layoutSignals = {
+        QMetaMethod::fromSignal(&QAbstractItemModel::layoutChanged),
+        QMetaMethod::fromSignal(&QAbstractItemModel::layoutAboutToBeChanged),
+    };
+
+    DataChangedModel model;
+    IdentityProxyModel proxy;
+    proxy.setSourceModel(&model);
+    for (const auto &m : layoutSignals)
+        QVERIFY(model.isConnected(m)); // Connected by default
+
+    proxy.setSourceModel(nullptr);
+
+    // Disable handling (connecting to layout signals) of source model layout changes
+    proxy.setHandleSLC(false);
+    proxy.setSourceModel(&model);
+    for (const auto &m : layoutSignals)
+        QVERIFY(!model.isConnected(m));
+}
+
+void tst_QIdentityProxyModel::testSetHandleDataChanges()
+{
+    const auto signal = QMetaMethod::fromSignal(&QAbstractItemModel::dataChanged);
+
+    DataChangedModel model;
+    IdentityProxyModel proxy;
+    proxy.setSourceModel(&model);
+    QVERIFY(model.isConnected(signal)); // Connected by default
+
+    proxy.setSourceModel(nullptr);
+
+    // Disable handling (connecting to data signals) of source model data changes
+    proxy.setHandleSDC(false);
+    proxy.setSourceModel(&model);
+    QVERIFY(!model.isConnected(signal));
+}
+
+class CustomRoleProxyModel : public QIdentityProxyModel
+{
+public:
+    using QIdentityProxyModel::QIdentityProxyModel;
+
+    QVariant data(const QModelIndex &index, int role = Qt::DisplayRole) const override
+    {
+        Q_ASSERT(index.isValid());
+        if (role == Qt::UserRole)
+            return QStringLiteral("CustomUserData-%1").arg(index.row());
+        return QIdentityProxyModel::data(index, role);
+    }
+};
+
+void tst_QIdentityProxyModel::matchCustomRole()
+{
+    QStandardItemModel sourceModel;
+    for (int i = 0; i < 5; ++i)
+        sourceModel.appendRow(new QStandardItem(QString("Item %1").arg(i)));
+
+    CustomRoleProxyModel proxyModel;
+    proxyModel.setSourceModel(&sourceModel);
+
+    const QString targetValue = QStringLiteral("CustomUserData-3");
+
+    const QModelIndexList matches = proxyModel.match(proxyModel.index(0, 0), Qt::UserRole,
+                                                     targetValue, 1, Qt::MatchExactly);
+
+    QCOMPARE(matches.size(), 1);
+    QCOMPARE(matches.first().row(), 3);
+    QCOMPARE(proxyModel.data(matches.first(), Qt::UserRole).toString(), targetValue);
 }
 
 QTEST_MAIN(tst_QIdentityProxyModel)

@@ -1,5 +1,6 @@
 // Copyright (C) 2017 The Qt Company Ltd.
 // SPDX-License-Identifier: LicenseRef-Qt-Commercial OR LGPL-3.0-only OR GPL-2.0-only OR GPL-3.0-only
+// Qt-Security score:critical reason:data-parser
 
 #ifndef QHSTS_P_H
 #define QHSTS_P_H
@@ -22,8 +23,6 @@
 #include <QtCore/qbytearray.h>
 #include <QtCore/qdatetime.h>
 #include <QtCore/qstring.h>
-#include <QtCore/qglobal.h>
-#include <QtCore/qpair.h>
 #include <QtCore/qurl.h>
 #include <QtCore/qcontainerfwd.h>
 
@@ -31,11 +30,13 @@
 
 QT_BEGIN_NAMESPACE
 
+class QHttpHeaders;
+
 class Q_AUTOTEST_EXPORT QHstsCache
 {
 public:
 
-    void updateFromHeaders(const QList<QPair<QByteArray, QByteArray>> &headers,
+    void updateFromHeaders(const QHttpHeaders &headers,
                            const QUrl &url);
     void updateFromPolicies(const QList<QHstsPolicy> &hosts);
     void updateKnownHost(const QUrl &url, const QDateTime &expires,
@@ -90,7 +91,7 @@ class Q_AUTOTEST_EXPORT QHstsHeaderParser
 {
 public:
 
-    bool parse(const QList<QPair<QByteArray, QByteArray>> &headers);
+    bool parse(const QHttpHeaders &headers);
 
     QDateTime expirationDate() const { return expiry; }
     bool includeSubDomains() const { return subDomainsFound; }

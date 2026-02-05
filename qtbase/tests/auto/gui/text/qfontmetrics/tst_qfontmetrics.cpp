@@ -36,6 +36,10 @@ private slots:
     void verticalMetrics();
     void largeText_data();
     void largeText(); // QTBUG-123339
+    void typoLineMetrics();
+    void defaultIgnorableHorizontalAdvance_data();
+    void defaultIgnorableHorizontalAdvance();
+    void hugeFontMetrics();
 };
 
 void tst_QFontMetrics::same()
@@ -263,7 +267,7 @@ void tst_QFontMetrics::inFontUcs4()
             glyphs.glyphs[0] = 0;
             QVERIFY(engine->stringToCMap(string.constData(), string.size(),
                                          &glyphs, &glyphs.numGlyphs,
-                                         QFontEngine::GlyphIndicesOnly));
+                                         QFontEngine::GlyphIndicesOnly) > 0);
             QCOMPARE(glyphs.numGlyphs, 1);
             QCOMPARE(glyphs.glyphs[0], uint(1));
         }
@@ -275,7 +279,7 @@ void tst_QFontMetrics::inFontUcs4()
             glyphs.glyphs[0] = 0;
             QVERIFY(engine->stringToCMap(string.constData(), string.size(),
                                          &glyphs, &glyphs.numGlyphs,
-                                         QFontEngine::GlyphIndicesOnly));
+                                         QFontEngine::GlyphIndicesOnly) >= 0);
             QVERIFY(glyphs.glyphs[0] != 1);
         }
     }
@@ -408,6 +412,120 @@ void tst_QFontMetrics::largeText()
     QString string(size, QLatin1Char('A'));
     QRect boundingRect = fm.boundingRect(string);
     QVERIFY(boundingRect.isValid());
+}
+
+void tst_QFontMetrics::typoLineMetrics()
+{
+    QString testFont = QFINDTESTDATA("fonts/testfont_linemetrics.otf");
+    QVERIFY(!testFont.isEmpty());
+
+    int id = QFontDatabase::addApplicationFont(testFont);
+    QVERIFY(id >= 0);
+
+    {
+        auto cleanup = qScopeGuard([&id] {
+            if (id >= 0)
+                QFontDatabase::removeApplicationFont(id);
+        });
+
+        QImage img(100, 100, QImage::Format_ARGB32);
+        img.setDevicePixelRatio(1.0);
+        QFont font(QFontDatabase::applicationFontFamilies(id).at(0), &img);
+        font.setPixelSize(18);
+
+        const qreal unitsPerEm = 1000.0;
+
+        QFontMetrics defaultFm(font);
+        const int defaultAscent = defaultFm.ascent();
+        const int defaultDescent = defaultFm.descent();
+        const int defaultLeading = defaultFm.leading();
+
+        QCOMPARE(defaultAscent, qRound(1234.0 / unitsPerEm * font.pixelSize()));
+        QCOMPARE(defaultDescent, qRound(5678.0 / unitsPerEm * font.pixelSize()));
+        QCOMPARE(defaultLeading, 0.0);
+
+        font.setStyleStrategy(QFont::PreferTypoLineMetrics);
+        const QFontMetrics typoFm(font);
+
+        const int typoAscent = typoFm.ascent();
+        const int typoDescent = typoFm.descent();
+        const int typoLeading = typoFm.leading();
+
+        QCOMPARE(typoAscent, qRound(2000.0 / unitsPerEm * font.pixelSize()));
+        QCOMPARE(typoDescent, qRound(3000.0 / unitsPerEm * font.pixelSize()));
+        QCOMPARE(typoLeading, qRound(1000.0 / unitsPerEm * font.pixelSize()));
+    }
+}
+
+void tst_QFontMetrics::defaultIgnorableHorizontalAdvance_data()
+{
+    QTest::addColumn<bool>("withShaping");
+
+    QTest::newRow("With Text Shaping") << true;
+    QTest::newRow("Without Text Shaping") << false;
+}
+
+void tst_QFontMetrics::defaultIgnorableHorizontalAdvance()
+{
+    QFETCH(bool, withShaping);
+
+    // testfont_bidimarks.ttf is a version of testfont.ttf with additional
+    // glyphs for U+200E (LRM) and U+200F (RLM)
+    QString testFont = QFINDTESTDATA("fonts/testfont_bidimarks.ttf");
+    QVERIFY(!testFont.isEmpty());
+
+    int id = QFontDatabase::addApplicationFont(testFont);
+    QVERIFY(id >= 0);
+
+    auto cleanup = qScopeGuard([&id] {
+        if (id >= 0)
+            QFontDatabase::removeApplicationFont(id);
+    });
+
+    QFont withoutSupport;
+    QFont withSupport(QFontDatabase::applicationFontFamilies(id).at(0));
+
+    if (!withShaping) {
+        withoutSupport.setStyleStrategy(QFont::PreferNoShaping);
+        withSupport.setStyleStrategy(QFont::PreferNoShaping);
+    }
+
+    QFontMetrics withoutSupportMetrics(withoutSupport);
+    QFontMetrics withSupportMetrics(withSupport);
+
+    QTextOption opt;
+    opt.setFlags(QTextOption::ShowDefaultIgnorables);
+
+    const QChar LRM = (ushort)0x200e;
+    const QString str = QStringLiteral("[") + LRM + QStringLiteral("]");
+
+    int withoutSupportWithoutIgnorablesAdvance = withoutSupportMetrics.horizontalAdvance(str);
+    int withoutSupportWithIgnorablesAdvance = withoutSupportMetrics.horizontalAdvance(str, opt);
+
+    QCOMPARE_GT(withoutSupportWithoutIgnorablesAdvance, 0);
+    QCOMPARE_EQ(withoutSupportWithIgnorablesAdvance, withoutSupportWithoutIgnorablesAdvance);
+
+    int withSupportWithoutIgnorablesAdvance = withSupportMetrics.horizontalAdvance(str);
+    int withSupportWithIgnorablesAdvance = withSupportMetrics.horizontalAdvance(str, opt);
+
+    QCOMPARE_GT(withSupportWithoutIgnorablesAdvance, 0);
+    QCOMPARE_GT(withSupportWithIgnorablesAdvance, withSupportWithoutIgnorablesAdvance);
+}
+
+void tst_QFontMetrics::hugeFontMetrics()
+{
+    QFont bigFont;
+    bigFont.setPixelSize(10000);
+
+    QFont hugeFont;
+    hugeFont.setPixelSize(32000);
+
+    QFont hugeFontWithTypoLineMetrics;
+    hugeFontWithTypoLineMetrics.setStyleStrategy(QFont::PreferTypoLineMetrics);
+    hugeFontWithTypoLineMetrics.setPixelSize(30000);
+
+    QVERIFY(QFontMetricsF(bigFont).height() < QFontMetricsF(hugeFont).height());
+    QVERIFY(QFontMetricsF(bigFont).height() < QFontMetricsF(hugeFontWithTypoLineMetrics).height());
 }
 
 QTEST_MAIN(tst_QFontMetrics)

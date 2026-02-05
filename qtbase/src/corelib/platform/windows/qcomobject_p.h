@@ -1,5 +1,6 @@
 // Copyright (C) 2023 The Qt Company Ltd.
 // SPDX-License-Identifier: LicenseRef-Qt-Commercial OR LGPL-3.0-only OR GPL-2.0-only OR GPL-3.0-only
+// Qt-Security score:significant reason:default
 
 #ifndef QCOMOBJECT_P_H
 #define QCOMOBJECT_P_H
@@ -65,7 +66,7 @@ template <typename TFirstInterface, typename... TAdditionalInterfaces>
 class QComObject : public TFirstInterface, public TAdditionalInterfaces...
 {
 public:
-    STDMETHODIMP QueryInterface(REFIID riid, void **ppvObject) final
+    STDMETHODIMP QueryInterface(REFIID riid, void **ppvObject) override
     {
         if (!ppvObject)
             return E_POINTER;
@@ -80,9 +81,14 @@ public:
         return tryQueryInterface<TFirstInterface, TAdditionalInterfaces...>(riid, ppvObject);
     }
 
-    STDMETHODIMP_(ULONG) AddRef() final { return ++m_referenceCount; }
+    // clang-format off
+    STDMETHODIMP_(ULONG) AddRef() override
+    {
+        return ++m_referenceCount;
+    }
+    // clang-format on
 
-    STDMETHODIMP_(ULONG) Release() final
+    STDMETHODIMP_(ULONG) Release() override
     {
         const LONG referenceCount = --m_referenceCount;
         if (referenceCount == 0)

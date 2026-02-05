@@ -4,6 +4,8 @@
 #include <QTest>
 #include <QtCore/qtimer.h>
 
+#include <cstdio>
+
 QT_BEGIN_NAMESPACE
 
 #define COMPARE_WITH_TYPE(Type, arg1, arg2) \
@@ -15,6 +17,7 @@ switch (Type) { \
     case QTest::ComparisonOperation::LessThanOrEqual:    QCOMPARE_LE(arg1, arg2); break; \
     case QTest::ComparisonOperation::GreaterThan:        QCOMPARE_GT(arg1, arg2); break; \
     case QTest::ComparisonOperation::GreaterThanOrEqual: QCOMPARE_GE(arg1, arg2); break; \
+    case QTest::ComparisonOperation::ThreeWayCompare:    break; \
 }
 
 class MyClass
@@ -93,15 +96,17 @@ static ClassWithPointerGetter getClassForValue(int val)
 // various toString() overloads
 namespace QTest {
 
-char *toString(const int *val)
+template <> char *toString(const int *const &val)
 {
     return val ? toString(*val) : toString(nullptr);
 }
 
+} // namespace QTest
+
 char *toString(const MyClass &val)
 {
     char *msg = new char[128];
-    qsnprintf(msg, 128, "MyClass(%d)", val.value());
+    std::snprintf(msg, 128, "MyClass(%d)", val.value());
     return msg;
 }
 
@@ -110,14 +115,12 @@ char *toString(const MyClass *val)
     if (val) {
         char *msg = new char[128];
         const auto value = val->value();
-        qsnprintf(msg, 128, "MyClass(%d) on memory address with index %d", value,
-                  ClassWithPointerGetter::valueToIndex(value));
+        std::snprintf(msg, 128, "MyClass(%d) on memory address with index %d", value,
+                      ClassWithPointerGetter::valueToIndex(value));
         return msg;
     }
     return toString(nullptr);
 }
-
-} // namespace QTest
 
 enum MyUnregisteredEnum { MyUnregisteredEnumValue1, MyUnregisteredEnumValue2 };
 
@@ -184,6 +187,7 @@ template <typename T> static void executeComparison()
     case QTest::ComparisonOperation::LessThanOrEqual:    QCOMPARE_LE(lhs, rhs); break;
     case QTest::ComparisonOperation::GreaterThan:        QCOMPARE_GT(lhs, rhs); break;
     case QTest::ComparisonOperation::GreaterThanOrEqual: QCOMPARE_GE(lhs, rhs); break;
+    case QTest::ComparisonOperation::ThreeWayCompare:    break;
     }
 }
 
@@ -293,16 +297,12 @@ public:
     }
 };
 
-namespace QTest {
-
 char *toString(const ClassWithDeferredSetter &val)
 {
     char *msg = new char[128];
-    qsnprintf(msg, 128, "ClassWithDeferredSetter(%d)", val.value());
+    std::snprintf(msg, 128, "ClassWithDeferredSetter(%d)", val.value());
     return msg;
 }
-
-} // namespace QTest
 
 void tst_ExtendedCompare::checkComparisonWithTimeout()
 {
@@ -331,6 +331,7 @@ void tst_ExtendedCompare::checkComparisonWithTimeout()
     case QTest::ComparisonOperation::CustomCompare:
         QFAIL("Unexpected comparison operation");
         break;
+    case QTest::ComparisonOperation::ThreeWayCompare: break;
     }
 }
 

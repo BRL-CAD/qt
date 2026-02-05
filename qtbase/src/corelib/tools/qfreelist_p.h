@@ -118,6 +118,7 @@ class QFreeList
     // return which block the index \a x falls in, and modify \a x to be the index into that block
     static inline int blockfor(int &x)
     {
+        x = x & ConstantsType::IndexMask;
         for (int i = 0; i < ConstantsType::BlockCount; ++i) {
             int size = ConstantsType::Sizes[i];
             if (x < size)
@@ -198,32 +199,32 @@ inline typename QFreeList<T, ConstantsType>::ReferenceType QFreeList<T, Constant
 template <typename T, typename ConstantsType>
 inline int QFreeList<T, ConstantsType>::next()
 {
-    int id, newid, at;
-    ElementType *v;
+    int newid;
+    int id = _next.loadAcquire();
     do {
-        id = _next.loadAcquire();
-
-        at = id & ConstantsType::IndexMask;
+        int at = id & ConstantsType::IndexMask;
         const int block = blockfor(at);
-        v = _v[block].loadAcquire();
+        ElementType *v = _v[block].loadAcquire();
 
         if (!v) {
-            v = allocate((id & ConstantsType::IndexMask) - at, ConstantsType::Sizes[block]);
-            if (!_v[block].testAndSetRelease(nullptr, v)) {
+            ElementType* const alloced = allocate((id & ConstantsType::IndexMask) - at,
+                                                  ConstantsType::Sizes[block]);
+            if (_v[block].testAndSetRelease(nullptr, alloced, v)) {
+                v = alloced;
+            } else {
                 // race with another thread lost
-                delete[] v;
-                v = _v[block].loadAcquire();
+                delete[] alloced;
                 Q_ASSERT(v != nullptr);
             }
         }
 
         newid = v[at].next.loadRelaxed() | (id & ~ConstantsType::IndexMask);
-    } while (!_next.testAndSetRelease(id, newid));
+    } while (!_next.testAndSetOrdered(id, newid, id));
     // qDebug("QFreeList::next(): returning %d (_next now %d, serial %d)",
     //        id & ConstantsType::IndexMask,
     //        newid & ConstantsType::IndexMask,
     //        (newid & ~ConstantsType::IndexMask) >> 24);
-    return id & ConstantsType::IndexMask;
+    return id;
 }
 
 template <typename T, typename ConstantsType>
@@ -231,7 +232,7 @@ inline void QFreeList<T, ConstantsType>::release(int id)
 {
     int at = id & ConstantsType::IndexMask;
     const int block = blockfor(at);
-    ElementType *v = _v[block].loadRelaxed();
+    ElementType *v = _v[block].loadAcquire();
 
     int x, newid;
     do {

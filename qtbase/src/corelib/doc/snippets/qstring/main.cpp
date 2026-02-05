@@ -5,6 +5,8 @@
 #include <QApplication>
 #include <stdio.h>
 
+using namespace Qt::StringLiterals;
+
 class Widget : public QWidget
 {
 public:
@@ -41,6 +43,7 @@ public:
     void firstFunction();
     void leftJustifiedFunction();
     void slicedFunction();
+    void sliceFunction();
     void numberFunction();
 
     void prependFunction();
@@ -343,12 +346,11 @@ void Widget::fromRawDataFunction()
 {
     //! [22]
     QRegularExpression pattern("\u00A4");
-    static const QChar unicode[] = {
+    static const char16_t unicode[] = {
             0x005A, 0x007F, 0x00A4, 0x0060,
             0x1009, 0x0020, 0x0020};
-    qsizetype size = sizeof(unicode) / sizeof(QChar);
 
-    QString str = QString::fromRawData(unicode, size);
+    QString str = QString::fromRawData(unicode, std::size(unicode));
     if (str.contains(pattern) {
         // ...
     //! [22] //! [23]
@@ -907,6 +909,15 @@ void Widget::arrayOperator()
     if (str[0] == QChar('?'))
         str[0] = QChar('_');
     //! [85]
+}
+
+void Widget::sliceFunction()
+{
+    //! [slice97]
+    QString x = u"Nine pineapples"_s;
+    x.slice(5);     // x == "pineapples"
+    x.slice(4, 3);  // x == "app"
+    //! [slice97]
 }
 
 

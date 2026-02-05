@@ -11,9 +11,16 @@
 QT_BEGIN_NAMESPACE
 
 QAndroidPlatformForeignWindow::QAndroidPlatformForeignWindow(QWindow *window, WId nativeHandle)
-    : QAndroidPlatformWindow(window), m_view(nullptr), m_nativeViewInserted(false)
+    : QAndroidPlatformWindow(window)
+    , m_view(reinterpret_cast<jobject>(nativeHandle))
+    , m_nativeViewInserted(false)
 {
-    m_view = reinterpret_cast<jobject>(nativeHandle);
+}
+
+void QAndroidPlatformForeignWindow::initialize()
+{
+    QAndroidPlatformWindow::initialize();
+
     if (isEmbeddingContainer()) {
         m_nativeViewId = m_view.callMethod<jint>("getId");
         return;
@@ -35,17 +42,6 @@ QAndroidPlatformForeignWindow::~QAndroidPlatformForeignWindow()
 
 }
 
-void QAndroidPlatformForeignWindow::setGeometry(const QRect &rect)
-{
-    QAndroidPlatformWindow::setGeometry(rect);
-
-    if (isEmbeddingContainer())
-        return;
-
-    if (m_nativeViewInserted)
-        setNativeGeometry(rect);
-}
-
 void QAndroidPlatformForeignWindow::setVisible(bool visible)
 {
     if (isEmbeddingContainer()) {
@@ -57,6 +53,7 @@ void QAndroidPlatformForeignWindow::setVisible(bool visible)
         return;
 
     QtAndroid::setViewVisibility(m_view.object(), visible);
+    m_nativeQtWindow.callMethod<void>("setVisible", visible);
 
     if (!visible && m_nativeViewInserted) {
         m_nativeQtWindow.callMethod<void>("removeNativeView");
@@ -95,11 +92,7 @@ void QAndroidPlatformForeignWindow::addViewToWindow()
     if (isEmbeddingContainer())
         return;
 
-    jint x = 0, y = 0, w = -1, h = -1;
-    if (!geometry().isNull())
-        geometry().getRect(&x, &y, &w, &h);
-
-    m_nativeQtWindow.callMethod<void>("setNativeView", m_view, x, y, qMax(w, 1), qMax(h, 1));
+    m_nativeQtWindow.callMethod<void>("setNativeView", m_view);
     m_nativeViewInserted = true;
 }
 

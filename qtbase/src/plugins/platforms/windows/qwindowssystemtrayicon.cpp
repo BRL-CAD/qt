@@ -17,6 +17,8 @@
 #include <QtCore/qsettings.h>
 #include <qpa/qwindowsysteminterface.h>
 
+#include <QtGui/private/qguiapplication_p.h>
+
 #include <commctrl.h>
 #include <shellapi.h>
 #include <shlobj.h>
@@ -24,7 +26,7 @@
 
 QT_BEGIN_NAMESPACE
 
-using namespace Qt::Literals::StringLiterals;
+using namespace Qt::StringLiterals;
 
 static const UINT q_uNOTIFYICONID = 0;
 
@@ -86,8 +88,7 @@ static int indexOfHwnd(HWND hwnd)
     return -1;
 }
 
-extern "C" LRESULT QT_WIN_CALLBACK qWindowsTrayIconWndProc(HWND hwnd, UINT message,
-                                                           WPARAM wParam, LPARAM lParam)
+LRESULT QT_WIN_CALLBACK qWindowsTrayIconWndProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam)
 {
     if (message == MYWM_TASKBARCREATED || message == MYWM_NOTIFYICON
         || message == WM_INITMENU || message == WM_INITMENUPOPUP
@@ -184,6 +185,9 @@ void QWindowsSystemTrayIcon::updateToolTip(const QString &tooltip)
 
 QRect QWindowsSystemTrayIcon::geometry() const
 {
+    if (!isIconVisible())
+        return QRect();
+
     NOTIFYICONIDENTIFIER nid;
     memset(&nid, 0, sizeof(nid));
     nid.cbSize = sizeof(nid);
@@ -307,6 +311,29 @@ bool QWindowsSystemTrayIcon::setIconVisible(bool visible)
     return Shell_NotifyIcon(NIM_MODIFY, &tnd) == TRUE;
 }
 
+bool QWindowsSystemTrayIcon::isIconVisible() const
+{
+    NOTIFYICONIDENTIFIER nid;
+    memset(&nid, 0, sizeof(nid));
+    nid.cbSize = sizeof(nid);
+    nid.hWnd = m_hwnd;
+    nid.uID = q_uNOTIFYICONID;
+    RECT rect;
+    const HRESULT hr = Shell_NotifyIconGetRect(&nid, &rect);
+    // Windows 10 returns S_FALSE if the icon is hidden
+    if (FAILED(hr) || hr == S_FALSE)
+        return false;
+
+    HMONITOR monitor = MonitorFromWindow(m_hwnd, MONITOR_DEFAULTTONEAREST);
+    MONITORINFO info;
+    info.cbSize = sizeof(MONITORINFO);
+    GetMonitorInfo(monitor, &info);
+    // Windows 11 seems to return a geometry outside of the current monitor's geometry in case of
+    // the icon being hidden. As it's impossible to change the alignment of the task bar on Windows
+    // 11 this check should be fine.
+    return rect.bottom <= info.rcMonitor.bottom;
+}
+
 bool QWindowsSystemTrayIcon::sendTrayMessage(DWORD msg)
 {
     NOTIFYICONDATA tnd;
@@ -362,6 +389,10 @@ bool QWindowsSystemTrayIcon::winEvent(const MSG &message, long *result)
             // since hi-res coordinates are delivered in this case (Windows issue).
             // Default to primary screen with check to prevent a crash.
             const QPoint globalPos = QPoint(GET_X_LPARAM(message.wParam), GET_Y_LPARAM(message.wParam));
+            // QTBUG-130832: QMenu relies on lastCursorPosition being up to date. When this code
+            // is called it still holds the last known mouse position inside a Qt window. Do a
+            // forced update of this position.
+            QGuiApplicationPrivate::lastCursorPosition = QCursor::pos().toPointF();
             const auto &screenManager = QWindowsContext::instance()->screenManager();
             const QPlatformScreen *screen = screenManager.screenAtDp(globalPos);
             if (!screen)
@@ -432,7 +463,7 @@ QDebug operator<<(QDebug d, const QWindowsSystemTrayIcon *t)
     if (t)
         t->formatDebug(d);
     else
-        d << '0';
+        d << "0x0";
     d << ')';
     return d;
 }

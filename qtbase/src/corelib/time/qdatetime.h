@@ -12,7 +12,7 @@
 #include <QtCore/qshareddata.h>
 #include <QtCore/qstring.h>
 
-#include <limits>
+#include <climits>
 #include <chrono>
 
 #if defined(Q_OS_DARWIN) || defined(Q_QDOC)
@@ -32,31 +32,32 @@ public:
     constexpr QDate() : jd(nullJd()) {}
     QDate(int y, int m, int d);
     QDate(int y, int m, int d, QCalendar cal);
-#if __cpp_lib_chrono >= 201907L || defined(Q_QDOC)
+// INTEGRITY incident-85878 (timezone and clock_cast are not supported)
+#if (__cpp_lib_chrono >= 201907L && !defined(Q_OS_INTEGRITY)) || defined(Q_QDOC)
     QT_POST_CXX17_API_IN_EXPORTED_CLASS
     Q_IMPLICIT constexpr QDate(std::chrono::year_month_day date) noexcept
-        : jd(date.ok() ? stdSysDaysToJulianDay(date QT6_CALL_NEW_OVERLOAD_TAIL) : nullJd())
+        : jd(date.ok() ? stdSysDaysToJulianDay(date) : nullJd())
     {}
 
     QT_POST_CXX17_API_IN_EXPORTED_CLASS
     Q_IMPLICIT constexpr QDate(std::chrono::year_month_day_last date) noexcept
-        : jd(date.ok() ? stdSysDaysToJulianDay(date QT6_CALL_NEW_OVERLOAD_TAIL) : nullJd())
+        : jd(date.ok() ? stdSysDaysToJulianDay(date) : nullJd())
     {}
 
     QT_POST_CXX17_API_IN_EXPORTED_CLASS
     Q_IMPLICIT constexpr QDate(std::chrono::year_month_weekday date) noexcept
-        : jd(date.ok() ? stdSysDaysToJulianDay(date QT6_CALL_NEW_OVERLOAD_TAIL) : nullJd())
+        : jd(date.ok() ? stdSysDaysToJulianDay(date) : nullJd())
     {}
 
     QT_POST_CXX17_API_IN_EXPORTED_CLASS
     Q_IMPLICIT constexpr QDate(std::chrono::year_month_weekday_last date) noexcept
-        : jd(date.ok() ? stdSysDaysToJulianDay(date QT6_CALL_NEW_OVERLOAD_TAIL) : nullJd())
+        : jd(date.ok() ? stdSysDaysToJulianDay(date) : nullJd())
     {}
 
     QT_POST_CXX17_API_IN_EXPORTED_CLASS
     static constexpr QDate fromStdSysDays(const std::chrono::sys_days &days) noexcept
     {
-        return QDate(stdSysDaysToJulianDay(days QT6_CALL_NEW_OVERLOAD_TAIL));
+        return QDate(stdSysDaysToJulianDay(days));
     }
 
     QT_POST_CXX17_API_IN_EXPORTED_CLASS
@@ -114,7 +115,8 @@ public:
     void getDate(int *year, int *month, int *day) const;
 
     [[nodiscard]] QDate addDays(qint64 days) const;
-#if __cpp_lib_chrono >= 201907L || defined(Q_QDOC)
+// INTEGRITY incident-85878 (timezone and clock_cast are not supported)
+#if (__cpp_lib_chrono >= 201907L && !defined(Q_OS_INTEGRITY)) || defined(Q_QDOC)
     QT_POST_CXX17_API_IN_EXPORTED_CLASS
     [[nodiscard]] QDate addDuration(std::chrono::days days) const
     {
@@ -176,10 +178,13 @@ private:
     static constexpr inline qint64 maxJd() { return Q_INT64_C( 784354017364); }
     static constexpr inline qint64 unixEpochJd() { return Q_INT64_C(2440588); }
 
-#if __cpp_lib_chrono >= 201907L
+// INTEGRITY incident-85878 (timezone and clock_cast are not supported)
+#if __cpp_lib_chrono >= 201907L && !defined(Q_OS_INTEGRITY)
+#if !QT_CORE_REMOVED_SINCE(6, 7)
     QT_POST_CXX17_API_IN_EXPORTED_CLASS
+#endif
     static constexpr qint64
-    stdSysDaysToJulianDay(const std::chrono::sys_days &days QT6_DECL_NEW_OVERLOAD_TAIL) noexcept
+    stdSysDaysToJulianDay(const std::chrono::sys_days &days) noexcept
     {
         const auto epochDays = days.time_since_epoch().count();
         // minJd() and maxJd() fit into 40 bits.
@@ -191,13 +196,6 @@ private:
         }
         return unixEpochJd() + epochDays;
     }
-
-#if QT_VERSION < QT_VERSION_CHECK(7, 0, 0)
-    static constexpr qint64 stdSysDaysToJulianDay(const std::chrono::sys_days &days) noexcept
-    {
-        return stdSysDaysToJulianDay(days QT6_CALL_NEW_OVERLOAD_TAIL);
-    }
-#endif // QT_VERSION < QT_VERSION_CHECK(7, 0, 0)
 #endif // __cpp_lib_chrono >= 201907L
 
     qint64 jd;
@@ -311,7 +309,7 @@ class Q_CORE_EXPORT QDateTime
         quintptr status : 8;
 #  endif
 #endif
-        friend constexpr bool operator==(const ShortData &lhs, const ShortData &rhs)
+        friend constexpr bool operator==(ShortData lhs, ShortData rhs)
         { return lhs.status == rhs.status && lhs.msecs == rhs.msecs; }
     };
 
@@ -515,7 +513,8 @@ public:
         > time
     );
 
-#if __cpp_lib_chrono >= 201907L || defined(Q_QDOC)
+// INTEGRITY incident-85878 (timezone and clock_cast are not supported)
+#if (__cpp_lib_chrono >= 201907L && !defined(Q_OS_INTEGRITY)) || defined(Q_QDOC)
 #if __cpp_concepts >= 201907L || defined(Q_QDOC)
 private:
     // The duration type of the result of a clock_cast<system_clock>.
@@ -543,10 +542,9 @@ public:
                 >;
             }
     {
-        const auto sysTime = std::chrono::clock_cast<std::chrono::system_clock>(time);
-        // clock_cast can change the duration, so convert it again to milliseconds
-        const auto timeInMSec = std::chrono::time_point_cast<std::chrono::milliseconds>(sysTime);
-        return fromStdTimePoint(timeInMSec);
+        using namespace std::chrono;
+        const sys_time<milliseconds> sysTime = clock_cast<system_clock>(time);
+        return fromStdTimePoint(sysTime);
     }
 #endif // __cpp_concepts
 
@@ -586,7 +584,7 @@ public:
         const std::chrono::seconds duration(toSecsSinceEpoch());
         return std::chrono::sys_seconds(duration);
     }
-#endif // __cpp_lib_chrono >= 201907L
+#endif // __cpp_lib_chrono >= 201907L && !Q_OS_INTEGRITY
 
     friend std::chrono::milliseconds operator-(const QDateTime &lhs, const QDateTime &rhs)
     {
@@ -637,7 +635,7 @@ private:
     { return lhs.equals(rhs); }
     friend Q_CORE_EXPORT Qt::weak_ordering
     compareThreeWay(const QDateTime &lhs, const QDateTime &rhs);
-    Q_DECLARE_WEAKLY_ORDERED(QDateTime)
+    Q_DECLARE_WEAKLY_ORDERED_NON_NOEXCEPT(QDateTime)
 
 #ifndef QT_NO_DATASTREAM
     friend Q_CORE_EXPORT QDataStream &operator<<(QDataStream &, const QDateTime &);

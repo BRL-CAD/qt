@@ -405,26 +405,26 @@ Q_GUI_EXPORT QDataStream &operator<<(QDataStream &stream, const QTextFormat &fmt
 {
     QMap<int, QVariant> properties = fmt.properties();
     if (stream.version() < QDataStream::Qt_6_0) {
-        auto it = properties.find(QTextFormat::FontLetterSpacingType);
-        if (it != properties.end()) {
+        auto it = properties.constFind(QTextFormat::FontLetterSpacingType);
+        if (it != properties.cend()) {
             properties[QTextFormat::OldFontLetterSpacingType] = it.value();
             properties.erase(it);
         }
 
-        it = properties.find(QTextFormat::FontStretch);
-        if (it != properties.end()) {
+        it = properties.constFind(QTextFormat::FontStretch);
+        if (it != properties.cend()) {
             properties[QTextFormat::OldFontStretch] = it.value();
             properties.erase(it);
         }
 
-        it = properties.find(QTextFormat::TextUnderlineColor);
-        if (it != properties.end()) {
+        it = properties.constFind(QTextFormat::TextUnderlineColor);
+        if (it != properties.cend()) {
             properties[QTextFormat::OldTextUnderlineColor] = it.value();
             properties.erase(it);
         }
 
-        it = properties.find(QTextFormat::FontFamilies);
-        if (it != properties.end()) {
+        it = properties.constFind(QTextFormat::FontFamilies);
+        if (it != properties.cend()) {
             properties[QTextFormat::OldFontFamily] = QVariant(it.value().toStringList().constFirst());
             properties.erase(it);
         }
@@ -630,8 +630,8 @@ Q_GUI_EXPORT QDataStream &operator>>(QDataStream &stream, QTextTableCellFormat &
     \value FontStyleName
     \value FontPointSize
     \value FontPixelSize
-    \value FontSizeAdjustment       Specifies the change in size given to the fontsize already set using
-                                    FontPointSize or FontPixelSize.
+    \value FontSizeAdjustment       Specifies an integer adjustment added to the base font size set using
+                                    \c FontPointSize or \c FontPixelSize.
     \value FontFixedPitch
     \omitvalue FontSizeIncrement
     \value FontWeight
@@ -658,9 +658,11 @@ Q_GUI_EXPORT QDataStream &operator>>(QDataStream &stream, QTextTableCellFormat &
     \omitvalue LastFontProperty
 
     \value TextUnderlineColor      Specifies the color to draw underlines, overlines and strikeouts.
-    \value TextVerticalAlignment
-    \value TextOutline
-    \value TextUnderlineStyle
+    \value TextVerticalAlignment   Specifies the type of text vertical alignment according to
+                                   the values of the QTextCharFormat::VerticalAlignment enum.
+    \value TextOutline             Specifies a \l QPen used to draw the text outline.
+    \value TextUnderlineStyle      Specifies the style of text underline according to
+                                   the values of the QTextCharFormat::UnderlineStyle enum.
     \value TextToolTip Specifies the (optional) tool tip to be displayed for a fragment of text.
     \value TextSuperScriptBaseline Specifies the baseline (in % of height) of superscript texts.
     \value TextSubScriptBaseline   Specifies the baseline (in % of height) of subscript texts.
@@ -745,6 +747,7 @@ Q_GUI_EXPORT QDataStream &operator>>(QDataStream &stream, QTextTableCellFormat &
     \value ImageWidth
     \value ImageHeight
     \value ImageQuality
+    \value ImageMaxWidth    This enum value has been added in Qt 6.8.
 
     Selection properties
 
@@ -911,9 +914,7 @@ QTextFormat &QTextFormat::operator=(const QTextFormat &rhs)
 /*!
     \fn void QTextFormat::swap(QTextFormat &other)
     \since 5.0
-
-    Swaps this text format with \a other. This function is very fast
-    and never fails.
+    \memberswap{text format}
 */
 
 /*!
@@ -2148,6 +2149,17 @@ void QTextCharFormat::setFont(const QFont &font, FontPropertiesInheritanceBehavi
 
 /*!
     Returns the font for this character format.
+
+    This function takes into account the format's font attributes (such as fontWeight()
+    and fontPointSize()) and resolves them on top of the default font, defined as follows.
+    If the format is part of a document, that is the document's default font.
+    Otherwise the properties are resolved on top of a default constructed QFont.
+
+    For example, if this format's font size hasn't been changed from the default font,
+    fontPointSize() returns 0, while \c {font().pointSize()} returns the actual
+    size used for drawing.
+
+    \sa QTextDocument::defaultFont()
 */
 QFont QTextCharFormat::font() const
 {
@@ -2798,7 +2810,8 @@ QTextListFormat::QTextListFormat(const QTextFormat &fmt)
     frame's padding(). This scheme is similar to the box model used by Cascading
     Style Sheets for HTML pages.
 
-    \image qtextframe-style.png
+    \image qtextframe-style.png {Diagram showing how padding, border, and margin
+           are laid around the text content rectangle.}
 
     The position() of a frame is set using setPosition() and determines how it
     is located relative to the surrounding text.
@@ -3128,7 +3141,8 @@ qreal QTextFrameFormat::rightMargin() const
     between each cell edge and its contents is set with setCellPadding() and read
     with cellPadding().
 
-    \image qtexttableformat-cell.png
+    \image qtexttableformat-cell.png {Diagram showing how cell spacing and padding
+           are laid around the cell content rectangle.}
 
     The table's background color can be read with the background() function,
     and can be specified with setBackground(). The background color of each
@@ -3156,7 +3170,8 @@ QTextTableFormat::QTextTableFormat()
  : QTextFrameFormat()
 {
     setObjectType(TableObject);
-    setCellSpacing(2);
+    setCellPadding(4);
+    setBorderCollapse(true);
     setBorder(1);
 }
 
@@ -3289,7 +3304,7 @@ QTextTableFormat::QTextTableFormat(const QTextFormat &fmt)
     \fn void QTextTableFormat::setBorderCollapse(bool borderCollapse)
     \since 5.14
 
-    Enabling \a borderCollapse will have the following implications:
+    By default, \l borderCollapse() is \c true, which has the following implications:
     \list
     \li The borders and grid of the table will be rendered following the
         CSS table \c border-collapse: \c collapse rules
@@ -3306,9 +3321,11 @@ QTextTableFormat::QTextTableFormat(const QTextFormat &fmt)
         \endlist
     \endlist
 
-    With borderCollapse disabled, cell borders can still be styled
+    With \a borderCollapse set to \c false, cell borders can still be styled
     using QTextTableCellFormat but styling will be applied only within
     the cell's frame, which is probably not very useful in practice.
+
+    \note In Qt versions prior to 6.8, the default value was \c false.
 
     \sa setBorder(), setBorderBrush(), setBorderStyle()
     \sa QTextTableCellFormat
@@ -3318,7 +3335,7 @@ QTextTableFormat::QTextTableFormat(const QTextFormat &fmt)
     \fn bool QTextTableFormat::borderCollapse() const
     \since 5.14
 
-    Returns true if borderCollapse is enabled.
+    Returns \c true if table borders are to be collapsed. The default is \c true.
 
     \sa setBorderCollapse()
 */
@@ -3425,7 +3442,7 @@ QTextImageFormat::QTextImageFormat(const QTextFormat &fmt)
 
     Sets the \a width of the rectangle occupied by the image.
 
-    \sa width(), setHeight()
+    \sa width(), setHeight(), maximumWidth()
 */
 
 
@@ -3435,6 +3452,24 @@ QTextImageFormat::QTextImageFormat(const QTextFormat &fmt)
     Returns the width of the rectangle occupied by the image.
 
     \sa height(), setWidth()
+*/
+
+/*!
+    \fn void QTextImageFormat::setMaximumWidth(QTextLength maximumWidth)
+
+    Sets the \a maximumWidth of the rectangle occupied by the image. This
+    can be an absolute number or a percentage of the available document size.
+
+    \sa width(), setHeight()
+*/
+
+
+/*!
+    \fn QTextLength QTextImageFormat::maximumWidth() const
+
+    Returns the maximum width of the rectangle occupied by the image.
+
+    \sa width(), setMaximumWidth()
 */
 
 

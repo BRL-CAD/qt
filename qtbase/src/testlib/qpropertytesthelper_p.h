@@ -21,9 +21,38 @@
 #include <QTest>
 #include <private/qglobal_p.h>
 
+#include <cstdio>
+#include <memory>
+#include <optional>
+
 QT_BEGIN_NAMESPACE
 
 namespace QTestPrivate {
+
+#ifdef Q_OS_VXWORKS
+template <typename T>
+class OptionalWrapper : private std::unique_ptr<T>
+{
+    using Base = std::unique_ptr<T>;
+
+    Base &as_base() { return *this; }
+    const Base &as_base() const { return *this; }
+public:
+    Q_IMPLICIT OptionalWrapper(std::nullopt_t) : Base() {}
+
+    using Base::operator->;
+    using Base::operator*;
+    using Base::operator bool;
+
+    template <typename...Args>
+    T &emplace(Args&&...args)
+    { as_base() = std::make_unique<T>(std::forward<Args>(args)...); return **this; }
+};
+#else
+template <typename T>
+using OptionalWrapper = std::optional<T>;
+#endif // Q_OS_VXWORKS
+
 
 /*!
     \internal
@@ -44,19 +73,15 @@ namespace QTestPrivate {
 */
 #define QPROPERTY_TEST_COMPARISON_HELPER(actual, expected, comparator, represent)                  \
     do {                                                                                           \
-        const size_t maxMsgLen = 1024;                                                             \
-        char msg[maxMsgLen] = { '\0' };                                                            \
-        auto actualStr = represent(actual);                                                        \
-        auto expectedStr = represent(expected);                                                    \
-        const size_t len1 = mbstowcs(nullptr, #actual, maxMsgLen);                                 \
-        const size_t len2 = mbstowcs(nullptr, #expected, maxMsgLen);                               \
-        qsnprintf(msg, maxMsgLen, "\n%s\n   Actual   (%s)%*s %s\n   Expected (%s)%*s %s\n",        \
-                  "Comparison failed!", #actual, qMax(len1, len2) - len1 + 1, ":",                 \
-                  actualStr ? actualStr : "<null>", #expected, qMax(len1, len2) - len2 + 1, ":",   \
-                  expectedStr ? expectedStr : "<null>");                                           \
-        delete[] actualStr;                                                                        \
-        delete[] expectedStr;                                                                      \
-        QVERIFY2(comparator(actual, expected), msg);                                               \
+        char qprop_tst_cmp_hlp_buf[1024]; \
+        const auto qprop_tst_cmp_hlp_act = std::unique_ptr<char[]>(represent(actual)); \
+        const auto qprop_tst_cmp_hlp_exp = std::unique_ptr<char[]>(represent(expected)); \
+        QVERIFY2(comparator(actual, expected), \
+                 QTest::Internal::formatPropertyTestHelperFailure(qprop_tst_cmp_hlp_buf, \
+                                                                  sizeof qprop_tst_cmp_hlp_buf, \
+                                                                  qprop_tst_cmp_hlp_act.get(), \
+                                                                  qprop_tst_cmp_hlp_exp.get(), \
+                                                                  #actual, #expected)); \
     } while (false)
 
 /*!
@@ -130,9 +155,9 @@ void testReadWritePropertyBasics(
     QVERIFY2(metaProperty.isBindable() && metaProperty.isWritable(),
              "Preconditions not met for " + QByteArray(propertyName));
 
-    QScopedPointer<QSignalSpy> spy(nullptr);
+    QTestPrivate::OptionalWrapper<QSignalSpy> spy = std::nullopt;
     if (metaProperty.hasNotifySignal())
-        spy.reset(new QSignalSpy(&instance, metaProperty.notifySignal()));
+        spy.emplace(&instance, metaProperty.notifySignal());
 
     testedObj.setProperty(propertyName, QVariant::fromValue(initial));
     QPROPERTY_TEST_COMPARISON_HELPER(
@@ -323,9 +348,9 @@ void testWriteOncePropertyBasics(
 
     QUntypedBindable bindable = metaProperty.bindable(&instance);
 
-    QScopedPointer<QSignalSpy> spy(nullptr);
+    QTestPrivate::OptionalWrapper<QSignalSpy> spy = std::nullopt;
     if (metaProperty.hasNotifySignal())
-        spy.reset(new QSignalSpy(&instance, metaProperty.notifySignal()));
+        spy.emplace(&instance, metaProperty.notifySignal());
 
     QPROPERTY_TEST_COMPARISON_HELPER(
             testedObj.property(propertyName).template value<PropertyType>(), prior, comparator,
@@ -457,9 +482,9 @@ void testReadOnlyPropertyBasics(
 
     QUntypedBindable bindable = metaProperty.bindable(&instance);
 
-    QScopedPointer<QSignalSpy> spy(nullptr);
+    QTestPrivate::OptionalWrapper<QSignalSpy> spy = std::nullopt;
     if (metaProperty.hasNotifySignal())
-        spy.reset(new QSignalSpy(&instance, metaProperty.notifySignal()));
+        spy.emplace(&instance, metaProperty.notifySignal());
 
     QPROPERTY_TEST_COMPARISON_HELPER(
             testedObj.property(propertyName).template value<PropertyType>(), initial, comparator,

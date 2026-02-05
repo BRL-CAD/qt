@@ -9,11 +9,14 @@
 #pragma qt_sync_stop_processing
 #endif
 
+#include <QtCore/qalloc.h>
+#include <QtCore/qcompare.h>
 #include <QtCore/qcontainerfwd.h>
 #include <QtCore/qglobal.h>
 #include <QtCore/qalgorithms.h>
 #include <QtCore/qcontainertools_impl.h>
 #include <QtCore/qhashfunctions.h>
+#include <QtCore/qttypetraits.h>
 
 #include <algorithm>
 #include <initializer_list>
@@ -31,7 +34,8 @@ class QVLAStorage
 {
     template <size_t> class print;
 protected:
-    ~QVLAStorage() = default;
+    QVLAStorage() = default;
+    QT_DECLARE_RO5_SMF_AS_DEFAULTED(QVLAStorage)
 
     alignas(Align) char array[Prealloc * (Align > Size ? Align : Size)];
     QT_WARNING_PUSH
@@ -46,7 +50,8 @@ protected:
 class QVLABaseBase
 {
 protected:
-    ~QVLABaseBase() = default;
+    QVLABaseBase() = default;
+    QT_DECLARE_RO5_SMF_AS_DEFAULTED(QVLABaseBase)
 
     qsizetype a;      // capacity
     qsizetype s;      // size
@@ -78,7 +83,8 @@ template<class T>
 class QVLABase : public QVLABaseBase
 {
 protected:
-    ~QVLABase() = default;
+    QVLABase() = default;
+    QT_DECLARE_RO5_SMF_AS_DEFAULTED(QVLABase)
 
 public:
     T *data() noexcept { return static_cast<T *>(ptr); }
@@ -183,6 +189,16 @@ public:
     iterator erase(const_iterator begin, const_iterator end);
     iterator erase(const_iterator pos) { return erase(pos, pos + 1); }
 
+    static constexpr qsizetype maxSize() noexcept
+    {
+        // -1 to deal with the pointer one-past-the-end
+        return (QtPrivate::MaxAllocSize / sizeof(T)) - 1;
+    }
+    constexpr qsizetype max_size() const noexcept
+    {
+        return maxSize();
+    }
+
     size_t hash(size_t seed) const noexcept(QtPrivate::QNothrowHashable_v<T>)
     {
         return qHashRange(begin(), end(), seed);
@@ -245,6 +261,12 @@ protected:
 
     void assign_impl(qsizetype prealloc, void *array, qsizetype n, const T &t);
     template <typename Iterator>
+    void assign_impl(qsizetype prealloc, void *array, Iterator first, Iterator last,
+                     std::forward_iterator_tag);
+    template <typename Iterator>
+    void assign_impl(qsizetype prealloc, void *array, Iterator first, Iterator last,
+                     std::input_iterator_tag);
+    template <typename Iterator>
     void assign_impl(qsizetype prealloc, void *array, Iterator first, Iterator last);
 
     bool isValidIterator(const const_iterator &i) const
@@ -278,6 +300,8 @@ class QVarLengthArray
     template <typename InputIterator>
     using if_input_iterator = QtPrivate::IfIsInputIterator<InputIterator>;
 public:
+    static constexpr qsizetype PreallocatedSize = Prealloc;
+
     using size_type = typename Base::size_type;
     using value_type = typename Base::value_type;
     using pointer = typename Base::pointer;
@@ -342,8 +366,7 @@ public:
     inline QVarLengthArray(InputIterator first, InputIterator last)
         : QVarLengthArray()
     {
-        QtPrivate::reserveIfForwardIterator(this, first, last);
-        std::copy(first, last, std::back_inserter(*this));
+        assign(first, last);
     }
 
     inline ~QVarLengthArray()
@@ -351,7 +374,7 @@ public:
         if constexpr (QTypeInfo<T>::isComplex)
             std::destroy_n(data(), size());
         if (data() != reinterpret_cast<T *>(this->array))
-            free(data());
+            QtPrivate::sizedFree(data(), capacity(), sizeof(T));
     }
     inline QVarLengthArray<T, Prealloc> &operator=(const QVarLengthArray<T, Prealloc> &other)
     {
@@ -395,8 +418,11 @@ public:
     }
 #ifdef Q_QDOC
     inline qsizetype size() const { return this->s; }
+    static constexpr qsizetype maxSize() noexcept { return QVLABase<T>::maxSize(); }
+    constexpr qsizetype max_size() const noexcept { return QVLABase<T>::max_size(); }
 #endif
     using Base::size;
+    using Base::max_size;
     inline qsizetype count() const { return size(); }
     inline qsizetype length() const { return size(); }
     inline T &first()
@@ -609,7 +635,32 @@ public:
     friend inline bool operator<=(const QVarLengthArray<T, Prealloc1> &l, const QVarLengthArray<T, Prealloc2> &r);
     template <typename T, qsizetype Prealloc1, qsizetype Prealloc2>
     friend inline bool operator>=(const QVarLengthArray<T, Prealloc1> &l, const QVarLengthArray<T, Prealloc2> &r);
+    template <typename T, qsizetype Prealloc1, qsizetype Prealloc2>
+    friend inline auto operator<=>(const QVarLengthArray<T, Prealloc1> &l, const QVarLengthArray<T, Prealloc2> &r);
 #else
+private:
+    template <typename U = T, qsizetype Prealloc2 = Prealloc,
+              Qt::if_has_qt_compare_three_way<U, U> = true>
+    friend auto
+    compareThreeWay(const QVarLengthArray &lhs, const QVarLengthArray<T, Prealloc2> &rhs)
+    {
+        return QtOrderingPrivate::lexicographicalCompareThreeWay(lhs.begin(), lhs.end(),
+                                                                 rhs.begin(), rhs.end());
+    }
+
+#if defined(__cpp_lib_three_way_comparison) && defined(__cpp_lib_concepts)
+    template <typename U = T, qsizetype Prealloc2 = Prealloc,
+              QtOrderingPrivate::if_has_op_less_or_op_compare_three_way<QVarLengthArray, U> = true>
+    friend auto
+    operator<=>(const QVarLengthArray &lhs, const QVarLengthArray<T, Prealloc2> &rhs)
+    {
+        return std::lexicographical_compare_three_way(lhs.begin(), lhs.end(),
+                                                      rhs.begin(), rhs.end(),
+                                                      QtOrderingPrivate::synthThreeWay);
+    }
+#endif // __cpp_lib_three_way_comparison && __cpp_lib_concepts
+
+public:
     template <typename U = T, qsizetype Prealloc2 = Prealloc> friend
     QTypeTraits::compare_eq_result<U> operator==(const QVarLengthArray<T, Prealloc> &l, const QVarLengthArray<T, Prealloc2> &r)
     {
@@ -622,6 +673,7 @@ public:
         return !(l == r);
     }
 
+#ifndef __cpp_lib_three_way_comparison
     template <typename U = T, qsizetype Prealloc2 = Prealloc> friend
     QTypeTraits::compare_lt_result<U> operator<(const QVarLengthArray<T, Prealloc> &lhs, const QVarLengthArray<T, Prealloc2> &rhs)
         noexcept(noexcept(std::lexicographical_compare(lhs.begin(), lhs.end(),
@@ -650,7 +702,8 @@ public:
     {
         return !(lhs < rhs);
     }
-#endif
+#endif // __cpp_lib_three_way_comparison
+#endif // Q_QDOC
 
 private:
     template <typename U, qsizetype Prealloc2>
@@ -682,9 +735,9 @@ Q_INLINE_TEMPLATE QVarLengthArray<T, Prealloc>::QVarLengthArray(qsizetype asize)
     // resize(asize) // this requires a movable or copyable T, can't use, need to do it by hand
 
     if (asize > Prealloc) {
-        this->ptr = malloc(asize * sizeof(T));
-        Q_CHECK_PTR(this->ptr);
         this->a = asize;
+        this->ptr = QtPrivate::fittedMalloc(0, &this->a, sizeof(T));
+        Q_CHECK_PTR(this->ptr);
     }
     if constexpr (QTypeInfo<T>::isComplex)
         std::uninitialized_default_construct_n(data(), asize);
@@ -777,18 +830,47 @@ Q_OUTOFLINE_TEMPLATE void QVLABase<T>::assign_impl(qsizetype prealloc, void *arr
 
 template <class T>
 template <typename Iterator>
-Q_OUTOFLINE_TEMPLATE void QVLABase<T>::assign_impl(qsizetype prealloc, void *array, Iterator first, Iterator last)
+Q_OUTOFLINE_TEMPLATE
+void QVLABase<T>::assign_impl(qsizetype prealloc, void *array, Iterator first, Iterator last,
+                              std::forward_iterator_tag)
 {
     // This function only provides the basic exception guarantee.
-    constexpr bool IsFwdIt =
-            std::is_convertible_v<typename std::iterator_traits<Iterator>::iterator_category,
-                                  std::forward_iterator_tag>;
-    if constexpr (IsFwdIt) {
-        const qsizetype n = std::distance(first, last);
-        if (n > capacity())
-            reallocate_impl(prealloc, array, 0, n); // clear & reserve n
-    }
+    const qsizetype n = std::distance(first, last);
+    if (n > capacity())
+        reallocate_impl(prealloc, array, 0, n); // clear & reserve n
 
+    auto dst = begin();
+
+    if constexpr (!QTypeInfo<T>::isComplex) {
+        // For non-complex types, we prefer a single std::copy() -> memcpy()
+        // call. We can do that because either the default constructor is
+        // trivial (so the lifetime has started) or the copy constructor is
+        // (and won't care what the stored value is). Note that in some cases
+        // dst > end() after this.
+        dst = std::copy(first, last, dst);
+    } else if (n > this->s) {
+        // overwrite existing elements and create new
+        for (qsizetype i = 0; i < this->s; ++i) {
+            *dst = *first;
+            ++first;
+            ++dst;
+        }
+        std::uninitialized_copy_n(first, n - this->s, dst);
+    } else {
+        // overwrite existing elements and destroy tail
+        dst = std::copy(first, last, dst);
+        std::destroy(dst, end());
+    }
+    this->s = n;
+}
+
+template <class T>
+template <typename Iterator>
+Q_OUTOFLINE_TEMPLATE
+void QVLABase<T>::assign_impl(qsizetype prealloc, void *array, Iterator first, Iterator last,
+                              std::input_iterator_tag)
+{
+    // This function only provides the basic exception guarantee.
     auto dst = begin();
     const auto dend = end();
     while (true) {
@@ -797,15 +879,10 @@ Q_OUTOFLINE_TEMPLATE void QVLABase<T>::assign_impl(qsizetype prealloc, void *arr
             break;
         }
         if (dst == dend) {            // ran out of existing elements to overwrite
-            if constexpr (IsFwdIt) {
-                dst = std::uninitialized_copy(first, last, dst);
-                break;
-            } else {
                 do {
                     emplace_back_impl(prealloc, array, *first);
                 } while (++first != last);
                 return; // size() is already correct (and dst invalidated)!
-            }
         }
         *dst = *first;                // overwrite existing element
         ++dst;
@@ -815,22 +892,32 @@ Q_OUTOFLINE_TEMPLATE void QVLABase<T>::assign_impl(qsizetype prealloc, void *arr
 }
 
 template <class T>
+template <typename Iterator>
+Q_OUTOFLINE_TEMPLATE
+void QVLABase<T>::assign_impl(qsizetype prealloc, void *array, Iterator first, Iterator last)
+{
+    using Cat = typename std::iterator_traits<Iterator>::iterator_category;
+    assign_impl(prealloc, array, first, last, Cat{});
+}
+
+template <class T>
 Q_OUTOFLINE_TEMPLATE void QVLABase<T>::reallocate_impl(qsizetype prealloc, void *array, qsizetype asize, qsizetype aalloc)
 {
     Q_ASSERT(aalloc >= asize);
     Q_ASSERT(data());
     T *oldPtr = data();
     qsizetype osize = size();
+    const qsizetype oalloc = capacity();
 
     const qsizetype copySize = qMin(asize, osize);
     Q_ASSERT(copySize >= 0);
 
-    if (aalloc != capacity()) {
+    if (aalloc != oalloc) {
         QVLABaseBase::malloced_ptr guard;
         void *newPtr;
         qsizetype newA;
         if (aalloc > prealloc) {
-            newPtr = malloc(aalloc * sizeof(T));
+            newPtr = QtPrivate::fittedMalloc(0, &aalloc, sizeof(T));
             guard.reset(newPtr);
             Q_CHECK_PTR(newPtr); // could throw
             // by design: in case of QT_NO_EXCEPTIONS malloc must not fail or it crashes here
@@ -855,7 +942,7 @@ Q_OUTOFLINE_TEMPLATE void QVLABase<T>::reallocate_impl(qsizetype prealloc, void 
     }
 
     if (oldPtr != reinterpret_cast<T *>(array) && oldPtr != data())
-        free(oldPtr);
+        QtPrivate::sizedFree(oldPtr, oalloc, sizeof(T));
 }
 
 template <class T>
@@ -947,8 +1034,8 @@ Q_OUTOFLINE_TEMPLATE auto QVLABase<T>::insert_impl(qsizetype prealloc, void *arr
 template <class T>
 Q_OUTOFLINE_TEMPLATE auto QVLABase<T>::erase(const_iterator abegin, const_iterator aend) -> iterator
 {
-    Q_ASSERT_X(isValidIterator(abegin), "QVarLengthArray::insert", "The specified const_iterator argument 'abegin' is invalid");
-    Q_ASSERT_X(isValidIterator(aend), "QVarLengthArray::insert", "The specified const_iterator argument 'aend' is invalid");
+    Q_ASSERT_X(isValidIterator(abegin), "QVarLengthArray::erase", "The specified const_iterator argument 'abegin' is invalid");
+    Q_ASSERT_X(isValidIterator(aend), "QVarLengthArray::erase", "The specified const_iterator argument 'aend' is invalid");
 
     qsizetype f = qsizetype(abegin - cbegin());
     qsizetype l = qsizetype(aend - cbegin());
@@ -959,10 +1046,11 @@ Q_OUTOFLINE_TEMPLATE auto QVLABase<T>::erase(const_iterator abegin, const_iterat
 
     Q_ASSERT(n > 0); // aend must be reachable from abegin
 
-    if constexpr (QTypeInfo<T>::isComplex) {
+    if constexpr (!QTypeInfo<T>::isRelocatable) {
         std::move(begin() + l, end(), QT_MAKE_CHECKED_ARRAY_ITERATOR(begin() + f, size() - f));
         std::destroy(end() - n, end());
     } else {
+        std::destroy(abegin, aend);
         memmove(static_cast<void *>(data() + f), static_cast<const void *>(data() + l), (size() - l) * sizeof(T));
     }
     this->s -= n;

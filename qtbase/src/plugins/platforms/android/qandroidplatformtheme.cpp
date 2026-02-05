@@ -10,6 +10,7 @@
 #include "qandroidplatformmenuitem.h"
 #include "qandroidplatformdialoghelpers.h"
 #include "qandroidplatformfiledialoghelper.h"
+#include "qandroidplatformwindow.h"
 
 #include <QCoreApplication>
 #include <QDebug>
@@ -22,6 +23,10 @@
 #include <qandroidplatformintegration.h>
 
 QT_BEGIN_NAMESPACE
+
+Q_LOGGING_CATEGORY(lcQpaMenus, "qt.qpa.menus")
+
+Q_DECLARE_JNI_CLASS(QtDisplayManager, "org/qtproject/qt/android/QtDisplayManager")
 
 using namespace Qt::StringLiterals;
 
@@ -159,7 +164,10 @@ QJsonObject AndroidStyle::loadStyleData()
     if (!stylePath.isEmpty() && !stylePath.endsWith(slashChar))
         stylePath += slashChar;
 
-    if (QAndroidPlatformIntegration::colorScheme() == Qt::ColorScheme::Dark)
+    const Qt::ColorScheme colorScheme = QAndroidPlatformTheme::instance()
+                                      ? QAndroidPlatformTheme::instance()->colorScheme()
+                                      : QAndroidPlatformIntegration::colorScheme();
+    if (colorScheme == Qt::ColorScheme::Dark)
         stylePath += "darkUiMode/"_L1;
 
     Q_ASSERT(!stylePath.isEmpty());
@@ -394,27 +402,80 @@ void QAndroidPlatformTheme::updateStyle()
 
 QPlatformMenuBar *QAndroidPlatformTheme::createPlatformMenuBar() const
 {
-    return new QAndroidPlatformMenuBar;
+    auto *menuBar = new QAndroidPlatformMenuBar;
+    qCDebug(lcQpaMenus) << "Created" << menuBar;
+    return menuBar;
 }
 
 QPlatformMenu *QAndroidPlatformTheme::createPlatformMenu() const
 {
-    return new QAndroidPlatformMenu;
+    auto *menu = new QAndroidPlatformMenu;
+    qCDebug(lcQpaMenus) << "Created" << menu;
+    return menu;
 }
 
 QPlatformMenuItem *QAndroidPlatformTheme::createPlatformMenuItem() const
 {
-    return new QAndroidPlatformMenuItem;
+    auto *menuItem = new QAndroidPlatformMenuItem;
+    qCDebug(lcQpaMenus) << "Created" << menuItem;
+    return menuItem;
 }
 
 void QAndroidPlatformTheme::showPlatformMenuBar()
 {
+    qCDebug(lcQpaMenus) << "Showing platform menu bar";
     QtAndroidMenu::openOptionsMenu();
 }
 
 Qt::ColorScheme QAndroidPlatformTheme::colorScheme() const
 {
+    if (m_colorSchemeOverride != Qt::ColorScheme::Unknown)
+        return m_colorSchemeOverride;
     return QAndroidPlatformIntegration::colorScheme();
+}
+
+void QAndroidPlatformTheme::requestColorScheme(Qt::ColorScheme scheme)
+{
+    m_colorSchemeOverride = scheme;
+    QMetaObject::invokeMethod(qGuiApp, [this]{
+        updateColorScheme();
+    });
+
+    if (m_colorSchemeOverride == Qt::ColorScheme::Unknown)
+        return;
+
+    const auto iface = qGuiApp->nativeInterface<QNativeInterface::QAndroidApplication>();
+    iface->runOnAndroidMainThread([=]() {
+        bool isLight = scheme == Qt::ColorScheme::Light;
+        QtJniTypes::QtDisplayManager::callStaticMethod("setStatusBarColorHint",
+            iface->context().object<QtJniTypes::Activity>(), isLight);
+        QtJniTypes::QtDisplayManager::callStaticMethod("setNavigationBarColorHint",
+            iface->context().object<QtJniTypes::Activity>(), isLight);
+    });
+}
+
+extern "C" JNIEXPORT bool JNICALL
+Java_org_qtproject_qt_android_QtActivityDelegateBase_canOverrideColorSchemeHint(JNIEnv *, jobject)
+{
+    if (!QAndroidPlatformTheme::instance())
+        return true;
+
+    return QAndroidPlatformTheme::instance()->colorSchemeOverride() == Qt::ColorScheme::Unknown;
+}
+
+static Qt::ContrastPreference s_contrastPreference = Qt::ContrastPreference::NoPreference;
+
+Qt::ContrastPreference QAndroidPlatformTheme::contrastPreference() const
+{
+    return s_contrastPreference;
+}
+
+extern "C" JNIEXPORT void JNICALL
+Java_org_qtproject_qt_android_QtActivityDelegateBase_updateUiContrast(JNIEnv *, jobject,
+                                                                      jfloat newUiContrast)
+{
+    s_contrastPreference = newUiContrast > 0.5f ? Qt::ContrastPreference::HighContrast
+                                                : Qt::ContrastPreference::NoPreference;
 }
 
 static inline int paletteType(QPlatformTheme::Palette type)
@@ -521,6 +582,8 @@ QVariant QAndroidPlatformTheme::themeHint(ThemeHint hint) const
 
             Q_FALLTHROUGH();
     }
+    case PreferFileIconFromTheme:
+        return true;
     default:
         return QPlatformTheme::themeHint(hint);
     }

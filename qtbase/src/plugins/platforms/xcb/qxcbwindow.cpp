@@ -1,5 +1,6 @@
 // Copyright (C) 2016 The Qt Company Ltd.
 // SPDX-License-Identifier: LicenseRef-Qt-Commercial OR LGPL-3.0-only OR GPL-2.0-only OR GPL-3.0-only
+// Qt-Security score:significant reason:default
 
 #include "qxcbwindow.h"
 
@@ -41,6 +42,7 @@
 #include <qpa/qwindowsysteminterface.h>
 
 #include <stdio.h>
+#include <unistd.h>
 
 #if QT_CONFIG(xcb_xlib)
 #define register        /* C++17 deprecated register */
@@ -59,8 +61,8 @@ QT_BEGIN_NAMESPACE
 
 using namespace Qt::StringLiterals;
 
-Q_LOGGING_CATEGORY(lcQpaWindow, "qt.qpa.window");
-Q_LOGGING_CATEGORY(lcQpaXcbWindow, "qt.qpa.xcb.window");
+Q_STATIC_LOGGING_CATEGORY(lcQpaWindow, "qt.qpa.window");
+Q_STATIC_LOGGING_CATEGORY(lcQpaXcbWindow, "qt.qpa.xcb.window");
 
 Q_DECLARE_TYPEINFO(xcb_rectangle_t, Q_PRIMITIVE_TYPE);
 
@@ -530,6 +532,9 @@ QXcbForeignWindow::QXcbForeignWindow(QWindow *window, WId nativeHandle)
 
 QXcbForeignWindow::~QXcbForeignWindow()
 {
+    if (QPlatformWindow::parent())
+        setParent(nullptr);
+
     // Clear window so that destroy() does not affect it
     m_window = 0;
 
@@ -573,8 +578,6 @@ void QXcbWindow::destroy()
 
 void QXcbWindow::setGeometry(const QRect &rect)
 {
-    setWindowState(Qt::WindowNoState);
-
     QPlatformWindow::setGeometry(rect);
 
     propagateSizeHints();
@@ -804,7 +807,10 @@ void QXcbWindow::hide()
         }
     }
 
+    // Avoid race with requestActivate()
+    QMutexLocker locker(&m_mappedMutex);
     m_mapped = false;
+    m_deferredActivation = false;
 
     // Hiding a modal window doesn't send an enter event to its transient parent when the
     // mouse is already over the parent window, so the enter event must be emulated.
@@ -1093,6 +1099,7 @@ void QXcbWindow::setNetWmState(Qt::WindowFlags flags)
 
 void QXcbWindow::setNetWmStateOnUnmappedWindow()
 {
+    QMutexLocker locker(&m_mappedMutex);
     if (Q_UNLIKELY(m_mapped))
         qCDebug(lcQpaXcb()) << "internal info: " << Q_FUNC_INFO << "called on mapped window";
 
@@ -1327,11 +1334,17 @@ void QXcbWindow::setParent(const QPlatformWindow *parent)
         m_embedded = false;
     }
     xcb_reparent_window(xcb_connection(), xcb_window(), xcb_parent_id, topLeft.x(), topLeft.y());
+    connection()->sync();
 }
 
 void QXcbWindow::setWindowTitle(const QString &title)
 {
     setWindowTitle(connection(), m_window, title);
+}
+
+QString QXcbWindow::windowTitle() const
+{
+    return windowTitle(connection(), m_window);
 }
 
 void QXcbWindow::setWindowIconText(const QString &title)
@@ -1350,6 +1363,7 @@ void QXcbWindow::setWindowIconText(const QString &title)
 void QXcbWindow::setWindowIcon(const QIcon &icon)
 {
     QList<quint32> icon_data;
+    const uint32_t sizeLimit = xcb_get_maximum_request_length(xcb_connection());
     if (!icon.isNull()) {
         QList<QSize> availableSizes = icon.availableSizes();
         if (availableSizes.isEmpty()) {
@@ -1365,7 +1379,12 @@ void QXcbWindow::setWindowIcon(const QIcon &icon)
             if (!pixmap.isNull()) {
                 QImage image = pixmap.toImage().convertToFormat(QImage::Format_ARGB32);
                 int pos = icon_data.size();
-                icon_data.resize(pos + 2 + image.width()*image.height());
+                int newSize = pos + 2 + image.width()*image.height();
+                // In the absence of the BIG-REQUESTS extension, or with too big DPR,
+                // the size of icon data is too big for the xcb request very easily.
+                if (quint64(newSize) > quint64(sizeLimit))
+                    break;
+                icon_data.resize(newSize);
                 icon_data[pos++] = image.width();
                 icon_data[pos++] = image.height();
                 memcpy(icon_data.data() + pos, image.bits(), image.width()*image.height()*4);
@@ -1375,10 +1394,10 @@ void QXcbWindow::setWindowIcon(const QIcon &icon)
 
     if (!icon_data.isEmpty()) {
         // Ignore icon exceeding maximum xcb request length
-        if (quint64(icon_data.size()) > quint64(xcb_get_maximum_request_length(xcb_connection()))) {
+        if (quint64(icon_data.size()) > quint64(sizeLimit)) {
             qWarning() << "Ignoring window icon" << icon_data.size()
                        << "exceeds maximum xcb request length"
-                       << xcb_get_maximum_request_length(xcb_connection());
+                       << sizeLimit;
             return;
         }
         xcb_change_property(xcb_connection(),
@@ -2427,7 +2446,7 @@ bool QXcbWindow::startSystemMoveResize(const QPoint &pos, int edges)
     if (startedByTouch) {
         const QString wmname = connection()->windowManagerName();
         if (wmname != "kwin"_L1 && wmname != "openbox"_L1) {
-            qCDebug(lcQpaXInputDevices) << "only KDE and OpenBox support startSystemMove/Resize which is triggered from touch events: XDG_CURRENT_DESKTOP="
+            qCDebug(lcQpaInputDevices) << "only KDE and OpenBox support startSystemMove/Resize which is triggered from touch events: XDG_CURRENT_DESKTOP="
                                         << qgetenv("XDG_CURRENT_DESKTOP");
             connection()->abortSystemMoveResize(m_window);
             return false;
@@ -2465,7 +2484,7 @@ static uint qtEdgesToXcbMoveResizeDirection(Qt::Edges edges)
 
 void QXcbWindow::doStartSystemMoveResize(const QPoint &globalPos, int edges)
 {
-    qCDebug(lcQpaXInputDevices) << "triggered system move or resize via sending _NET_WM_MOVERESIZE client message";
+    qCDebug(lcQpaInputDevices) << "triggered system move or resize via sending _NET_WM_MOVERESIZE client message";
     const xcb_atom_t moveResize = connection()->atom(QXcbAtom::Atom_NET_WM_MOVERESIZE);
     xcb_client_message_event_t xev;
     xev.response_type = XCB_CLIENT_MESSAGE;
@@ -2573,7 +2592,7 @@ void QXcbWindow::setOpacity(qreal level)
     if (!m_window)
         return;
 
-    quint32 value = qRound64(qBound(qreal(0), level, qreal(1)) * 0xffffffff);
+    quint32 value = qRound64(qBound(qreal(0), level, qreal(1)) * qreal(0xffffffff));
 
     xcb_change_property(xcb_connection(),
                         XCB_PROP_MODE_REPLACE,

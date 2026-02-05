@@ -1,6 +1,6 @@
 // Copyright (C) 2016 The Qt Company Ltd.
 // SPDX-License-Identifier: LicenseRef-Qt-Commercial OR LGPL-3.0-only OR GPL-2.0-only OR GPL-3.0-only
-
+// Qt-Security score:critical reason:data-parser
 
 #define QT_NO_CAST_FROM_ASCII
 
@@ -35,7 +35,7 @@ static constexpr auto magicRuleTypes = qOffsetStringArray(
 QMimeMagicRule::Type QMimeMagicRule::type(const QByteArray &theTypeName)
 {
     for (int i = String; i <= Byte; ++i) {
-        if (theTypeName == magicRuleTypes.at(i))
+        if (theTypeName == magicRuleTypes.viewAt(i))
             return Type(i);
     }
     return Invalid;

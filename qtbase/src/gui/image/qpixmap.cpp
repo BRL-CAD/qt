@@ -48,12 +48,12 @@ QT_WARNING_DISABLE_MSVC(4723)
 
 static bool qt_pixmap_thread_test()
 {
-    if (Q_UNLIKELY(!QCoreApplication::instance())) {
+    if (!QCoreApplication::instanceExists()) {
         qFatal("QPixmap: Must construct a QGuiApplication before a QPixmap");
         return false;
     }
     if (QGuiApplicationPrivate::instance()
-        && qApp->thread() != QThread::currentThread()
+        && !QThread::isMainThread()
         && !QGuiApplicationPrivate::platformIntegration()->hasCapability(QPlatformIntegration::ThreadedPixmaps)) {
         qWarning("QPixmap: It is not safe to use pixmaps outside the GUI thread on this platform");
         return false;
@@ -289,7 +289,6 @@ QPixmap QPixmap::copy(const QRect &rect) const
 
 /*!
     \fn QPixmap::scroll(int dx, int dy, int x, int y, int width, int height, QRegion *exposed)
-    \since 4.6
 
     This convenience function is equivalent to calling QPixmap::scroll(\a dx,
     \a dy, QRect(\a x, \a y, \a width, \a height), \a exposed).
@@ -298,8 +297,6 @@ QPixmap QPixmap::copy(const QRect &rect) const
 */
 
 /*!
-    \since 4.6
-
     Scrolls the area \a rect of this pixmap by (\a dx, \a dy). The exposed
     region is left unchanged. You can optionally pass a pointer to an empty
     QRegion to get the region that is \a exposed by the scroll operation.
@@ -371,10 +368,7 @@ QPixmap &QPixmap::operator=(const QPixmap &pixmap)
 
 /*!
     \fn void QPixmap::swap(QPixmap &other)
-    \since 4.8
-
-    Swaps pixmap \a other with this pixmap. This operation is very
-    fast and never fails.
+    \memberswap{pixmap}
 */
 
 /*!
@@ -970,12 +964,7 @@ bool QPixmap::isDetached() const
     Passing 0 for \a flags sets all the default options. Returns \c true
     if the result is that this pixmap is not null.
 
-    Note: this function was part of Qt 3 support in Qt 4.6 and earlier.
-    It has been promoted to official API status in 4.7 to support updating
-    the pixmap's image without creating a new QPixmap as fromImage() would.
-
     \sa fromImage()
-    \since 4.7
 */
 bool QPixmap::convertFromImage(const QImage &image, Qt::ImageConversionFlags flags)
 {
@@ -1195,8 +1184,6 @@ QPixmap QPixmap::transformed(const QTransform &transform,
     there are several functions that enables transformation of the
     pixmap.
 
-    \tableofcontents
-
     \section1 Reading and Writing Image Files
 
     QPixmap provides several ways of reading an image file: The file
@@ -1218,16 +1205,23 @@ QPixmap QPixmap::transformed(const QTransform &transform,
     \table
     \header \li Format \li Description                      \li Qt's support
     \row    \li BMP    \li Windows Bitmap                   \li Read/write
-    \row    \li GIF    \li Graphic Interchange Format (optional) \li Read
-    \row    \li JPG    \li Joint Photographic Experts Group \li Read/write
+    \row    \li CUR    \li Windows Cursor                   \li Read/write
+    \row    \li GIF    \li Graphic Interchange Format       \li Read
+    \row    \li ICO    \li Windows Icon                     \li Read/write
+    \row    \li JFIF   \li JPEG File Interchange Format     \li Read/write
     \row    \li JPEG   \li Joint Photographic Experts Group \li Read/write
+    \row    \li JPG    \li Joint Photographic Experts Group \li Read/write
+    \row    \li PBM    \li Portable Bitmap                  \li Read/write
+    \row    \li PGM    \li Portable Graymap                 \li Read/write
     \row    \li PNG    \li Portable Network Graphics        \li Read/write
-    \row    \li PBM    \li Portable Bitmap                  \li Read
-    \row    \li PGM    \li Portable Graymap                 \li Read
     \row    \li PPM    \li Portable Pixmap                  \li Read/write
+    \row    \li SVG    \li Scalable Vector Graphics         \li Read
+    \row    \li SVGZ   \li Scalable Vector Graphics (Compressed) \li Read
     \row    \li XBM    \li X11 Bitmap                       \li Read/write
     \row    \li XPM    \li X11 Pixmap                       \li Read/write
     \endtable
+
+    Further formats are supported if the \l{Qt Image Formats} module is installed.
 
     \section1 Pixmap Information
 

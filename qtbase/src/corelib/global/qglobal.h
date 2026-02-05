@@ -21,9 +21,7 @@
 #  include <stddef.h>
 #endif
 
-#include <QtCore/qtversionchecks.h>
-#include <QtCore/qtconfigmacros.h>
-#include <QtCore/qtcoreexports.h>
+#include <QtCore/qtcoreglobal.h>
 
 #include <QtCore/qtpreprocessorsupport.h>
 
@@ -67,8 +65,9 @@
 #include <QtCore/qtresource.h>
 #include <QtCore/qttranslation.h>
 #include <QtCore/qttypetraits.h>
+#if QT_CONFIG(version_tagging)
 #include <QtCore/qversiontagging.h>
-
+#endif
 #endif /* __cplusplus */
 
 #endif /* QGLOBAL_H */

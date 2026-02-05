@@ -13,11 +13,6 @@
 #include <QDBusInterface>
 #include <QDBusConnectionInterface>
 
-#ifdef Q_OS_UNIX
-#  include <sys/types.h>
-#  include <signal.h>
-#endif
-
 void MyObject::method(const QDBusMessage &msg)
 {
     path = msg.path();
@@ -1422,7 +1417,7 @@ void tst_QDBusConnection::connectionLimit()
 
     QProcess daemon;
     daemon.start("dbus-daemon",
-                 QStringList() << "--config-file" << QFINDTESTDATA("tst_qdbusconnection.conf")
+                 QStringList() << "--config-file" << QFINDTESTDATA("../qdbusconnection/tst_qdbusconnection.conf")
                                << "--nofork"
                                << "--print-address");
     QVERIFY2(daemon.waitForReadyRead(2000),
@@ -1471,6 +1466,31 @@ void tst_QDBusConnection::parentClassSignal()
 
     emit obj.myObjectSignal();
     QTRY_COMPARE(recv.signalsReceived, 2);
+}
+
+// see also tst_qdbusconnection_delayed
+void tst_QDBusConnection::delayedDeliveryReenabledAfterUsedInMainThread()
+{
+#if !QT_CONFIG(process)
+    QSKIP("Test requires QProcess");
+#elif defined(HAS_HOOKSETUPFUNCTION)
+    QSKIP("No difference to run by tst_QDBusConnection");
+#else
+#  if defined(Q_OS_WIN)
+#    define EXE ".exe"
+#  else
+#    define EXE ""
+#  endif
+    if (!QCoreApplication::instance())
+        QSKIP("Test requires a QCoreApplication");
+
+    QProcess process;
+    process.start(QFINDTESTDATA("qdbusdelayeddeliveryreenablehelper" EXE));
+    QVERIFY2(process.waitForFinished(25000), qPrintable(process.errorString()));
+    QCOMPARE(process.readAllStandardError(), QString());
+    QCOMPARE(process.exitCode(), 0);
+#  undef EXE
+#endif
 }
 
 QString MyObject::path;

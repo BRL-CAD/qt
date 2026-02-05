@@ -1,5 +1,6 @@
 // Copyright (C) 2020 The Qt Company Ltd.
 // SPDX-License-Identifier: LicenseRef-Qt-Commercial OR LGPL-3.0-only OR GPL-2.0-only OR GPL-3.0-only
+// Qt-Security score:significant reason:default
 
 #ifndef QFUTUREWATCHER_H
 #define QFUTUREWATCHER_H
@@ -74,7 +75,7 @@ public Q_SLOTS:
     QT_DEPRECATED_VERSION_X_6_0("Use setSuspended() instead.")
     void setPaused(bool paused);
 
-    QT_DEPRECATED_VERSION_X_6_0("Use suspended() instead.")
+    QT_DEPRECATED_VERSION_X_6_0("Use suspend() instead.")
     void pause();
 
     QT_DEPRECATED_VERSION_X_6_0("Use toggleSuspended() instead.")

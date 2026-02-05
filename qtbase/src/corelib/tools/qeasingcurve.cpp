@@ -276,7 +276,7 @@
 
 QT_BEGIN_NAMESPACE
 
-static bool isConfigFunction(QEasingCurve::Type type)
+static constexpr bool isConfigFunction(QEasingCurve::Type type)
 {
     return (type >= QEasingCurve::InElastic
             && type <= QEasingCurve::OutInBounce) ||
@@ -291,15 +291,13 @@ struct TCBPoint
     qreal _c;
     qreal _b;
 
-    TCBPoint() {}
-    TCBPoint(QPointF point, qreal t, qreal c, qreal b) : _point(point), _t(t), _c(c), _b(b) {}
 
-    bool operator==(const TCBPoint &other) const
+    friend bool operator==(const TCBPoint &lhs, const TCBPoint &rhs) noexcept
     {
-        return _point == other._point &&
-                qFuzzyCompare(_t, other._t) &&
-                qFuzzyCompare(_c, other._c) &&
-                qFuzzyCompare(_b, other._b);
+        return qFuzzyCompare(lhs._point, rhs._point)
+            && QtPrivate::fuzzyCompare(lhs._t, rhs._t)
+            && QtPrivate::fuzzyCompare(lhs._c, rhs._c)
+            && QtPrivate::fuzzyCompare(lhs._b, rhs._b);
     }
 };
 Q_DECLARE_TYPEINFO(TCBPoint, Q_PRIMITIVE_TYPE);
@@ -326,6 +324,11 @@ typedef QList<TCBPoint> TCBPoints;
 
 class QEasingCurveFunction
 {
+    QEasingCurveFunction &operator=(const QEasingCurveFunction &) = delete;
+    QEasingCurveFunction &operator=(QEasingCurveFunction &&) = delete;
+    QEasingCurveFunction(QEasingCurveFunction &&) = delete;
+protected:
+    QEasingCurveFunction(const QEasingCurveFunction &) = default; // used by clone()
 public:
     QEasingCurveFunction(QEasingCurve::Type type, qreal period = 0.3, qreal amplitude = 1.0,
         qreal overshoot = 1.70158)
@@ -333,8 +336,9 @@ public:
     { }
     virtual ~QEasingCurveFunction() {}
     virtual qreal value(qreal t);
-    virtual QEasingCurveFunction *copy() const;
-    bool operator==(const QEasingCurveFunction &other) const;
+    virtual QEasingCurveFunction *clone() const { return new QEasingCurveFunction{*this}; }
+    // ### virtual? (cf. QTBUG-142709)
+    bool fuzzyCompare(const QEasingCurveFunction &other) const noexcept;
 
     QEasingCurve::Type _t;
     qreal _p;
@@ -381,22 +385,14 @@ qreal QEasingCurveFunction::value(qreal t)
     return func(t);
 }
 
-QEasingCurveFunction *QEasingCurveFunction::copy() const
+bool QEasingCurveFunction::fuzzyCompare(const QEasingCurveFunction &other) const noexcept
 {
-    QEasingCurveFunction *rv = new QEasingCurveFunction(_t, _p, _a, _o);
-    rv->_bezierCurves = _bezierCurves;
-    rv->_tcbPoints = _tcbPoints;
-    return rv;
-}
-
-bool QEasingCurveFunction::operator==(const QEasingCurveFunction &other) const
-{
-    return _t == other._t &&
-           qFuzzyCompare(_p, other._p) &&
-           qFuzzyCompare(_a, other._a) &&
-           qFuzzyCompare(_o, other._o) &&
-            _bezierCurves == other._bezierCurves &&
-            _tcbPoints == other._tcbPoints;
+    return _t == other._t
+        && QtPrivate::fuzzyCompare(_p, other._p)
+        && QtPrivate::fuzzyCompare(_a, other._a)
+        && QtPrivate::fuzzyCompare(_o, other._o)
+        && _bezierCurves == other._bezierCurves
+        && _tcbPoints == other._tcbPoints;
 }
 
 QT_BEGIN_INCLUDE_NAMESPACE
@@ -413,7 +409,7 @@ public:
     { }
     QEasingCurvePrivate(const QEasingCurvePrivate &other)
         : type(other.type),
-          config(other.config ? other.config->copy() : nullptr),
+          config(other.config ? other.config->clone() : nullptr),
           func(other.func)
     { }
     ~QEasingCurvePrivate() { delete config; }
@@ -497,17 +493,7 @@ struct BezierEase : public QEasingCurveFunction
         }
     }
 
-    QEasingCurveFunction *copy() const override
-    {
-        BezierEase *rv = new BezierEase();
-        rv->_t = _t;
-        rv->_p = _p;
-        rv->_a = _a;
-        rv->_o = _o;
-        rv->_bezierCurves = _bezierCurves;
-        rv->_tcbPoints = _tcbPoints;
-        return rv;
-    }
+    BezierEase *clone() const override { return new BezierEase{*this}; }
 
     void getBezierSegment(SingleCubicBezier * &singleCubicBezier, qreal x)
     {
@@ -879,7 +865,7 @@ struct TCBEase : public BezierEase
         return BezierEase::value(x);
     }
 
-    QEasingCurveFunction *copy() const override
+    TCBEase *clone() const override
     {
         return new TCBEase{*this};
     }
@@ -891,15 +877,7 @@ struct ElasticEase : public QEasingCurveFunction
         : QEasingCurveFunction(type, qreal(0.3), qreal(1.0))
     { }
 
-    QEasingCurveFunction *copy() const override
-    {
-        ElasticEase *rv = new ElasticEase(_t);
-        rv->_p = _p;
-        rv->_a = _a;
-        rv->_bezierCurves = _bezierCurves;
-        rv->_tcbPoints = _tcbPoints;
-        return rv;
-    }
+    ElasticEase *clone() const override { return new ElasticEase{*this}; }
 
     qreal value(qreal t) override
     {
@@ -926,14 +904,7 @@ struct BounceEase : public QEasingCurveFunction
         : QEasingCurveFunction(type, qreal(0.3), qreal(1.0))
     { }
 
-    QEasingCurveFunction *copy() const override
-    {
-        BounceEase *rv = new BounceEase(_t);
-        rv->_a = _a;
-        rv->_bezierCurves = _bezierCurves;
-        rv->_tcbPoints = _tcbPoints;
-        return rv;
-    }
+    BounceEase *clone() const override { return new BounceEase{*this}; }
 
     qreal value(qreal t) override
     {
@@ -959,14 +930,7 @@ struct BackEase : public QEasingCurveFunction
         : QEasingCurveFunction(type, qreal(0.3), qreal(1.0), qreal(1.70158))
     { }
 
-    QEasingCurveFunction *copy() const override
-    {
-        BackEase *rv = new BackEase(_t);
-        rv->_o = _o;
-        rv->_bezierCurves = _bezierCurves;
-        rv->_tcbPoints = _tcbPoints;
-        return rv;
-    }
+    BackEase *clone() const override { return new BackEase{*this}; }
 
     qreal value(qreal t) override
     {
@@ -1147,38 +1111,40 @@ QEasingCurve::~QEasingCurve()
 /*!
     \fn void QEasingCurve::swap(QEasingCurve &other)
     \since 5.0
-
-    Swaps curve \a other with this curve. This operation is very
-    fast and never fails.
+    \memberswap{curve}
 */
 
 /*!
-    Compare this easing curve with \a other and returns \c true if they are
-    equal. It will also compare the properties of a curve.
- */
-bool QEasingCurve::operator==(const QEasingCurve &other) const
-{
-    bool res = d_ptr->func == other.d_ptr->func
-            && d_ptr->type == other.d_ptr->type;
-    if (res) {
-        if (d_ptr->config && other.d_ptr->config) {
-            // catch the config content
-            res = d_ptr->config->operator==(*(other.d_ptr->config));
+    \fn bool QEasingCurve::operator==(const QEasingCurve &lhs, const QEasingCurve &rhs)
 
-        } else if (d_ptr->config || other.d_ptr->config) {
+    Compares easing curve \a lhs with \a rhs and returns \c true if they are
+    equal; otherwise returns \c false.
+    It will also compare the properties of the curves.
+ */
+bool comparesEqual(const QEasingCurve &lhs, const QEasingCurve &rhs)
+{
+    bool res = lhs.d_ptr->func == rhs.d_ptr->func
+            && lhs.d_ptr->type == rhs.d_ptr->type;
+    if (res) {
+        if (lhs.d_ptr->config && rhs.d_ptr->config) {
+            // catch the config content
+            res = lhs.d_ptr->config->fuzzyCompare(*rhs.d_ptr->config);
+        } else if (lhs.d_ptr->config || rhs.d_ptr->config) {
             // one one has a config object, which could contain default values
-            res = qFuzzyCompare(amplitude(), other.amplitude())
-               && qFuzzyCompare(period(), other.period())
-               && qFuzzyCompare(overshoot(), other.overshoot());
+            res = qFuzzyCompare(lhs.amplitude(), rhs.amplitude())
+               && qFuzzyCompare(lhs.period(), rhs.period())
+               && qFuzzyCompare(lhs.overshoot(), rhs.overshoot());
         }
     }
     return res;
 }
 
 /*!
-    \fn bool QEasingCurve::operator!=(const QEasingCurve &other) const
-    Compare this easing curve with \a other and returns \c true if they are not equal.
-    It will also compare the properties of a curve.
+    \fn bool QEasingCurve::operator!=(const QEasingCurve &lhs, const QEasingCurve &rhs)
+
+    Compares easing curve \a lhs with \a rhs and returns \c true if they are
+    not equal; otherwise returns \c false.
+    It will also compare the properties of the curves.
 
     \sa operator==()
 */
@@ -1337,7 +1303,7 @@ void QEasingCurve::addTCBSegment(const QPointF &nextPoint, qreal t, qreal c, qre
     if (!d_ptr->config)
         d_ptr->config = curveToFunctionObject(d_ptr->type);
 
-    d_ptr->config->_tcbPoints.append(TCBPoint(nextPoint, t, c, b));
+    d_ptr->config->_tcbPoints.append(TCBPoint{nextPoint, t, c, b});
 
     if (nextPoint == QPointF(1.0, 1.0)) {
         d_ptr->config->_bezierCurves = tcbToBezier(d_ptr->config->_tcbPoints);
@@ -1425,7 +1391,7 @@ void QEasingCurve::setType(Type type)
     where \e progress and the return value are considered to be normalized between 0 and 1.
     (In some cases the return value can be outside that range)
     After calling this function type() will return QEasingCurve::Custom.
-    \a func cannot be zero.
+    \a func cannot be \nullptr.
 
     \sa customType()
     \sa valueForProgress()
@@ -1490,13 +1456,30 @@ QDebug operator<<(QDebug debug, const QEasingCurve &item)
     Writes the given \a easing curve to the given \a stream and returns a
     reference to the stream.
 
+    \warning Writing easing curves of QEasingCurve::Custom type
+    (that is, curves with a custom easing function) is not supported.
+
     \sa {Serializing Qt Data Types}
 */
 
 QDataStream &operator<<(QDataStream &stream, const QEasingCurve &easing)
 {
+    if (easing.d_ptr->type == QEasingCurve::Custom) {
+        qWarning("QEasingCurve: Cannot serialize an easing curve with a custom easing function");
+
+        // Backwards compatibility: stream _something_ out.
+        // Deliberately choose a curve that uses a config and not a
+        // easing function. If this curve is deserialized from old
+        // code, it will ignore the function pointer (cf.
+        // QTBUG-132575).
+        static_assert(isConfigFunction(QEasingCurve::InElastic));
+        stream << QEasingCurve(QEasingCurve::InElastic);
+        return stream;
+    }
+
     stream << quint8(easing.d_ptr->type);
-    stream << quint64(quintptr(easing.d_ptr->func));
+    // Unused; for backwards compatibility
+    stream << quint64(0);
 
     bool hasConfig = easing.d_ptr->config;
     stream << hasConfig;
@@ -1522,11 +1505,16 @@ QDataStream &operator>>(QDataStream &stream, QEasingCurve &easing)
     quint8 int_type;
     stream >> int_type;
     type = static_cast<QEasingCurve::Type>(int_type);
+    if (type == QEasingCurve::Custom) {
+        qWarning("QEasingCurve: Cannot deserialize an easing curve with a custom easing function");
+        stream.setStatus(QDataStream::ReadCorruptData);
+        type = QEasingCurve::Linear;
+    }
     easing.setType(type);
 
-    quint64 ptr_func;
+    // Unused; for backwards compatibility
+    [[maybe_unused]] quint64 ptr_func;
     stream >> ptr_func;
-    easing.d_ptr->func = QEasingCurve::EasingFunction(quintptr(ptr_func));
 
     bool hasConfig;
     stream >> hasConfig;

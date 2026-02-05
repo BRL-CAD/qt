@@ -69,7 +69,7 @@ static bool sendAsShortcut(const KeyEvent &keyEvent, QWindow *window)
     QWindow *window = [self topLevelWindow];
 
     // We will send a key event unless the input method handles it
-    QBoolBlocker sendKeyEventGuard(m_sendKeyEvent, true);
+    QScopedValueRollback sendKeyEventGuard(m_sendKeyEvent, true);
 
     // Assume we should send key events with text, unless told
     // otherwise by doCommandBySelector.
@@ -250,7 +250,28 @@ static bool sendAsShortcut(const KeyEvent &keyEvent, QWindow *window)
     }
 }
 
+#if QT_MACOS_PLATFORM_SDK_EQUAL_OR_ABOVE(150000)
+- (void)contextMenuKeyDown:(NSEvent *)nsevent
+{
+    qCDebug(lcQpaKeys) << "Handling context menu key down for" << nsevent;
+
+    if ([self isTransparentForUserInput])
+        return [super contextMenuKeyDown:nsevent];
+
+    if ([self handleKeyEvent:nsevent]) {
+        qCDebug(lcQpaKeys) << "Accepted context menu event as regular key down";
+        m_acceptedKeyDowns.insert(nsevent.keyCode);
+    } else {
+        // Forward up the responder chain to trigger default system
+        // behavior of calling showContextMenuForSelection.
+        [super contextMenuKeyDown:nsevent];
+    }
+}
+#endif
+
 @end
+
+QT_BEGIN_NAMESPACE
 
 // -------------------------------------------------------------------------
 
@@ -336,3 +357,5 @@ QDebug operator<<(QDebug debug, const KeyEvent &e)
     << ")";
     return debug;
 }
+
+QT_END_NAMESPACE

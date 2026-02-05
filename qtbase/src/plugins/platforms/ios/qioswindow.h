@@ -9,9 +9,6 @@
 
 #import <UIKit/UIKit.h>
 
-class QIOSContext;
-class QIOSWindow;
-
 @class QUIView;
 
 QT_BEGIN_NAMESPACE
@@ -28,7 +25,6 @@ public:
 
     void setWindowState(Qt::WindowStates state) override;
     void setParent(const QPlatformWindow *window) override;
-    void handleContentOrientationChange(Qt::ScreenOrientation orientation) override;
     void setVisible(bool visible) override;
     void setOpacity(qreal level) override;
 
@@ -72,10 +68,9 @@ private:
     UIView *m_view;
 
     QRect m_normalGeometry;
-    int m_windowLevel;
 
     void raiseOrLower(bool raise);
-    void updateWindowLevel();
+    int windowLevel() const;
     bool blockedByModal();
 
     friend class QIOSScreen;
@@ -85,7 +80,7 @@ private:
 QDebug operator<<(QDebug debug, const QIOSWindow *window);
 #endif
 
-QT_MANGLE_NAMESPACE(QUIView) *quiview_cast(UIView *view);
+QUIView *quiview_cast(UIView *view);
 
 QT_END_NAMESPACE
 

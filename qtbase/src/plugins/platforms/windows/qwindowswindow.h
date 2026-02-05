@@ -33,7 +33,7 @@ struct QWindowsGeometryHint
     static QMargins frame(const QWindow *w, HWND hwnd);
     static QMargins frame(const QWindow *w, const QRect &geometry,
                           DWORD style, DWORD exStyle);
-    static bool handleCalculateSize(const QMargins &customMargins, const MSG &msg, LRESULT *result);
+    static bool handleCalculateSize(const QWindow *window, const QMargins &customMargins, const MSG &msg, LRESULT *result);
     static void applyToMinMaxInfo(const QWindow *w, const QScreen *screen,
                                   const QMargins &margins, MINMAXINFO *mmi);
     static void applyToMinMaxInfo(const QWindow *w, const QMargins &margins,
@@ -82,6 +82,7 @@ struct QWindowsWindowData
     QMargins fullFrameMargins; // Do not use directly for windows, see FrameDirty.
     QMargins customMargins;    // User-defined, additional frame for NCCALCSIZE
     HWND hwnd = nullptr;
+    HWND hwndTitlebar = nullptr;
     bool embedded = false;
     bool hasFrame = false;
 
@@ -125,9 +126,14 @@ public:
     static QWindowsBaseWindow *baseWindowOf(const QWindow *w);
     static HWND handleOf(const QWindow *w);
 
+    bool windowEvent(QEvent *event) override;
+
 protected:
     HWND parentHwnd() const { return GetAncestor(handle(), GA_PARENT); }
     bool isTopLevel_sys() const;
+    inline bool hasMaximumHeight() const;
+    inline bool hasMaximumWidth() const;
+    inline bool hasMaximumSize() const;
     QRect frameGeometry_sys() const;
     QRect geometry_sys() const;
     void setGeometry_sys(const QRect &rect) const;
@@ -159,6 +165,7 @@ class QWindowsForeignWindow : public QWindowsBaseWindow
 {
 public:
     explicit QWindowsForeignWindow(QWindow *window, HWND hwnd);
+    ~QWindowsForeignWindow();
 
     void setParent(const QPlatformWindow *window) override;
     void setGeometry(const QRect &rect) override { setGeometry_sys(rect); }
@@ -219,6 +226,7 @@ public:
     void setGeometry(const QRect &rect) override;
     QRect geometry() const override { return m_data.geometry; }
     QRect normalGeometry() const override;
+    QMargins safeAreaMargins() const override;
     QRect restoreGeometry() const { return m_data.restoreGeometry; }
     void updateRestoreGeometry();
 
@@ -237,6 +245,7 @@ public:
     void setParent(const QPlatformWindow *window) override;
 
     void setWindowTitle(const QString &title) override;
+    QString windowTitle() const override;
     void raise() override { raise_sys(); }
     void lower() override { lower_sys(); }
 
@@ -307,6 +316,8 @@ public:
     void releaseDC();
     void getSizeHints(MINMAXINFO *mmi) const;
     bool handleNonClientHitTest(const QPoint &globalPos, LRESULT *result) const;
+    bool handleNonClientActivate(LRESULT *result) const;
+    void updateCustomTitlebar();
 
 #ifndef QT_NO_CURSOR
     CursorHandlePtr cursor() const { return m_cursor; }
@@ -330,8 +341,8 @@ public:
     void alertWindow(int durationMs = 0);
     void stopAlertWindow();
 
-    enum ScreenChangeMode { FromGeometryChange, FromDpiChange };
-    void checkForScreenChanged(ScreenChangeMode mode = FromGeometryChange);
+    enum ScreenChangeMode { FromGeometryChange, FromDpiChange, FromScreenAdded };
+    void checkForScreenChanged(ScreenChangeMode mode = FromGeometryChange, const RECT *suggestedRect = nullptr);
 
     void registerTouchWindow();
     static void setHasBorderInFullScreenStatic(QWindow *window, bool border);
@@ -346,6 +357,10 @@ public:
     void setSavedDpi(int dpi) { m_savedDpi = dpi; }
     int savedDpi() const { return m_savedDpi; }
     qreal dpiRelativeScale(const UINT dpi) const;
+
+    bool isClientAreaExpanded() const { return m_data.flags.testFlag(Qt::ExpandedClientAreaHint); }
+
+    void requestUpdate() override;
 
 private:
     inline void show_sys() const;
@@ -364,12 +379,14 @@ private:
     void fireExpose(const QRegion &region, bool force=false);
     void fireFullExpose(bool force=false);
     void calculateFullFrameMargins();
+    void correctWindowPlacement(WINDOWPLACEMENT &windowPlacement);
 
     mutable QWindowsWindowData m_data;
     QPointer<QWindowsMenuBar> m_menuBar;
     mutable unsigned m_flags = WithinCreate;
     HDC m_hdc = nullptr;
     Qt::WindowStates m_windowState = Qt::WindowNoState;
+    QString m_windowTitle;
     qreal m_opacity = 1;
 #ifndef QT_NO_CURSOR
     CursorHandlePtr m_cursor;
@@ -390,6 +407,9 @@ private:
 #endif
     static bool m_borderInFullScreenDefault;
     static bool m_inSetgeometry;
+
+    qsizetype m_vsyncServiceCallbackId = 0;
+    QAtomicInt m_vsyncUpdatePending;
 };
 
 #ifndef QT_NO_DEBUG_STREAM

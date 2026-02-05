@@ -1,5 +1,6 @@
 // Copyright (C) 2016 The Qt Company Ltd.
 // SPDX-License-Identifier: LicenseRef-Qt-Commercial OR LGPL-3.0-only OR GPL-2.0-only OR GPL-3.0-only
+// Qt-Security score:critical reason:data-parser
 
 #ifndef QFILESYSTEMENGINE_P_H
 #define QFILESYSTEMENGINE_P_H
@@ -20,13 +21,14 @@
 #include "qfilesystemmetadata_p.h"
 #include <QtCore/private/qsystemerror_p.h>
 
+#include <memory>
 #include <optional>
 
 QT_BEGIN_NAMESPACE
 
 #define Q_RETURN_ON_INVALID_FILENAME(message, result) \
     { \
-        QMessageLogger(QT_MESSAGELOG_FILE, QT_MESSAGELOG_LINE, QT_MESSAGELOG_FUNC).warning(message); \
+        qWarning(message); \
         errno = EINVAL; \
         return (result); \
     }
@@ -54,17 +56,14 @@ inline bool qIsFilenameBroken(const QFileSystemEntry &entry)
             Q_RETURN_ON_INVALID_FILENAME("Broken filename passed to function", (result)); \
     } while (false)
 
+Q_CORE_EXPORT bool qt_isCaseSensitive(const QFileSystemEntry &entry, QFileSystemMetaData &data);
+
 class Q_AUTOTEST_EXPORT QFileSystemEngine
 {
 public:
-    static bool isCaseSensitive()
-    {
-#ifndef Q_OS_WIN
-        return true;
-#else
-        return false;
-#endif
-    }
+    using TriStateResult = QAbstractFileEngine::TriStateResult;
+
+    static bool isCaseSensitive(const QFileSystemEntry &entry, QFileSystemMetaData &data);
 
     static QFileSystemEntry getLinkTarget(const QFileSystemEntry &link, QFileSystemMetaData &data);
     static QFileSystemEntry getRawLinkPath(const QFileSystemEntry &link,
@@ -90,13 +89,12 @@ public:
     static bool fillMetaData(const QFileSystemEntry &entry, QFileSystemMetaData &data,
                              QFileSystemMetaData::MetaDataFlags what);
 #if defined(Q_OS_UNIX)
-    static bool cloneFile(int srcfd, int dstfd, const QFileSystemMetaData &knownData);
+    static TriStateResult cloneFile(int srcfd, int dstfd, const QFileSystemMetaData &knownData);
     static bool fillMetaData(int fd, QFileSystemMetaData &data); // what = PosixStatFlags
     static QByteArray id(int fd);
     static bool setFileTime(int fd, const QDateTime &newDate,
                             QFile::FileTime whatTime, QSystemError &error);
-    static bool setPermissions(int fd, QFile::Permissions permissions, QSystemError &error,
-                               QFileSystemMetaData *data = nullptr);
+    static bool setPermissions(int fd, QFile::Permissions permissions, QSystemError &error);
 #endif
 #if defined(Q_OS_WIN)
     static QFileSystemEntry junctionTarget(const QFileSystemEntry &link, QFileSystemMetaData &data);
@@ -120,19 +118,39 @@ public:
     static QString tempPath();
 
     static bool createDirectory(const QFileSystemEntry &entry, bool createParents,
-                                std::optional<QFile::Permissions> permissions = std::nullopt);
-    static bool removeDirectory(const QFileSystemEntry &entry, bool removeEmptyParents);
+                                std::optional<QFile::Permissions> permissions = std::nullopt)
+    {
+        if (createParents)
+            return mkpath(entry, permissions);
+        return mkdir(entry, permissions);
+    }
+
+    static bool mkdir(const QFileSystemEntry &entry,
+                      std::optional<QFile::Permissions> permissions = std::nullopt);
+    static bool mkpath(const QFileSystemEntry &entry,
+                       std::optional<QFile::Permissions> permissions = std::nullopt);
+
+    static bool removeDirectory(const QFileSystemEntry &entry, bool removeEmptyParents)
+    {
+        if (removeEmptyParents)
+            return rmpath(entry);
+        return rmdir(entry);
+    }
+
+    static bool rmdir(const QFileSystemEntry &entry);
+    static bool rmpath(const QFileSystemEntry &entry);
 
     static bool createLink(const QFileSystemEntry &source, const QFileSystemEntry &target, QSystemError &error);
 
     static bool copyFile(const QFileSystemEntry &source, const QFileSystemEntry &target, QSystemError &error);
+    static bool supportsMoveFileToTrash();
     static bool moveFileToTrash(const QFileSystemEntry &source, QFileSystemEntry &newLocation, QSystemError &error);
     static bool renameFile(const QFileSystemEntry &source, const QFileSystemEntry &target, QSystemError &error);
     static bool renameOverwriteFile(const QFileSystemEntry &source, const QFileSystemEntry &target, QSystemError &error);
     static bool removeFile(const QFileSystemEntry &entry, QSystemError &error);
 
-    static bool setPermissions(const QFileSystemEntry &entry, QFile::Permissions permissions, QSystemError &error,
-                               QFileSystemMetaData *data = nullptr);
+    static bool setPermissions(const QFileSystemEntry &entry, QFile::Permissions permissions,
+                               QSystemError &error);
 
     // unused, therefore not implemented
     static bool setFileTime(const QFileSystemEntry &entry, const QDateTime &newDate,
@@ -141,8 +159,9 @@ public:
     static bool setCurrentPath(const QFileSystemEntry &entry);
     static QFileSystemEntry currentPath();
 
-    static QAbstractFileEngine *resolveEntryAndCreateLegacyEngine(QFileSystemEntry &entry,
-                                                                  QFileSystemMetaData &data);
+    static std::unique_ptr<QAbstractFileEngine>
+    createLegacyEngine(QFileSystemEntry &entry, QFileSystemMetaData &data);
+
 private:
     static QString slowCanonicalized(const QString &path);
 #if defined(Q_OS_WIN)

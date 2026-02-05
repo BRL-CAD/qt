@@ -13,7 +13,7 @@
 
 #include <chrono>
 
-#if QT_CONFIG(timezone) && (defined(Q_OS_DARWIN) || defined(Q_QDOC)) && !defined(QT_NO_SYSTEMLOCALE)
+#if QT_CONFIG(timezone) && (defined(Q_OS_DARWIN) || defined(Q_QDOC))
 Q_FORWARD_DECLARE_CF_TYPE(CFTimeZone);
 Q_FORWARD_DECLARE_OBJC_CLASS(NSTimeZone);
 #endif
@@ -49,7 +49,7 @@ class Q_CORE_EXPORT QTimeZone
 #endif
         {
         }
-        friend constexpr bool operator==(const ShortData &lhs, const ShortData &rhs)
+        friend constexpr bool operator==(ShortData lhs, ShortData rhs)
         { return lhs.mode == rhs.mode && lhs.offset == rhs.offset; }
         constexpr Qt::TimeSpec spec() const { return Qt::TimeSpec((mode + 3) & 3); }
     };
@@ -81,6 +81,9 @@ class Q_CORE_EXPORT QTimeZone
         ShortData s;
     };
     QTimeZone(ShortData sd) : d(sd) {}
+    QTimeZone(Qt::TimeSpec) Q_DECL_EQ_DELETE_X(
+        "Would be treated as int offsetSeconds. "
+        "Use QTimeZone::UTC or QTimeZone::LocalTime instead.");
 
 public:
     // Sane UTC offsets range from -16 to +16 hours:
@@ -131,7 +134,7 @@ public:
     }
     static QTimeZone fromSecondsAheadOfUtc(int offset)
     {
-        return fromDurationAheadOfUtc(std::chrono::seconds{offset});;
+        return fromDurationAheadOfUtc(std::chrono::seconds{offset});
     }
     constexpr Qt::TimeSpec timeSpec() const noexcept { return d.s.spec(); }
     constexpr int fixedSecondsAheadOfUtc() const noexcept
@@ -166,6 +169,7 @@ public:
     };
     typedef QList<OffsetData> OffsetDataList;
 
+    bool hasAlternativeName(QByteArrayView alias) const;
     QByteArray id() const;
     QLocale::Territory territory() const;
 #  if QT_DEPRECATED_SINCE(6, 6)
@@ -174,11 +178,9 @@ public:
 #  endif
     QString comment() const;
 
-    QString displayName(const QDateTime &atDateTime,
-                        QTimeZone::NameType nameType = QTimeZone::DefaultName,
+    QString displayName(const QDateTime &atDateTime, NameType nameType = DefaultName,
                         const QLocale &locale = QLocale()) const;
-    QString displayName(QTimeZone::TimeType timeType,
-                        QTimeZone::NameType nameType = QTimeZone::DefaultName,
+    QString displayName(TimeType timeType, NameType nameType = DefaultName,
                         const QLocale &locale = QLocale()) const;
     QString abbreviation(const QDateTime &atDateTime) const;
 
@@ -214,7 +216,7 @@ public:
     static QList<QByteArray> windowsIdToIanaIds(const QByteArray &windowsId,
                                                 QLocale::Territory territory);
 
-#  if (defined(Q_OS_DARWIN) || defined(Q_QDOC)) && !defined(QT_NO_SYSTEMLOCALE)
+#  if defined(Q_OS_DARWIN) || defined(Q_QDOC)
     static QTimeZone fromCFTimeZone(CFTimeZoneRef timeZone);
     CFTimeZoneRef toCFTimeZone() const Q_DECL_CF_RETURNS_RETAINED;
     static QTimeZone fromNSTimeZone(const NSTimeZone *timeZone);

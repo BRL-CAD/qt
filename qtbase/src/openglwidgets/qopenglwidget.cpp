@@ -56,7 +56,7 @@ QT_BEGIN_NAMESPACE
   \endlist
 
   If you need to trigger a repaint from places other than paintGL() (a
-  typical example is when using \l{QTimer}{timers} to animate scenes),
+  typical example is when using \l{QChronoTimer}{timers} to animate scenes),
   you should call the widget's update() function to schedule an update.
 
   Your widget's OpenGL rendering context is made current when
@@ -856,7 +856,7 @@ void QOpenGLWidgetPrivate::initialize()
     context = new QOpenGLContext;
     context->setFormat(requestedFormat);
 
-    QOpenGLContext *shareContext = contextFromRhi ? contextFromRhi : qt_gl_global_share_context();
+    QOpenGLContext *shareContext = contextFromRhi ? contextFromRhi : QOpenGLContext::globalShareContext();
     if (shareContext) {
         context->setShareContext(shareContext);
         context->setScreen(shareContext->screen());
@@ -1639,6 +1639,10 @@ int QOpenGLWidget::metric(QPaintDevice::PaintDeviceMetric metric) const
     case PdmDevicePixelRatio:
         return QWidget::metric(metric);
     case PdmDevicePixelRatioScaled:
+        return QWidget::metric(metric);
+    case PdmDevicePixelRatioF_EncodedA:
+        Q_FALLTHROUGH();
+    case PdmDevicePixelRatioF_EncodedB:
         return QWidget::metric(metric);
     default:
         qWarning("QOpenGLWidget::metric(): unknown metric %d", metric);

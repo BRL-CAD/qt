@@ -1,6 +1,7 @@
 # Copyright (C) 2022 The Qt Company Ltd.
 # SPDX-License-Identifier: BSD-3-Clause
 
+add_subdirectory(qcheckedint)
 if(NOT INTEGRITY)
     add_subdirectory(qcompare)
 endif()
@@ -16,6 +17,9 @@ if(NOT INTEGRITY)
     add_subdirectory(qnativeinterface)
 endif()
 add_subdirectory(qrandomgenerator)
+if (QT_FEATURE_settings)
+    add_subdirectory(qlibraryinfo)
+endif()
 add_subdirectory(qlogging)
 add_subdirectory(qtendian)
 add_subdirectory(qglobalstatic)
@@ -23,3 +27,4 @@ add_subdirectory(qhooks)
 add_subdirectory(qoperatingsystemversion)
 add_subdirectory(qxp)
 add_subdirectory(q20)
+add_subdirectory(q23)

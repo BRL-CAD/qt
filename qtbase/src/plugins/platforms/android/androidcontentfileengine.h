@@ -30,8 +30,8 @@ public:
     QDateTime fileTime(QFile::FileTime time) const override;
     FileFlags fileFlags(FileFlags type = FileInfoAll) const override;
     QString fileName(FileName file = DefaultName) const override;
-    QAbstractFileEngine::Iterator *beginEntryList(QDir::Filters filters, const QStringList &filterNames) override;
-    QAbstractFileEngine::Iterator *endEntryList() override;
+    IteratorUniquePtr beginEntryList(const QString &path, QDirListing::IteratorFlags filters,
+                                     const QStringList &filterNames) override;
 
 private:
     void closeNativeFileDescriptor();
@@ -43,19 +43,22 @@ private:
 
 class AndroidContentFileEngineHandler : public QAbstractFileEngineHandler
 {
+    Q_DISABLE_COPY_MOVE(AndroidContentFileEngineHandler)
 public:
     AndroidContentFileEngineHandler();
     ~AndroidContentFileEngineHandler();
-    QAbstractFileEngine *create(const QString &fileName) const override;
+    std::unique_ptr<QAbstractFileEngine> create(const QString &fileName) const override;
 };
 
 class AndroidContentFileEngineIterator : public QAbstractFileEngineIterator
 {
 public:
-    AndroidContentFileEngineIterator(QDir::Filters filters, const QStringList &filterNames);
+    AndroidContentFileEngineIterator(const QString &path, QDirListing::IteratorFlags filters,
+                                     const QStringList &filterNames);
     ~AndroidContentFileEngineIterator();
-    QString next() override;
-    bool hasNext() const override;
+
+    bool advance() override;
+
     QString currentFileName() const override;
     QString currentFilePath() const override;
 private:
@@ -76,11 +79,13 @@ public:
     static DocumentFilePtr parseFromAnyUri(const QString &filename);
     static DocumentFilePtr fromSingleUri(const QJniObject &uri);
     static DocumentFilePtr fromTreeUri(const QJniObject &treeUri);
+    static QStringList getPathSegments(const QJniObject &uri);
 
     DocumentFilePtr createFile(const QString &mimeType, const QString &displayName);
     DocumentFilePtr createDirectory(const QString &displayName);
     const QJniObject &uri() const;
     const DocumentFilePtr &parent() const;
+    QString initialName() const;
     QString name() const;
     QString id() const;
     QString mimeType() const;
@@ -97,9 +102,10 @@ public:
     bool rename(const QString &newName);
 
 protected:
-    DocumentFile(const QJniObject &uri, const std::shared_ptr<DocumentFile> &parent);
+    DocumentFile(const QJniObject &uri, const QString &displayName, const std::shared_ptr<DocumentFile> &parent);
 
 protected:
+    QString m_displayName;
     QJniObject m_uri;
     DocumentFilePtr m_parent;
 };

@@ -1,12 +1,12 @@
 // Copyright (C) 2020 Intel Corporation.
 // SPDX-License-Identifier: LicenseRef-Qt-Commercial OR LGPL-3.0-only OR GPL-2.0-only OR GPL-3.0-only
+// Qt-Security score:critical reason:data-parser
 
 #include "qcborstreamreader.h"
 
 #define CBOR_NO_ENCODER_API
 #include <private/qcborcommon_p.h>
 
-#include <private/qbytearray_p.h>
 #include <private/qnumeric_p.h>
 #include <private/qstringconverter_p.h>
 #include <qiodevice.h>
@@ -575,7 +575,7 @@ public:
     char *bufferPtr()
     {
         Q_ASSERT(buffer.isDetached());
-        return const_cast<char *>(buffer.constData()) + bufferStart;
+        return const_cast<char *>(buffer.constBegin()) + bufferStart;
     }
 
     void preread()
@@ -672,7 +672,7 @@ static void *qt_cbor_decoder_read(void *token, void *userptr, size_t offset, siz
 
     // we must have pre-read the data
     Q_ASSERT(len + offset <= size_t(self->buffer.size() - self->bufferStart));
-    return memcpy(userptr, self->buffer.constData() + self->bufferStart + offset, len);
+    return memcpy(userptr, self->buffer.constBegin() + self->bufferStart + offset, len);
 }
 
 static CborError qt_cbor_decoder_transfer_string(void *token, const void **userptr, size_t offset, size_t len)
@@ -841,7 +841,7 @@ QIODevice *QCborStreamReader::device() const
  */
 void QCborStreamReader::addData(const QByteArray &data)
 {
-    addData(data.constData(), data.size());
+    addData(data.constBegin(), data.size());
 }
 
 /*!
@@ -1749,11 +1749,11 @@ QCborStreamReaderPrivate::readStringChunk_byte(ReadStringChunk params, qsizetype
             // the distinction between DataTooLarge and OOM is mostly for
             // compatibility with Qt 5; in Qt 6, we could consider everything
             // to be OOM.
-            handleError(newSize > MaxByteArraySize ? CborErrorDataTooLarge: CborErrorOutOfMemory);
+            handleError(newSize > QByteArray::maxSize() ? CborErrorDataTooLarge: CborErrorOutOfMemory);
             return -1;
         }
 
-        ptr = const_cast<char *>(params.array->constData()) + oldSize;
+        ptr = const_cast<char *>(params.array->constBegin()) + oldSize;
     }
 
     if (device) {
@@ -1773,7 +1773,7 @@ QCborStreamReaderPrivate::readStringChunk_byte(ReadStringChunk params, qsizetype
         }
     } else {
         actuallyRead = toRead;
-        memcpy(ptr, buffer.constData() + bufferStart, toRead);
+        memcpy(ptr, buffer.constBegin() + bufferStart, toRead);
     }
 
     return actuallyRead;
@@ -1788,7 +1788,7 @@ QCborStreamReaderPrivate::readStringChunk_unicode(ReadStringChunk params, qsizet
     // conversion uses the same number of words or less.
     qsizetype currentSize = params.string->size();
     size_t newSize = size_t(utf8len) + size_t(currentSize); // can't overflow
-    if (utf8len > MaxStringSize || qsizetype(newSize) < 0) {
+    if (utf8len > QString::maxSize() || qsizetype(newSize) < 0) {
         handleError(CborErrorDataTooLarge);
         return -1;
     }
@@ -1799,12 +1799,12 @@ QCborStreamReaderPrivate::readStringChunk_unicode(ReadStringChunk params, qsizet
         return -1;
     }
 
-    QChar *begin = const_cast<QChar *>(params.string->constData());
+    QChar *begin = const_cast<QChar *>(params.string->constBegin());
     QChar *ptr = begin + currentSize;
     QStringConverter::State cs(QStringConverter::Flag::Stateless);
     if (device == nullptr) {
         // Easy case: we can decode straight from the buffer we already have
-        ptr = QUtf8::convertToUnicode(ptr, { buffer.constData() + bufferStart, utf8len }, &cs);
+        ptr = QUtf8::convertToUnicode(ptr, { buffer.constBegin() + bufferStart, utf8len }, &cs);
     } else {
         // read in chunks, to avoid creating large, intermediate buffers
         constexpr qsizetype StringChunkSize = 16384;

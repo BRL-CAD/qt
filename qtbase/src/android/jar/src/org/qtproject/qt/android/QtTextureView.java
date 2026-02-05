@@ -4,20 +4,20 @@
 
 package org.qtproject.qt.android;
 
+import android.annotation.SuppressLint;
 import android.content.Context;
-import android.graphics.PixelFormat;
 import android.graphics.SurfaceTexture;
-import android.util.Log;
 import android.view.Surface;
 import android.view.TextureView;
 
-public class QtTextureView extends TextureView implements TextureView.SurfaceTextureListener
+@SuppressLint("ViewConstructor")
+class QtTextureView extends TextureView implements TextureView.SurfaceTextureListener
 {
-    private QtSurfaceInterface m_surfaceCallback;
+    private final QtSurfaceInterface m_surfaceCallback;
     private boolean m_staysOnTop;
     private Surface m_surface;
 
-    public QtTextureView(Context context, QtSurfaceInterface surfaceCallback, boolean isOpaque)
+    QtTextureView(Context context, QtSurfaceInterface surfaceCallback, boolean isOpaque)
     {
         super(context);
         setFocusable(false);

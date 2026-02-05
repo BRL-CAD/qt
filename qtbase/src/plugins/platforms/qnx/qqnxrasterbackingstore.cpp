@@ -7,14 +7,11 @@
 #include "qqnxglobal.h"
 
 #include <QtCore/QDebug>
+#include <QtGui/QBackingStore>
+
+#include <private/qhighdpiscaling_p.h>
 
 #include <errno.h>
-
-#if defined(QQNXRASTERBACKINGSTORE_DEBUG)
-#define qRasterBackingStoreDebug qDebug
-#else
-#define qRasterBackingStoreDebug QT_NO_QDEBUG_MACRO
-#endif
 
 QT_BEGIN_NAMESPACE
 
@@ -23,14 +20,14 @@ QQnxRasterBackingStore::QQnxRasterBackingStore(QWindow *window)
       m_needsPosting(false),
       m_scrolled(false)
 {
-    qRasterBackingStoreDebug() << "w =" << window;
+    qCDebug(lcQpaBackingStore) << Q_FUNC_INFO << "w =" << window;
 
     m_window = window;
 }
 
 QQnxRasterBackingStore::~QQnxRasterBackingStore()
 {
-    qRasterBackingStoreDebug() << "w =" << window();
+    qCDebug(lcQpaBackingStore) << Q_FUNC_INFO << "w =" << window();
 }
 
 QPaintDevice *QQnxRasterBackingStore::paintDevice()
@@ -45,7 +42,7 @@ void QQnxRasterBackingStore::flush(QWindow *window, const QRegion &region, const
 {
     Q_UNUSED(offset);
 
-    qRasterBackingStoreDebug() << "w =" << this->window();
+    qCDebug(lcQpaBackingStore) << Q_FUNC_INFO << "w =" << this->window();
 
     // Sometimes this method is called even though there is nothing to be
     // flushed (posted in "screen" parlance), for instance, after an expose
@@ -67,7 +64,7 @@ void QQnxRasterBackingStore::resize(const QSize &size, const QRegion &staticCont
 {
     Q_UNUSED(size);
     Q_UNUSED(staticContents);
-    qRasterBackingStoreDebug() << "w =" << window() << ", s =" << size;
+    qCDebug(lcQpaBackingStore) << Q_FUNC_INFO << "w =" << window() << ", s =" << size;
 
     // NOTE: defer resizing window buffers until next paint as
     // resize() can be called multiple times before a paint occurs
@@ -75,12 +72,20 @@ void QQnxRasterBackingStore::resize(const QSize &size, const QRegion &staticCont
 
 bool QQnxRasterBackingStore::scroll(const QRegion &area, int dx, int dy)
 {
-    qRasterBackingStoreDebug() << "w =" << window();
+    qCDebug(lcQpaBackingStore) << Q_FUNC_INFO << "w =" << window();
 
     m_needsPosting = true;
 
     if (!m_scrolled) {
+#if defined(QQNX_INCREMENTAL_RASTER_UPDATE)
         platformWindow()->scroll(area, dx, dy, true);
+#else
+        platformWindow()->scroll(area, dx, dy, false);
+        const QSize backingStoreSize = QHighDpi::toNativePixels(backingStore()->size(), window());
+        QRegion remainder = QRect(QPoint(0, 0), backingStoreSize);
+        remainder -= area.translated(dx, dy);
+        platformWindow()->scroll(remainder, 0, 0, true);
+#endif
         m_scrolled = true;
         return true;
     }
@@ -91,11 +96,12 @@ void QQnxRasterBackingStore::beginPaint(const QRegion &region)
 {
     Q_UNUSED(region);
 
-    qRasterBackingStoreDebug() << "w =" << window();
+    qCDebug(lcQpaBackingStore) << Q_FUNC_INFO << "w =" << window();
     m_needsPosting = true;
 
     platformWindow()->adjustBufferSize();
 
+#if defined(QQNX_INCREMENTAL_RASTER_UPDATE)
     if (window()->requestedFormat().alphaBufferSize() > 0) {
         auto platformScreen = static_cast<QQnxScreen *>(platformWindow()->screen());
         for (const QRect &r : region) {
@@ -115,11 +121,17 @@ void QQnxRasterBackingStore::beginPaint(const QRegion &region)
         Q_SCREEN_CHECKERROR(screen_flush_blits(platformScreen->nativeContext(),
                     SCREEN_WAIT_IDLE), "failed to flush blits");
     }
+#else
+    if (!m_scrolled) {
+        const QSize backingStoreSize = QHighDpi::toNativePixels(backingStore()->size(), window());
+        platformWindow()->scroll(QRect(QPoint(0, 0), backingStoreSize), 0, 0, true);
+    }
+#endif
 }
 
 void QQnxRasterBackingStore::endPaint()
 {
-    qRasterBackingStoreDebug() << "w =" << window();
+    qCDebug(lcQpaBackingStore) << Q_FUNC_INFO << "w =" << window();
 }
 
 QQnxRasterWindow *QQnxRasterBackingStore::platformWindow() const

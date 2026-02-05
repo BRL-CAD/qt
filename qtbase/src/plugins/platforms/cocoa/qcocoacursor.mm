@@ -13,6 +13,8 @@
 
 #if !defined(QT_APPLE_NO_PRIVATE_APIS)
 @interface NSCursor()
++ (id)busyButClickableCursor;
++ (id)_helpCursor;
 + (id)_windowResizeNorthWestSouthEastCursor;
 + (id)_windowResizeNorthEastSouthWestCursor;
 + (id)_windowResizeNorthSouthCursor;
@@ -109,7 +111,15 @@ NSCursor *QCocoaCursor::convertCursor(QCursor *cursor)
     case Qt::IBeamCursor:
         cocoaCursor = [NSCursor IBeamCursor];
         break;
-    case Qt::WhatsThisCursor: //for now just use the pointing hand
+    case Qt::WhatsThisCursor:
+#if !defined(QT_APPLE_NO_PRIVATE_APIS)
+        if ([NSCursor respondsToSelector:@selector(_helpCursor)]) {
+            cocoaCursor = [NSCursor performSelector:@selector(_helpCursor)];
+            break;
+        }
+#endif
+         // For now use the pointing hand as a fallback
+        Q_FALLTHROUGH();
     case Qt::PointingHandCursor:
         cocoaCursor = [NSCursor pointingHandCursor];
         break;
@@ -134,24 +144,48 @@ NSCursor *QCocoaCursor::convertCursor(QCursor *cursor)
     case Qt::DragLinkCursor:
         cocoaCursor = [NSCursor dragLinkCursor];
         break;
+    case Qt::BusyCursor:
 #if !defined(QT_APPLE_NO_PRIVATE_APIS)
+        if ([NSCursor respondsToSelector:@selector(busyButClickableCursor)])
+            cocoaCursor = [NSCursor performSelector:@selector(busyButClickableCursor)];
+#endif
+        break;
     case Qt::SizeVerCursor:
-        if ([NSCursor respondsToSelector:@selector(_windowResizeNorthSouthCursor)])
-            cocoaCursor = [NSCursor _windowResizeNorthSouthCursor];
-        break;
     case Qt::SizeHorCursor:
-        if ([NSCursor respondsToSelector:@selector(_windowResizeEastWestCursor)])
-            cocoaCursor = [NSCursor _windowResizeEastWestCursor];
-        break;
     case Qt::SizeBDiagCursor:
-        if ([NSCursor respondsToSelector:@selector(_windowResizeNorthEastSouthWestCursor)])
-            cocoaCursor = [NSCursor _windowResizeNorthEastSouthWestCursor];
-        break;
-    case Qt::SizeFDiagCursor:
-        if ([NSCursor respondsToSelector:@selector(_windowResizeNorthWestSouthEastCursor)])
-            cocoaCursor = [NSCursor _windowResizeNorthWestSouthEastCursor];
-        break;
+    case Qt::SizeFDiagCursor: {
+#if QT_MACOS_PLATFORM_SDK_EQUAL_OR_ABOVE(150000)
+        if (@available(macOS 15, *)) {
+            auto position = [newShape]{
+                switch (newShape) {
+                case Qt::SizeVerCursor: return NSCursorFrameResizePositionTop;
+                case Qt::SizeHorCursor: return NSCursorFrameResizePositionLeft;
+                case Qt::SizeBDiagCursor: return NSCursorFrameResizePositionTopRight;
+                case Qt::SizeFDiagCursor: return NSCursorFrameResizePositionTopLeft;
+                default: Q_UNREACHABLE();
+                }
+            }();
+            cocoaCursor = [NSCursor frameResizeCursorFromPosition:position
+                                    inDirections:NSCursorFrameResizeDirectionsAll];
+            break;
+        }
+#endif // macOS 15 SDK
+#if !defined(QT_APPLE_NO_PRIVATE_APIS)
+        auto selector = [newShape]{
+            switch (newShape) {
+            case Qt::SizeVerCursor: return @selector(_windowResizeNorthSouthCursor);
+            case Qt::SizeHorCursor: return @selector(_windowResizeEastWestCursor);
+            case Qt::SizeBDiagCursor: return @selector(_windowResizeNorthEastSouthWestCursor);
+            case Qt::SizeFDiagCursor: return @selector(_windowResizeNorthWestSouthEastCursor);
+            default: Q_UNREACHABLE();
+            }
+        }();
+
+        if ([NSCursor respondsToSelector:selector])
+            cocoaCursor = [NSCursor performSelector:selector];
 #endif // QT_APPLE_NO_PRIVATE_APIS
+        break;
+    }
     default:
         break;
     }

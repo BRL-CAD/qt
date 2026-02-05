@@ -1,5 +1,6 @@
 // Copyright (C) 2015 Mikkel Krautz <mikkel@krautz.dk>
 // SPDX-License-Identifier: LicenseRef-Qt-Commercial OR LGPL-3.0-only OR GPL-2.0-only OR GPL-3.0-only
+// Qt-Security score:significant reason:default
 
 
 /*!
@@ -34,7 +35,7 @@
 QT_BEGIN_NAMESPACE
 
 // The 2048-bit MODP group from RFC 3526
-Q_AUTOTEST_EXPORT const char *qssl_dhparams_default_base64 =
+Q_AUTOTEST_EXPORT extern const char qssl_dhparams_default_base64[] =
     "MIIBCAKCAQEA///////////JD9qiIWjCNMTGYouA3BzRKQJOCIpnzHQCC76mOxObIlFKCHmO"
     "NATd75UZs806QxswKwpt8l8UN0/hNW1tUcJF5IW1dmJefsb0TELppjftawv/XLb0Brft7jhr"
     "+1qJn6WunyQRfEsf5kkoZlHs5Fs9wgB8uKFjvwWY2kg2HFXTmmkWP6j9JM9fg2VdI9yjrZYc"
@@ -171,9 +172,7 @@ QSslDiffieHellmanParameters &QSslDiffieHellmanParameters::operator=(const QSslDi
 
 /*!
     \fn void QSslDiffieHellmanParameters::swap(QSslDiffieHellmanParameters &other)
-
-    Swaps this QSslDiffieHellmanParameters with \a other. This function is very fast and
-    never fails.
+    \memberswap{QSslDiffieHellmanParameters}
 */
 
 /*!
@@ -307,11 +306,9 @@ QDebug operator<<(QDebug debug, const QSslDiffieHellmanParameters &dhparam)
 #endif
 
 /*!
+    \fn size_t qHash(const QSslDiffieHellmanParameters &key, size_t seed)
     \since 5.8
-    \relates QSslDiffieHellmanParameters
-
-    Returns an hash value for \a dhparam, using \a seed to seed
-    the calculation.
+    \qhashold{QSslDiffieHellmanParameters}
 */
 size_t qHash(const QSslDiffieHellmanParameters &dhparam, size_t seed) noexcept
 {

@@ -112,6 +112,16 @@ public:
     static bool removeApplicationFont(int id);
     static bool removeAllApplicationFonts();
 
+    static void addApplicationFallbackFontFamily(QChar::Script script, const QString &familyName);
+    static bool removeApplicationFallbackFontFamily(QChar::Script script, const QString &familyName);
+    static void setApplicationFallbackFontFamilies(QChar::Script, const QStringList &familyNames);
+    static QStringList applicationFallbackFontFamilies(QChar::Script script);
+
+    static void addApplicationEmojiFontFamily(const QString &familyName);
+    static bool removeApplicationEmojiFontFamily(const QString &familyName);
+    static void setApplicationEmojiFontFamilies(const QStringList &familyNames);
+    static QStringList applicationEmojiFontFamilies();
+
     static QFont systemFont(SystemFont type);
 };
 

@@ -17,33 +17,38 @@
 
 #include <QtCore/private/qcore_mac_p.h>
 
+#include <QtCore/qsize.h>
+
 #include <QtGui/private/qtguiglobal_p.h>
-#include <QtGui/qregion.h>
+#include <QtGui/qicon.h>
 #include <QtGui/qpalette.h>
+#include <QtGui/qregion.h>
 
 #include <CoreGraphics/CoreGraphics.h>
 
-#if defined(__OBJC__)
-# if defined(Q_OS_MACOS)
-#  include <AppKit/AppKit.h>
-#  define HAVE_APPKIT
-# elif defined(Q_OS_IOS)
-#  include <UIKit/UIKit.h>
-#  define HAVE_UIKIT
+#if defined(Q_OS_MACOS)
+# if defined(__OBJC__)
+#  include <AppKit/NSImage.h>
+# else
+Q_FORWARD_DECLARE_OBJC_CLASS(NSImage);
 # endif
 #endif
+
+Q_FORWARD_DECLARE_OBJC_CLASS(UIImage);
+Q_FORWARD_DECLARE_OBJC_CLASS(NSColor);
 
 QT_BEGIN_NAMESPACE
 
 Q_GUI_EXPORT CGBitmapInfo qt_mac_bitmapInfoForImage(const QImage &image);
 
-#ifdef HAVE_UIKIT
+#ifdef QT_PLATFORM_UIKIT
 Q_GUI_EXPORT QImage qt_mac_toQImage(const UIImage *image, QSizeF size);
 #endif
 
-#ifdef HAVE_APPKIT
+#ifdef Q_OS_MACOS
 Q_GUI_EXPORT QPixmap qt_mac_toQPixmap(const NSImage *image, const QSizeF &size);
 
+#if defined(__OBJC__)
 QT_END_NAMESPACE
 
 // @compatibility_alias doesn't work with categories or their methods
@@ -53,20 +58,28 @@ QT_END_NAMESPACE
 @interface NSImage (QtExtras)
 + (instancetype)imageFromQImage:(const QT_PREPEND_NAMESPACE(QImage) &)image;
 + (instancetype)imageFromQIcon:(const QT_PREPEND_NAMESPACE(QIcon) &)icon;
-+ (instancetype)imageFromQIcon:(const QT_PREPEND_NAMESPACE(QIcon) &)icon withSize:(int)size;
++ (instancetype)imageFromQIcon:(const QT_PREPEND_NAMESPACE(QIcon) &)icon
+                      withSize:(const QT_PREPEND_NAMESPACE(QSize) &)size;
++ (instancetype)imageFromQIcon:(const QT_PREPEND_NAMESPACE(QIcon) &)icon
+                      withSize:(const QT_PREPEND_NAMESPACE(QSize) &)size
+                      withMode:(QT_PREPEND_NAMESPACE(QIcon)::Mode)mode
+                     withState:(QT_PREPEND_NAMESPACE(QIcon)::State)state;
++ (instancetype)internalImageFromQIcon:(const QT_PREPEND_NAMESPACE(QIcon) &)icon;
 @end
 QT_BEGIN_NAMESPACE
+#endif // __OBJC__
 
 #endif
 Q_GUI_EXPORT CGImageRef qt_mac_toCGImage(const QImage &qImage);
-Q_GUI_EXPORT CGImageRef qt_mac_toCGImageMask(const QImage &qImage);
 Q_GUI_EXPORT QImage qt_mac_toQImage(CGImageRef image);
+
+Q_GUI_EXPORT QImage qt_mac_padToSquareImage(const QImage &image);
 
 Q_GUI_EXPORT void qt_mac_drawCGImage(CGContextRef inContext, const CGRect *inBounds, CGImageRef inImage);
 
 Q_GUI_EXPORT void qt_mac_clip_cg(CGContextRef hd, const QRegion &rgn, CGAffineTransform *orig_xform);
 
-#ifdef HAVE_APPKIT
+#ifdef Q_OS_MACOS
 Q_GUI_EXPORT QColor qt_mac_toQColor(const NSColor *color);
 Q_GUI_EXPORT QBrush qt_mac_toQBrush(const NSColor *color, QPalette::ColorGroup colorGroup = QPalette::Normal);
 #endif
@@ -89,7 +102,5 @@ private:
 };
 
 QT_END_NAMESPACE
-
-#undef HAVE_APPKIT
 
 #endif // QCOREGRAPHICS_P_H

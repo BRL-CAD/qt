@@ -1,9 +1,6 @@
 # Copyright (C) 2022 The Qt Company Ltd.
 # SPDX-License-Identifier: BSD-3-Clause
 
-if(NOT CMAKE_CROSSCOMPILING)
-    # add_subdirectory(atwrapper) <- does not exist
-endif()
 if(TARGET Qt::Widgets)
     add_subdirectory(gestures)
     add_subdirectory(languagechange)
@@ -48,5 +45,5 @@ if(QT_FEATURE_xkbcommon AND TARGET Qt::Gui)
 endif()
 
 if(ANDROID AND QT_BUILD_STANDALONE_TESTS)
-    add_subdirectory(android_deployment_settings)
+    add_subdirectory(android)
 endif()

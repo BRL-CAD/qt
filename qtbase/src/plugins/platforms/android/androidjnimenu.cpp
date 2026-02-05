@@ -1,5 +1,6 @@
 // Copyright (C) 2012 BogDan Vatra <bogdan@kde.org>
 // SPDX-License-Identifier: LicenseRef-Qt-Commercial OR LGPL-3.0-only OR GPL-2.0-only OR GPL-3.0-only
+// Qt-Security score:critical reason:data-parser
 
 #include "androidjnimain.h"
 #include "androidjnimenu.h"
@@ -19,6 +20,8 @@
 QT_BEGIN_NAMESPACE
 
 using namespace QtAndroid;
+
+Q_DECLARE_JNI_CLASS(QtMenuInterface, "org/qtproject/qt/android/QtMenuInterface");
 
 namespace QtAndroidMenu
 {
@@ -44,12 +47,14 @@ namespace QtAndroidMenu
 
     void resetMenuBar()
     {
-        qtActivityDelegate().callMethod<void>("resetOptionsMenu");
+        AndroidBackendRegister *reg = QtAndroid::backendRegister();
+        reg->callInterface<QtJniTypes::QtMenuInterface, void>("resetOptionsMenu");
     }
 
     void openOptionsMenu()
     {
-        qtActivityDelegate().callMethod<void>("openOptionsMenu");
+        AndroidBackendRegister *reg = QtAndroid::backendRegister();
+        reg->callInterface<QtJniTypes::QtMenuInterface, void>("openOptionsMenu");
     }
 
     void showContextMenu(QAndroidPlatformMenu *menu, const QRect &anchorRect)
@@ -59,16 +64,18 @@ namespace QtAndroidMenu
             pendingContextMenus.append(visibleMenu);
         visibleMenu = menu;
         menu->aboutToShow();
-        qtActivityDelegate().callMethod<void>("openContextMenu",
-                                              anchorRect.x(), anchorRect.y(),
-                                              anchorRect.width(), anchorRect.height());
+        AndroidBackendRegister *reg = QtAndroid::backendRegister();
+        reg->callInterface<QtJniTypes::QtMenuInterface, void>("openContextMenu", anchorRect.x(),
+                                                              anchorRect.y(), anchorRect.width(),
+                                                              anchorRect.height());
     }
 
     void hideContextMenu(QAndroidPlatformMenu *menu)
     {
         QMutexLocker lock(&visibleMenuMutex);
         if (visibleMenu == menu) {
-            qtActivityDelegate().callMethod<void>("closeContextMenu");
+            AndroidBackendRegister *reg = QtAndroid::backendRegister();
+            reg->callInterface<QtJniTypes::QtMenuInterface, void>("closeContextMenu");
             pendingContextMenus.clear();
         } else {
             pendingContextMenus.removeOne(menu);

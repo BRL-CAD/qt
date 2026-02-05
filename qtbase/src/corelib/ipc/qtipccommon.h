@@ -1,8 +1,9 @@
 // Copyright (C) 2022 Intel Corporation.
 // SPDX-License-Identifier: LicenseRef-Qt-Commercial OR LGPL-3.0-only OR GPL-2.0-only OR GPL-3.0-only
+// Qt-Security score:significant reason:default
 
-#ifndef QNATIVEIPCKEY_H
-#define QNATIVEIPCKEY_H
+#ifndef QTIPCCOMMON_H
+#define QTIPCCOMMON_H
 
 #include <QtCore/qglobal.h>
 #include <QtCore/qtcore-config.h>
@@ -153,24 +154,13 @@ private:
     constexpr bool isSlowPath() const noexcept
     { return Q_UNLIKELY(d); }
 
+#ifdef Q_QDOC
+    friend size_t qHash(const QNativeIpcKey &ipcKey, size_t seed = 0) noexcept { return 0; }
+#else
     friend Q_CORE_EXPORT size_t qHash(const QNativeIpcKey &ipcKey, size_t seed) noexcept;
     friend size_t qHash(const QNativeIpcKey &ipcKey) noexcept
     { return qHash(ipcKey, 0); }
-
-    friend bool operator==(const QNativeIpcKey &lhs, const QNativeIpcKey &rhs) noexcept
-    {
-        if (!(lhs.typeAndFlags == rhs.typeAndFlags))
-            return false;
-        if (lhs.key != rhs.key)
-            return false;
-        if (lhs.d == rhs.d)
-            return true;
-        return compare_internal(lhs, rhs) == 0;
-    }
-    friend bool operator!=(const QNativeIpcKey &lhs, const QNativeIpcKey &rhs) noexcept
-    {
-        return !(lhs == rhs);
-    }
+#endif
 
     Q_CORE_EXPORT void copy_internal(const QNativeIpcKey &other);
     Q_CORE_EXPORT void move_internal(QNativeIpcKey &&other) noexcept;
@@ -184,6 +174,17 @@ private:
 #ifdef Q_OS_DARWIN
     Q_DECL_CONST_FUNCTION Q_CORE_EXPORT static Type defaultTypeForOs_internal() noexcept;
 #endif
+    friend bool comparesEqual(const QNativeIpcKey &lhs, const QNativeIpcKey &rhs) noexcept
+    {
+        if (!(lhs.typeAndFlags == rhs.typeAndFlags))
+            return false;
+        if (lhs.key != rhs.key)
+            return false;
+        if (lhs.d == rhs.d)
+            return true;
+        return compare_internal(lhs, rhs) == 0;
+    }
+    Q_DECLARE_EQUALITY_COMPARABLE(QNativeIpcKey)
 };
 
 // not a shared type, exactly, but this works too
@@ -207,4 +208,4 @@ QT_END_NAMESPACE
 #endif // QT_CONFIG(sharedmemory) || QT_CONFIG(systemsemaphore)
 
 
-#endif // QNATIVEIPCKEY_H
+#endif // QTIPCCOMMON_H

@@ -44,6 +44,10 @@ QT_END_INCLUDE_NAMESPACE
 
 namespace QSpanPrivate {
 
+template <typename From, typename To>
+std::conditional_t<std::is_const_v<From>, const To &, To &> // like [forward]/6.1 COPY_CONST
+const_propagated(To &in) { return in; }
+
 template <typename T, std::size_t E> class QSpanBase;
 
 template <typename T>
@@ -159,9 +163,6 @@ class QSpanBase : protected QSpanCommon<T>
     static_assert(E < size_t{(std::numeric_limits<qsizetype>::max)()},
                   "QSpan only supports extents that fit into the signed size type (qsizetype).");
 
-    struct Enabled_t { explicit Enabled_t() = default; };
-    static inline constexpr Enabled_t Enable{};
-
     template <typename S, std::size_t N>
     using if_compatible_array = std::enable_if_t<
             N == E && is_qualification_conversion_v<S, T>
@@ -211,7 +212,7 @@ public:
 
     template <typename Range, typename Base::template if_compatible_range<Range> = true>
     Q_IMPLICIT constexpr QSpanBase(Range &&r)
-        : QSpanBase(QSpanPrivate::adl_data(r),  // no forward<>() here (std doesn't have it, either)
+        : QSpanBase(QSpanPrivate::adl_data(QSpanPrivate::const_propagated<T>(r)), // no forward<>() here (std doesn't have it, either)
                     qsizetype(QSpanPrivate::adl_size(r))) // ditto, no forward<>()
     {}
 
@@ -283,7 +284,7 @@ public:
 
     template <typename Range, typename Base::template if_compatible_range<Range> = true>
     Q_IMPLICIT constexpr QSpanBase(Range &&r)
-        : QSpanBase(QSpanPrivate::adl_data(r),  // no forward<>() here (std doesn't have it, either)
+        : QSpanBase(QSpanPrivate::adl_data(QSpanPrivate::const_propagated<T>(r)), // no forward<>() here (std doesn't have it, either)
                     qsizetype(QSpanPrivate::adl_size(r))) // ditto, no forward<>()
     {}
 
@@ -428,11 +429,56 @@ public:
     [[nodiscard]] constexpr QSpan<T> subspan(size_type pos, size_type n) const { return subspan(pos).first(n); }
 
     // Qt-compatibility API:
-    [[nodiscard]] bool isEmpty() const noexcept { return empty(); }
+    [[nodiscard]] constexpr bool isEmpty() const noexcept { return empty(); }
     // nullary first()/last() clash with first<>() and last<>(), so they're not provided for QSpan
     [[nodiscard]] constexpr QSpan<T> sliced(size_type pos) const { return subspan(pos); }
     [[nodiscard]] constexpr QSpan<T> sliced(size_type pos, size_type n) const { return subspan(pos, n); }
+    [[nodiscard]] constexpr QSpan<T> chopped(size_type n) const { verify(0, n); return first(size() - n); }
 
+#ifdef __cpp_concepts
+#  define QT_ONLY_IF_DYNAMIC_SPAN(DECL) \
+    DECL requires(E == q20::dynamic_extent)
+#else
+#  define QT_ONLY_IF_DYNAMIC_SPAN(DECL) \
+    template <size_t M = E, typename = std::enable_if_t<M == q20::dynamic_extent>> DECL
+#endif
+    QT_ONLY_IF_DYNAMIC_SPAN(
+    constexpr void slice(size_type pos)
+    )
+    { *this = sliced(pos); }
+    QT_ONLY_IF_DYNAMIC_SPAN(
+    constexpr void slice(size_type pos, size_type n)
+    )
+    { *this = sliced(pos, n); }
+    QT_ONLY_IF_DYNAMIC_SPAN(
+    constexpr void chop(size_type n)
+    )
+    { *this = chopped(n); }
+#undef QT_ONLY_IF_DYNAMIC_SPAN
+
+private:
+    // [span.objectrep]
+    [[nodiscard]] friend
+    QSpan<const std::byte, E == q20::dynamic_extent ? q20::dynamic_extent : E * sizeof(T)>
+    as_bytes(QSpan s) noexcept
+    {
+        using R = QSpan<const std::byte, E == q20::dynamic_extent ? q20::dynamic_extent : E * sizeof(T)>;
+        return R{reinterpret_cast<const std::byte *>(s.data()), s.size_bytes()};
+    }
+
+    template <typename U>
+    using if_mutable = std::enable_if_t<!std::is_const_v<U>, bool>;
+
+#ifndef Q_QDOC
+    template <typename T2 = T, if_mutable<T2> = true>
+#endif
+    [[nodiscard]] friend
+    QSpan<std::byte, E == q20::dynamic_extent ? q20::dynamic_extent : E * sizeof(T)>
+    as_writable_bytes(QSpan s) noexcept
+    {
+        using R = QSpan<std::byte, E == q20::dynamic_extent ? q20::dynamic_extent : E * sizeof(T)>;
+        return R{reinterpret_cast<std::byte *>(s.data()), s.size_bytes()};
+    }
 }; // class QSpan
 
 // [span.deduct]

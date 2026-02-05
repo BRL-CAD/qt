@@ -104,6 +104,8 @@ private slots:
     void infinityAndNan();
     void multipleThreads_data() { generic_data(); }
     void multipleThreads();
+    void moveToThread_data() { generic_data(); }
+    void moveToThread();
 
     void db2_valueCacheUpdate_data() { generic_data("QDB2"); }
     void db2_valueCacheUpdate();
@@ -381,8 +383,9 @@ void tst_QSqlDatabase::generic_data(const QString& engine)
 
 void tst_QSqlDatabase::addDatabase()
 {
-    QTest::ignoreMessage(QtWarningMsg, "QSqlDatabase: BLAH_FOO_NONEXISTENT_DRIVER driver not loaded");
-    QTest::ignoreMessage(QtWarningMsg, qPrintable("QSqlDatabase: available drivers: " + QSqlDatabase::drivers().join(QLatin1Char(' '))));
+    QTest::ignoreMessage(QtWarningMsg,
+                         "QSqlDatabase: can not load requested driver 'BLAH_FOO_NONEXISTENT_DRIVER', available drivers: "
+                         + QSqlDatabase::drivers().join(QLatin1Char(' ')).toLatin1());
     {
         QSqlDatabase db = QSqlDatabase::addDatabase("BLAH_FOO_NONEXISTENT_DRIVER",
                                                     "INVALID_CONNECTION");
@@ -2334,6 +2337,33 @@ void tst_QSqlDatabase::multipleThreads()
     QTRY_VERIFY(t.isRunning());
     QTRY_VERIFY(t.isFinished());
 }
+
+void tst_QSqlDatabase::moveToThread()
+{
+    QFETCH(QString, dbName);
+    QSqlDatabase db = QSqlDatabase::database(dbName);
+    auto clonedDb = QSqlDatabase::cloneDatabase(db, "clonedDb");
+    auto mainThread = QThread::currentThread();
+    CHECK_DATABASE(db);
+    QCOMPARE(db.thread(), mainThread);
+    QCOMPARE(clonedDb.thread(), mainThread);
+    std::unique_ptr<QThread> t(QThread::create([&] {
+        db.moveToThread(mainThread);
+        QThread::currentThread()->exit();
+    }));
+    db.moveToThread(t.get());
+    QCOMPARE(db.thread(), t.get());
+    QCOMPARE(clonedDb.thread(), mainThread);
+    t->start();
+    QTRY_VERIFY(t->isRunning());
+    QTRY_VERIFY(t->wait(30000));
+    QCOMPARE(db.thread(), mainThread);
+    QCOMPARE(clonedDb.thread(), mainThread);
+    db = QSqlDatabase();
+    clonedDb = QSqlDatabase();
+    QSqlDatabase::removeDatabase("clonedDb");
+}
+
 
 QTEST_MAIN(tst_QSqlDatabase)
 #include "tst_qsqldatabase.moc"

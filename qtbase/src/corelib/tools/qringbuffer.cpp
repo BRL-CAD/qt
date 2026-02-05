@@ -3,7 +3,6 @@
 // SPDX-License-Identifier: LicenseRef-Qt-Commercial OR LGPL-3.0-only OR GPL-2.0-only OR GPL-3.0-only
 
 #include "private/qringbuffer_p.h"
-#include "private/qbytearray_p.h"
 
 #include <type_traits>
 
@@ -91,7 +90,7 @@ void QRingBuffer::free(qint64 bytes)
                     clear(); // try to minify/squeeze us
                 }
             } else {
-                Q_ASSERT(bytes < MaxByteArraySize);
+                Q_ASSERT(bytes < QByteArray::maxSize());
                 chunk.advance(bytes);
                 bufferSize -= bytes;
             }
@@ -106,7 +105,7 @@ void QRingBuffer::free(qint64 bytes)
 
 char *QRingBuffer::reserve(qint64 bytes)
 {
-    Q_ASSERT(bytes > 0 && bytes < MaxByteArraySize);
+    Q_ASSERT(bytes > 0 && bytes < QByteArray::maxSize());
 
     const qsizetype chunkSize = qMax(qint64(basicBlockSize), bytes);
     qsizetype tail = 0;
@@ -136,7 +135,7 @@ char *QRingBuffer::reserve(qint64 bytes)
 */
 char *QRingBuffer::reserveFront(qint64 bytes)
 {
-    Q_ASSERT(bytes > 0 && bytes < MaxByteArraySize);
+    Q_ASSERT(bytes > 0 && bytes < QByteArray::maxSize());
 
     const qsizetype chunkSize = qMax(qint64(basicBlockSize), bytes);
     if (bufferSize == 0) {
@@ -182,7 +181,7 @@ void QRingBuffer::chop(qint64 bytes)
                     clear(); // try to minify/squeeze us
                 }
             } else {
-                Q_ASSERT(bytes < MaxByteArraySize);
+                Q_ASSERT(bytes < QByteArray::maxSize());
                 chunk.grow(-bytes);
                 bufferSize -= bytes;
             }
@@ -341,13 +340,21 @@ void QRingBuffer::append(QByteArray &&qba)
     bufferSize += qbaSize;
 }
 
-qint64 QRingBuffer::readLine(char *data, qint64 maxLength)
+qint64 QRingBuffer::readLineWithoutTerminatingNull(char *data, qint64 maxLength)
 {
-    Q_ASSERT(data != nullptr && maxLength > 1);
+    Q_ASSERT(data != nullptr && maxLength > 0);
 
-    --maxLength;
     qint64 i = indexOf('\n', maxLength);
     i = read(data, i >= 0 ? (i + 1) : maxLength);
+
+    return i;
+}
+
+qint64 QRingBuffer::readLine(char *data, qint64 maxLength)
+{
+    Q_ASSERT(maxLength > 1);
+
+    qint64 i = readLineWithoutTerminatingNull(data, maxLength - 1);
 
     // Terminate it.
     data[i] = '\0';

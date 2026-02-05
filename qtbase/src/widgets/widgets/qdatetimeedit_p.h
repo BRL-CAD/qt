@@ -1,5 +1,6 @@
 // Copyright (C) 2021 The Qt Company Ltd.
 // SPDX-License-Identifier: LicenseRef-Qt-Commercial OR LGPL-3.0-only OR GPL-2.0-only OR GPL-3.0-only
+// Qt-Security score:significant reason:default
 
 #ifndef QDATETIMEEDIT_P_H
 #define QDATETIMEEDIT_P_H
@@ -27,7 +28,6 @@
 #include "private/qabstractspinbox_p.h"
 #include "private/qdatetimeparser_p.h"
 
-#include "qdebug.h"
 #include <QtCore/qpointer.h>
 
 QT_BEGIN_NAMESPACE
@@ -61,13 +61,13 @@ public:
 
     // Override QDateTimeParser:
     QString displayText() const override { return edit->text(); }
-    QDateTime getMinimum() const override;
-    QDateTime getMaximum() const override;
+    QDateTime getMinimum(const QTimeZone &zone) const override;
+    QDateTime getMaximum(const QTimeZone &zone) const override;
     QLocale locale() const override { return q_func()->locale(); }
     int cursorPosition() const override { return edit ? edit->cursorPosition() : -1; }
 
     int absoluteIndex(QDateTimeEdit::Section s, int index) const;
-    int absoluteIndex(const SectionNode &s) const;
+    int absoluteIndex(SectionNode s) const;
     QDateTime stepBy(int index, int steps, bool test = false) const;
     int sectionAt(int pos) const;
     int closestSection(int index, bool forward) const;

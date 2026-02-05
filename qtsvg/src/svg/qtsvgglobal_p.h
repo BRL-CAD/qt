@@ -16,7 +16,7 @@
 //
 
 #include "qtsvgglobal.h"
-#include <QtSvg/private/qtsvgexports_p.h>
+#include <QtSvg/qtsvgexports.h>
 
 QT_BEGIN_NAMESPACE
 
@@ -26,6 +26,11 @@ enum class UnitTypes : quint32 {
     unknown,
     objectBoundingBox,
     userSpaceOnUse
+};
+
+enum class AnimatorType : quint32 {
+    Controlled,
+    Automatic,
 };
 
 }

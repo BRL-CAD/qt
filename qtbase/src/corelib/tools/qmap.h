@@ -5,12 +5,15 @@
 #ifndef QMAP_H
 #define QMAP_H
 
+#include <QtCore/qcompare.h>
+#include <QtCore/qhashfunctions.h>
 #include <QtCore/qiterator.h>
 #include <QtCore/qlist.h>
 #include <QtCore/qrefcount.h>
 #include <QtCore/qpair.h>
 #include <QtCore/qshareddata.h>
 #include <QtCore/qshareddata_impl.h>
+#include <QtCore/qttypetraits.h>
 
 #include <functional>
 #include <initializer_list>
@@ -241,8 +244,10 @@ public:
     }
 
 #ifndef Q_QDOC
-    template <typename AKey = Key, typename AT = T> friend
-    QTypeTraits::compare_eq_result_container<QMap, AKey, AT> operator==(const QMap &lhs, const QMap &rhs)
+private:
+    template <typename AKey = Key, typename AT = T,
+              QTypeTraits::compare_eq_result_container<QMap, AKey, AT> = true>
+    friend bool comparesEqual(const QMap &lhs, const QMap &rhs)
     {
         if (lhs.d == rhs.d)
             return true;
@@ -251,13 +256,11 @@ public:
         Q_ASSERT(lhs.d);
         return rhs.d ? (lhs.d->m == rhs.d->m) : lhs.d->m.empty();
     }
-
-    template <typename AKey = Key, typename AT = T> friend
-    QTypeTraits::compare_eq_result_container<QMap, AKey, AT> operator!=(const QMap &lhs, const QMap &rhs)
-    {
-        return !(lhs == rhs);
-    }
+    QT_DECLARE_EQUALITY_OPERATORS_HELPER(QMap, QMap, /* non-constexpr */, noexcept(false),
+                        template <typename AKey = Key, typename AT = T,
+                                  QTypeTraits::compare_eq_result_container<QMap, AKey, AT> = true>)
     // TODO: add the other comparison operators; std::map has them.
+public:
 #else
     friend bool operator==(const QMap &lhs, const QMap &rhs);
     friend bool operator!=(const QMap &lhs, const QMap &rhs);
@@ -265,6 +268,7 @@ public:
 
     size_type size() const { return d ? size_type(d->m.size()) : size_type(0); }
 
+    [[nodiscard]]
     bool isEmpty() const { return d ? d->m.empty() : true; }
 
     void detach()
@@ -328,12 +332,18 @@ public:
         // elements (the one to be removed can be skipped).
         detach();
 
+#ifdef __cpp_lib_node_extract
+        if (const auto node = d->m.extract(key))
+            return std::move(node.mapped());
+#else
         auto i = d->m.find(key);
         if (i != d->m.end()) {
+            // ### breaks RVO on most compilers (but only on old-fashioned ones, so who cares?)
             T result(std::move(i->second));
             d->m.erase(i);
             return result;
         }
+#endif
         return T();
     }
 
@@ -610,10 +620,10 @@ public:
     const_key_value_iterator constKeyValueBegin() const { return const_key_value_iterator(begin()); }
     const_key_value_iterator keyValueEnd() const { return const_key_value_iterator(end()); }
     const_key_value_iterator constKeyValueEnd() const { return const_key_value_iterator(end()); }
-    auto asKeyValueRange() & { return QtPrivate::QKeyValueRange(*this); }
-    auto asKeyValueRange() const & { return QtPrivate::QKeyValueRange(*this); }
-    auto asKeyValueRange() && { return QtPrivate::QKeyValueRange(std::move(*this)); }
-    auto asKeyValueRange() const && { return QtPrivate::QKeyValueRange(std::move(*this)); }
+    auto asKeyValueRange() & { return QtPrivate::QKeyValueRange<QMap &>(*this); }
+    auto asKeyValueRange() const & { return QtPrivate::QKeyValueRange<const QMap &>(*this); }
+    auto asKeyValueRange() && { return QtPrivate::QKeyValueRange<QMap>(std::move(*this)); }
+    auto asKeyValueRange() const && { return QtPrivate::QKeyValueRange<QMap>(std::move(*this)); }
 
     iterator erase(const_iterator it)
     {
@@ -757,6 +767,7 @@ public:
     }
 
     // STL compatibility
+    [[nodiscard]]
     inline bool empty() const
     {
         return isEmpty();
@@ -777,6 +788,31 @@ public:
         auto result = d->m.equal_range(akey);
         return {const_iterator(result.first), const_iterator(result.second)};
     }
+
+private:
+#ifdef Q_QDOC
+    friend size_t qHash(const QMap &key, size_t seed = 0);
+#else
+# if defined(Q_CC_GHS) || defined (Q_CC_MSVC)
+    // GHS and MSVC tries to intantiate qHash() for the noexcept running into a
+    // non-SFINAE'ed hard error... Create an artificial SFINAE context as a
+    // work-around:
+    template <typename M, std::enable_if_t<std::is_same_v<M, QMap>, bool> = true>
+    friend QtPrivate::QHashMultiReturnType<typename M::key_type, typename M::mapped_type>
+# else
+    using M = QMap;
+    friend size_t
+# endif
+    qHash(const M &key, size_t seed = 0)
+        noexcept(QHashPrivate::noexceptPairHash<typename M::key_type, typename M::mapped_type>())
+    {
+        if (!key.d)
+            return seed;
+        // don't use qHashRange to avoid its compile-time overhead:
+        return std::accumulate(key.d->m.begin(), key.d->m.end(), seed,
+                               QtPrivate::QHashCombine{seed});
+    }
+#endif // !Q_QDOC
 };
 
 Q_DECLARE_ASSOCIATIVE_ITERATOR(Map)
@@ -787,6 +823,7 @@ qsizetype erase_if(QMap<Key, T> &map, Predicate pred)
 {
     return QtPrivate::associative_erase_if(map, pred);
 }
+
 
 //
 // QMultiMap
@@ -886,8 +923,10 @@ public:
     }
 
 #ifndef Q_QDOC
-    template <typename AKey = Key, typename AT = T> friend
-    QTypeTraits::compare_eq_result_container<QMultiMap, AKey, AT> operator==(const QMultiMap &lhs, const QMultiMap &rhs)
+private:
+    template <typename AKey = Key, typename AT = T,
+              QTypeTraits::compare_eq_result_container<QMultiMap, AKey, AT> = true>
+    friend bool comparesEqual(const QMultiMap &lhs, const QMultiMap &rhs)
     {
         if (lhs.d == rhs.d)
             return true;
@@ -896,13 +935,11 @@ public:
         Q_ASSERT(lhs.d);
         return rhs.d ? (lhs.d->m == rhs.d->m) : lhs.d->m.empty();
     }
-
-    template <typename AKey = Key, typename AT = T> friend
-    QTypeTraits::compare_eq_result_container<QMultiMap, AKey, AT> operator!=(const QMultiMap &lhs, const QMultiMap &rhs)
-    {
-        return !(lhs == rhs);
-    }
+    QT_DECLARE_EQUALITY_OPERATORS_HELPER(QMultiMap, QMultiMap, /* non-constexpr */, noexcept(false),
+                 template <typename AKey = Key, typename AT = T,
+                           QTypeTraits::compare_eq_result_container<QMultiMap, AKey, AT> = true>)
     // TODO: add the other comparison operators; std::multimap has them.
+public:
 #else
     friend bool operator==(const QMultiMap &lhs, const QMultiMap &rhs);
     friend bool operator!=(const QMultiMap &lhs, const QMultiMap &rhs);
@@ -910,6 +947,7 @@ public:
 
     size_type size() const { return d ? size_type(d->m.size()) : size_type(0); }
 
+    [[nodiscard]]
     bool isEmpty() const { return d ? d->m.empty() : true; }
 
     void detach()
@@ -1006,12 +1044,18 @@ public:
         // elements (the one to be removed can be skipped).
         detach();
 
+#ifdef __cpp_lib_node_extract
+        if (const auto node = d->m.extract(key))
+            return std::move(node.mapped());
+#else
         auto i = d->m.find(key);
         if (i != d->m.end()) {
+            // ### breaks RVO on most compilers (but only on old-fashioned ones, so who cares?)
             T result(std::move(i->second));
             d->m.erase(i);
             return result;
         }
+#endif
         return T();
     }
 
@@ -1309,10 +1353,10 @@ public:
     const_key_value_iterator constKeyValueBegin() const { return const_key_value_iterator(begin()); }
     const_key_value_iterator keyValueEnd() const { return const_key_value_iterator(end()); }
     const_key_value_iterator constKeyValueEnd() const { return const_key_value_iterator(end()); }
-    auto asKeyValueRange() & { return QtPrivate::QKeyValueRange(*this); }
-    auto asKeyValueRange() const & { return QtPrivate::QKeyValueRange(*this); }
-    auto asKeyValueRange() && { return QtPrivate::QKeyValueRange(std::move(*this)); }
-    auto asKeyValueRange() const && { return QtPrivate::QKeyValueRange(std::move(*this)); }
+    auto asKeyValueRange() & { return QtPrivate::QKeyValueRange<QMultiMap &>(*this); }
+    auto asKeyValueRange() const & { return QtPrivate::QKeyValueRange<const QMultiMap &>(*this); }
+    auto asKeyValueRange() && { return QtPrivate::QKeyValueRange<QMultiMap>(std::move(*this)); }
+    auto asKeyValueRange() const && { return QtPrivate::QKeyValueRange<QMultiMap>(std::move(*this)); }
 
     iterator erase(const_iterator it)
     {
@@ -1490,6 +1534,7 @@ public:
     }
 
     // STL compatibility
+    [[nodiscard]]
     inline bool empty() const { return isEmpty(); }
 
     std::pair<iterator, iterator> equal_range(const Key &akey)

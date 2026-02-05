@@ -9,7 +9,10 @@
 #include <QtTest/private/qbenchmark_p.h>
 #include <QtTest/private/qtestlog_p.h>
 
+#include <QtCore/qelapsedtimer.h>
 #include <QtCore/qlibraryinfo.h>
+
+#include <cstdio>
 
 #include <string.h>
 
@@ -93,16 +96,16 @@ void QJUnitTestLogger::stopLogging()
 {
     char buf[10];
 
-    qsnprintf(buf, sizeof(buf), "%i", testCounter);
+    std::snprintf(buf, sizeof(buf), "%i", testCounter);
     currentTestSuite->addAttribute(QTest::AI_Tests, buf);
 
-    qsnprintf(buf, sizeof(buf), "%i", failureCounter);
+    std::snprintf(buf, sizeof(buf), "%i", failureCounter);
     currentTestSuite->addAttribute(QTest::AI_Failures, buf);
 
-    qsnprintf(buf, sizeof(buf), "%i", errorCounter);
+    std::snprintf(buf, sizeof(buf), "%i", errorCounter);
     currentTestSuite->addAttribute(QTest::AI_Errors, buf);
 
-    qsnprintf(buf, sizeof(buf), "%i", QTestLog::skipCount());
+    std::snprintf(buf, sizeof(buf), "%i", QTestLog::skipCount());
     currentTestSuite->addAttribute(QTest::AI_Skipped, buf);
 
     currentTestSuite->addAttribute(QTest::AI_Time,
@@ -127,20 +130,23 @@ void QJUnitTestLogger::enterTestFunction(const char *function)
 
 void QJUnitTestLogger::enterTestCase(const char *name)
 {
-    currentTestCase = new QTestElement(QTest::LET_TestCase);
-    currentTestCase->addAttribute(QTest::AI_Name, name);
-    currentTestCase->addAttribute(QTest::AI_Classname, QTestResult::currentTestObjectName());
-    listOfTestcases.push_back(currentTestCase);
+    {
+        QMutexLocker locker(&mutex);
+        currentTestCase = new QTestElement(QTest::LET_TestCase);
+        currentTestCase->addAttribute(QTest::AI_Name, name);
+        currentTestCase->addAttribute(QTest::AI_Classname, QTestResult::currentTestObjectName());
+        listOfTestcases.push_back(currentTestCase);
 
-    Q_ASSERT(!systemOutputElement && !systemErrorElement);
-    systemOutputElement = new QTestElement(QTest::LET_SystemOutput);
-    systemErrorElement = new QTestElement(QTest::LET_SystemError);
+        Q_ASSERT(!systemOutputElement && !systemErrorElement);
+        systemOutputElement = new QTestElement(QTest::LET_SystemOutput);
+        systemErrorElement = new QTestElement(QTest::LET_SystemError);
+    }
 
     // The element will be deleted when the suite is deleted
 
     ++testCounter;
 
-    elapsedTestcaseTime.restart();
+    elapsedTestcaseTime.start();
 }
 
 void QJUnitTestLogger::enterTestData(QTestData *)
@@ -156,7 +162,7 @@ void QJUnitTestLogger::enterTestData(QTestData *)
             currentTestCase->attribute(QTest::AI_Name));
         name->setPair(QTest::AI_Name, testIdentifier.data());
         lastTestFunction = QTestResult::currentTestFunction();
-        elapsedTestcaseTime.restart();
+        elapsedTestcaseTime.start();
     } else {
         // Create new test cases for remaining test data
         leaveTestCase();
@@ -171,6 +177,7 @@ void QJUnitTestLogger::leaveTestFunction()
 
 void QJUnitTestLogger::leaveTestCase()
 {
+    QMutexLocker locker(&mutex);
     currentTestCase->addAttribute(QTest::AI_Time,
         toSecondsFormat(elapsedTestCaseSeconds() * 1000).constData());
 
@@ -254,6 +261,7 @@ void QJUnitTestLogger::addMessage(MessageTypes type, const QString &message, con
     Q_UNUSED(file);
     Q_UNUSED(line);
 
+    QMutexLocker locker(&mutex);
     if (type == QFatal) {
         addFailure(QTest::LET_Error, "qfatal", message);
         return;

@@ -1,5 +1,6 @@
 // Copyright (C) 2016 The Qt Company Ltd.
 // SPDX-License-Identifier: LicenseRef-Qt-Commercial OR LGPL-3.0-only OR GPL-2.0-only OR GPL-3.0-only
+// Qt-Security score:critical reason:data-parser
 
 #include "qzipreader_p.h"
 #include "qzipwriter_p.h"
@@ -91,7 +92,7 @@ static void writeMSDosDate(uchar *dest, const QDateTime& dt)
 
 static int inflate(Bytef *dest, ulong *destLen, const Bytef *source, ulong sourceLen)
 {
-    z_stream stream;
+    z_stream stream = {};
     int err;
 
     stream.next_in = const_cast<Bytef*>(source);
@@ -103,9 +104,6 @@ static int inflate(Bytef *dest, ulong *destLen, const Bytef *source, ulong sourc
     stream.avail_out = (uInt)*destLen;
     if ((uLong)stream.avail_out != *destLen)
         return Z_BUF_ERROR;
-
-    stream.zalloc = (alloc_func)nullptr;
-    stream.zfree = (free_func)nullptr;
 
     err = inflateInit2(&stream, -MAX_WBITS);
     if (err != Z_OK)
@@ -730,37 +728,37 @@ void QZipWriterPrivate::addEntry(EntryType type, const QString &fileName, const 
 */
 
 /*!
-    \variable FileInfo::filePath
+    \variable QZipReader::FileInfo::filePath
     The full filepath inside the archive.
 */
 
 /*!
-    \variable FileInfo::isDir
+    \variable QZipReader::FileInfo::isDir
     A boolean type indicating if the entry is a directory.
 */
 
 /*!
-    \variable FileInfo::isFile
+    \variable QZipReader::FileInfo::isFile
     A boolean type, if it is one this entry is a file.
 */
 
 /*!
-    \variable FileInfo::isSymLink
+    \variable QZipReader::FileInfo::isSymLink
     A boolean type, if it is one this entry is symbolic link.
 */
 
 /*!
-    \variable FileInfo::permissions
+    \variable QZipReader::FileInfo::permissions
     A list of flags for the permissions of this entry.
 */
 
 /*!
-    \variable FileInfo::crc
+    \variable QZipReader::FileInfo::crc
     The calculated checksum as a crc type.
 */
 
 /*!
-    \variable FileInfo::size
+    \variable QZipReader::FileInfo::size
     The total size of the unpacked content.
 */
 
@@ -1009,6 +1007,8 @@ bool QZipReader::extractAll(const QString &destinationDir) const
     // need to recreate directory structure based on the file paths.
     if (hasDirs && !foundDirs) {
         for (const FileInfo &fi : allFiles) {
+            if (!fi.filePath.contains(u"/"))
+                continue;
             const auto dirPath = fi.filePath.left(fi.filePath.lastIndexOf(u"/"));
             if (!baseDir.mkpath(dirPath))
                 return false;

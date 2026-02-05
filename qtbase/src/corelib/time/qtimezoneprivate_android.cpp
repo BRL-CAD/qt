@@ -14,7 +14,6 @@ QT_BEGIN_NAMESPACE
 Q_DECLARE_JNI_CLASS(TimeZone, "java/util/TimeZone");
 Q_DECLARE_JNI_CLASS(Locale, "java/util/Locale");
 Q_DECLARE_JNI_CLASS(Date, "java/util/Date");
-Q_DECLARE_JNI_TYPE(StringArray, "[Ljava/lang/String;")
 
 /*
     Private
@@ -42,13 +41,6 @@ QAndroidTimeZonePrivate::QAndroidTimeZonePrivate(const QByteArray &ianaId)
     : QTimeZonePrivate()
 {
     init(ianaId);
-}
-
-QAndroidTimeZonePrivate::QAndroidTimeZonePrivate(const QAndroidTimeZonePrivate &other)
-    : QTimeZonePrivate(other)
-{
-    androidTimeZone = other.androidTimeZone;
-    m_id = other.id();
 }
 
 QAndroidTimeZonePrivate::~QAndroidTimeZonePrivate()
@@ -182,16 +174,11 @@ bool QAndroidTimeZonePrivate::isDaylightTime(qint64 atMSecsSinceEpoch) const
 QTimeZonePrivate::Data QAndroidTimeZonePrivate::data(qint64 forMSecsSinceEpoch) const
 {
     if (androidTimeZone.isValid()) {
-        Data data;
-        data.atMSecsSinceEpoch = forMSecsSinceEpoch;
-        data.standardTimeOffset = standardTimeOffset(forMSecsSinceEpoch);
-        data.offsetFromUtc = offsetFromUtc(forMSecsSinceEpoch);
-        data.daylightTimeOffset = data.offsetFromUtc - data.standardTimeOffset;
-        data.abbreviation = abbreviation(forMSecsSinceEpoch);
-        return data;
-    } else {
-        return invalidData();
+        return Data(abbreviation(forMSecsSinceEpoch), forMSecsSinceEpoch,
+                    offsetFromUtc(forMSecsSinceEpoch),
+                    standardTimeOffset(forMSecsSinceEpoch));
     }
+    return {};
 }
 
 // java.util.TimeZone does not directly provide transitions,
@@ -214,25 +201,21 @@ bool QAndroidTimeZonePrivate::isTimeZoneIdAvailable(const QByteArray &ianaId) co
 
 QList<QByteArray> QAndroidTimeZonePrivate::availableTimeZoneIds() const
 {
-    QList<QByteArray> availableTimeZoneIdList;
-    QJniObject androidAvailableIdList = QJniObject::callStaticMethod<QtJniTypes::StringArray>(
-                             QtJniTypes::Traits<QtJniTypes::TimeZone>::className(), "getAvailableIDs");
+    using namespace QtJniTypes;
 
-    QJniEnvironment jniEnv;
-    int androidTZcount = jniEnv->GetArrayLength(androidAvailableIdList.object<jarray>());
+    const QJniArray androidAvailableIdList
+        = TimeZone::callStaticMethod<String[]>("getAvailableIDs");
+    // Does not document order of entries.
 
-    // need separate jobject and QJniObject here so that we can delete (DeleteLocalRef) the reference to the jobject
-    // (or else the JNI reference table fills after 512 entries from GetObjectArrayElement)
-    jobject androidTZobject;
-    QJniObject androidTZ;
-    for (int i = 0; i < androidTZcount; i++) {
-        androidTZobject = jniEnv->GetObjectArrayElement(androidAvailableIdList.object<jobjectArray>(), i);
-        androidTZ = androidTZobject;
-        availableTimeZoneIdList.append(androidTZ.toString().toUtf8());
-        jniEnv->DeleteLocalRef(androidTZobject);
-    }
+    QList<QByteArray> result;
+    result.reserve(androidAvailableIdList.size());
+    for (const auto &id : androidAvailableIdList)
+        result.append(id.toString().toUtf8());
 
-    return availableTimeZoneIdList;
+    // Sort & uniquify (just to be sure; it appears to not need this, but we can't rely on that).
+    std::sort(result.begin(), result.end());
+    result.erase(std::unique(result.begin(), result.end()), result.end());
+    return result;
 }
 
 QT_END_NAMESPACE

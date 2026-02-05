@@ -6,16 +6,73 @@
 
 #include <QtGui/qguiapplication.h>
 #include <QtGui/qevent.h>
+#if QT_CONFIG(future)
 #include <QtCore/private/qfutureinterface_p.h>
+#endif
+
+
+#if QT_CONFIG(future)
+#define X_QFutureCallOutEvent(X) X(QFutureCallOutEvent, ())
+#else
+#define X_QFutureCallOutEvent(X)
+#endif
+
+#if QT_CONFIG(wheelevent)
+#define X_QWheelEvent(X) X(QWheelEvent, ({}, {}, {}, {}, {}, {}, {}, {}))
+#else
+#define X_QWheelEvent(X)
+#endif
+
+#if QT_CONFIG(tabletevent)
+#define X_QTabletEvent(X) X(QTabletEvent, (QEvent::None, QPointingDevice::primaryPointingDevice(), {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}))
+#else
+#define X_QTabletEvent(X)
+#endif
+
+#if QT_CONFIG(gestures)
+#define X_QNativeGestureEvent(X) X(QNativeGestureEvent, ({}, QPointingDevice::primaryPointingDevice(), 0, {}, {}, {}, {}, {}))
+#else
+#define X_QNativeGestureEvent(X)
+#endif
+
+#if QT_CONFIG(whatsthis)
+#define X_QWhatsThisClickedEvent(X) X(QWhatsThisClickedEvent, ({}))
+#else
+#define X_QWhatsThisClickedEvent(X)
+#endif
+
+#if QT_CONFIG(action)
+#define X_QActionEvent(X) X(QActionEvent, (0, nullptr))
+#else
+#define X_QActionEvent(X)
+#endif
+
+#if QT_CONFIG(shortcut)
+#define X_QShortcutEvent(X) X(QShortcutEvent, ({}, 0))
+#else
+#define X_QShortcutEvent(X)
+#endif
+
+#if QT_CONFIG(draganddrop)
+#define X_QDropEvent(X) X(QDropEvent, ({}, {}, {}, {}, {}))
+#define X_QDragMoveEvent(X) X(QDragMoveEvent, ({}, {}, {}, {}, {}))
+#define X_QDragEnterEvent(X) X(QDragEnterEvent, ({}, {}, {}, {}, {}))
+#define X_QDragLeaveEvent(X) X(QDragLeaveEvent, ())
+#else
+#define X_QDropEvent(X)
+#define X_QDragMoveEvent(X)
+#define X_QDragEnterEvent(X)
+#define X_QDragLeaveEvent(X)
+#endif
 
 #define FOR_EACH_CORE_EVENT(X) \
     /* qcoreevent.h */ \
     X(QEvent, (QEvent::None)) \
-    X(QTimerEvent, (42)) \
+    X(QTimerEvent, (Qt::TimerId{42})) \
     X(QChildEvent, (QEvent::ChildAdded, nullptr)) \
     X(QDynamicPropertyChangeEvent, ("size")) \
     /* qfutureinterface_p.h */ \
-    X(QFutureCallOutEvent, ()) \
+    X_QFutureCallOutEvent(X) \
     /* end */
 
 #define FOR_EACH_GUI_EVENT(X) \
@@ -27,9 +84,9 @@
     X(QEnterEvent, ({}, {}, {})) \
     X(QMouseEvent, (QEvent::None, {}, {}, {}, {}, {}, {}, {}, QPointingDevice::primaryPointingDevice())) \
     X(QHoverEvent, (QEvent::None, {}, {}, QPointF{})) \
-    X(QWheelEvent, ({}, {}, {}, {}, {}, {}, {}, {})) \
-    X(QTabletEvent, (QEvent::None, QPointingDevice::primaryPointingDevice(), {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {})) \
-    X(QNativeGestureEvent, ({}, QPointingDevice::primaryPointingDevice(), 0, {}, {}, {}, {}, {})) \
+    X_QWheelEvent(X) \
+    X_QTabletEvent(X) \
+    X_QNativeGestureEvent(X) \
     X(QKeyEvent, (QEvent::None, 0, {})) \
     X(QFocusEvent, (QEvent::None)) \
     X(QPaintEvent, (QRect{0, 0, 100, 100})) \
@@ -44,17 +101,17 @@
     X(QContextMenuEvent, (QContextMenuEvent::Reason::Keyboard, {}, {})) \
     X(QInputMethodEvent, ()) \
     X(QInputMethodQueryEvent, ({})) \
-    X(QDropEvent, ({}, {}, {}, {}, {})) \
-    X(QDragMoveEvent, ({}, {}, {}, {}, {})) \
-    X(QDragEnterEvent, ({}, {}, {}, {}, {})) \
-    X(QDragLeaveEvent, ()) \
+    X_QDropEvent(X) \
+    X_QDragMoveEvent(X) \
+    X_QDragEnterEvent(X) \
+    X_QDragLeaveEvent(X) \
     X(QHelpEvent, ({}, {}, {})) \
     X(QStatusTipEvent, ({})) \
-    X(QWhatsThisClickedEvent, ({})) \
-    X(QActionEvent, (0, nullptr)) \
+    X_QWhatsThisClickedEvent(X) \
+    X_QActionEvent(X) \
     X(QFileOpenEvent, (QString{})) \
     X(QToolBarChangeEvent, (false)) \
-    X(QShortcutEvent, ({}, 0)) \
+    X_QShortcutEvent(X) \
     X(QWindowStateChangeEvent, ({})) \
     X(QTouchEvent, (QEvent::None)) \
     X(QScrollPrepareEvent, ({})) \

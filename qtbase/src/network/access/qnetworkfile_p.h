@@ -1,5 +1,6 @@
 // Copyright (C) 2016 The Qt Company Ltd.
 // SPDX-License-Identifier: LicenseRef-Qt-Commercial OR LGPL-3.0-only OR GPL-2.0-only OR GPL-3.0-only
+// Qt-Security score:significant reason:default
 
 #ifndef QNETWORKFILE_H
 #define QNETWORKFILE_H
@@ -35,8 +36,8 @@ public Q_SLOTS:
 
 Q_SIGNALS:
     void finished(bool ok);
-    void headerRead(QNetworkRequest::KnownHeaders header, const QVariant &value);
-    void error(QNetworkReply::NetworkError error, const QString &message);
+    void headerRead(QHttpHeaders::WellKnownHeader, const QByteArray &value);
+    void networkError(QNetworkReply::NetworkError error, const QString &message);
 };
 
 QT_END_NAMESPACE

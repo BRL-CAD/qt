@@ -1,5 +1,6 @@
 // Copyright (C) 2016 The Qt Company Ltd.
 // SPDX-License-Identifier: LicenseRef-Qt-Commercial OR LGPL-3.0-only OR GPL-2.0-only OR GPL-3.0-only
+// Qt-Security score:significant reason:default
 
 #ifndef QRESOURCE_ITERATOR_P_H
 #define QRESOURCE_ITERATOR_P_H
@@ -24,13 +25,16 @@ class QResourceFileEngineIteratorPrivate;
 class QResourceFileEngineIterator : public QAbstractFileEngineIterator
 {
 public:
-    QResourceFileEngineIterator(QDir::Filters filters, const QStringList &filterNames);
+    QResourceFileEngineIterator(const QString &path, QDir::Filters filters,
+                                const QStringList &filterNames);
+    QResourceFileEngineIterator(const QString &path, QDirListing::IteratorFlags filters,
+                                const QStringList &filterNames);
     ~QResourceFileEngineIterator();
 
-    QString next() override;
-    bool hasNext() const override;
+    bool advance() override;
 
     QString currentFileName() const override;
+    QFileInfo currentFileInfo() const override;
 
 private:
     mutable QStringList entries;

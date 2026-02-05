@@ -26,40 +26,38 @@ static void nanWarning(const char *func)
 
 #define Q_NEAR_CLIP (sizeof(qreal) == sizeof(double) ? 0.000001 : 0.0001)
 
-#ifdef MAP
-#  undef MAP
-#endif
-#define MAP(x, y, nx, ny) \
-    do { \
-        qreal FX_ = x; \
-        qreal FY_ = y; \
-        switch(t) {   \
-        case TxNone:  \
-            nx = FX_;   \
-            ny = FY_;   \
-            break;    \
-        case TxTranslate:    \
-            nx = FX_ + m_matrix[2][0];                \
-            ny = FY_ + m_matrix[2][1];                \
-            break;                              \
-        case TxScale:                           \
-            nx = m_matrix[0][0] * FX_ + m_matrix[2][0];  \
-            ny = m_matrix[1][1] * FY_ + m_matrix[2][1];  \
-            break;                              \
-        case TxRotate:                          \
-        case TxShear:                           \
-        case TxProject:                                      \
-            nx = m_matrix[0][0] * FX_ + m_matrix[1][0] * FY_ + m_matrix[2][0];        \
-            ny = m_matrix[0][1] * FX_ + m_matrix[1][1] * FY_ + m_matrix[2][1];        \
-            if (t == TxProject) {                                       \
-                qreal w = (m_matrix[0][2] * FX_ + m_matrix[1][2] * FY_ + m_matrix[2][2]);              \
-                if (w < qreal(Q_NEAR_CLIP)) w = qreal(Q_NEAR_CLIP);     \
-                w = 1./w;                                               \
-                nx *= w;                                                \
-                ny *= w;                                                \
-            }                                                           \
-        }                                                               \
-    } while (0)
+void QTransform::do_map(qreal x, qreal y, qreal &nx, qreal &ny) const
+{
+    const TransformationType t = inline_type();
+    switch (t) {
+    case QTransform::TxNone:
+        nx = x;
+        ny = y;
+        return;
+    case QTransform::TxTranslate:
+        nx = x + m_matrix[2][0];
+        ny = y + m_matrix[2][1];
+        return;
+    case QTransform::TxScale:
+        nx = m_matrix[0][0] * x + m_matrix[2][0];
+        ny = m_matrix[1][1] * y + m_matrix[2][1];
+        return;
+    case QTransform::TxRotate:
+    case QTransform::TxShear:
+    case QTransform::TxProject:
+        nx = m_matrix[0][0] * x + m_matrix[1][0] * y + m_matrix[2][0];
+        ny = m_matrix[0][1] * x + m_matrix[1][1] * y + m_matrix[2][1];
+        if (t == QTransform::TxProject) {
+            qreal w = (m_matrix[0][2] * x + m_matrix[1][2] * y + m_matrix[2][2]);
+            if (w < qreal(Q_NEAR_CLIP)) w = qreal(Q_NEAR_CLIP);
+            w = qreal(1.)/w;
+            nx *= w;
+            ny *= w;
+        }
+        return;
+    }
+    Q_UNREACHABLE_RETURN();
+}
 
 /*!
     \class QTransform
@@ -100,8 +98,6 @@ static void nanWarning(const char *func)
     and subtraction, and objects of the class can be streamed as well
     as compared.
 
-    \tableofcontents
-
     \section1 Rendering Graphics
 
     When rendering graphics, the matrix defines the transformations
@@ -139,7 +135,8 @@ static void nanWarning(const char *func)
 
     \section1 Basic Matrix Operations
 
-    \image qtransform-representation.png
+    \image qtransform-representation.png {Illustration showing an object that
+           contains a 3x3 matrix where every row is a different element}
 
     A QTransform object contains a 3 x 3 matrix.  The \c m31 (\c dx) and
     \c m32 (\c dy) elements specify horizontal and vertical translation.
@@ -322,10 +319,6 @@ QTransform QTransform::inverted(bool *invertible) const
             invert.m_matrix[2][1] = -m_matrix[2][1] * invert.m_matrix[1][1];
         }
         break;
-//    case TxRotate:
-//    case TxShear:
-//        invert.affine = affine.inverted(&inv);
-//        break;
     default:
         // general case
         qreal det = determinant();
@@ -788,14 +781,11 @@ bool QTransform::operator==(const QTransform &o) const
 
 /*!
     \since 5.6
-    \relates QTransform
-
-    Returns the hash value for \a key, using
-    \a seed to seed the calculation.
+    \qhashold{QTransform}
 */
 size_t qHash(const QTransform &key, size_t seed) noexcept
 {
-    QtPrivate::QHashCombine hash;
+    QtPrivate::QHashCombineWithSeed hash(seed);
     seed = hash(seed, key.m11());
     seed = hash(seed, key.m12());
     seed = hash(seed, key.m21());
@@ -1144,8 +1134,7 @@ QPoint QTransform::map(const QPoint &p) const
 
     qreal x = 0, y = 0;
 
-    TransformationType t = inline_type();
-    MAP(fx, fy, x, y);
+    do_map(fx, fy, x, y);
 
     return QPoint(qRound(x), qRound(y));
 }
@@ -1173,8 +1162,7 @@ QPointF QTransform::map(const QPointF &p) const
 
     qreal x = 0, y = 0;
 
-    TransformationType t = inline_type();
-    MAP(fx, fy, x, y);
+    do_map(fx, fy, x, y);
 
     return QPointF(x, y);
 }
@@ -1222,9 +1210,8 @@ QLine QTransform::map(const QLine &l) const
 
     qreal x1 = 0, y1 = 0, x2 = 0, y2 = 0;
 
-    TransformationType t = inline_type();
-    MAP(fx1, fy1, x1, y1);
-    MAP(fx2, fy2, x2, y2);
+    do_map(fx1, fy1, x1, y1);
+    do_map(fx2, fy2, x2, y2);
 
     return QLine(qRound(x1), qRound(y1), qRound(x2), qRound(y2));
 }
@@ -1249,34 +1236,11 @@ QLineF QTransform::map(const QLineF &l) const
 
     qreal x1 = 0, y1 = 0, x2 = 0, y2 = 0;
 
-    TransformationType t = inline_type();
-    MAP(fx1, fy1, x1, y1);
-    MAP(fx2, fy2, x2, y2);
+    do_map(fx1, fy1, x1, y1);
+    do_map(fx2, fy2, x2, y2);
 
     return QLineF(x1, y1, x2, y2);
 }
-
-static QPolygonF mapProjective(const QTransform &transform, const QPolygonF &poly)
-{
-    if (poly.size() == 0)
-        return poly;
-
-    if (poly.size() == 1)
-        return QPolygonF() << transform.map(poly.at(0));
-
-    QPainterPath path;
-    path.addPolygon(poly);
-
-    path = transform.map(path);
-
-    QPolygonF result;
-    const int elementCount = path.elementCount();
-    result.reserve(elementCount);
-    for (int i = 0; i < elementCount; ++i)
-        result << path.elementAt(i);
-    return result;
-}
-
 
 /*!
     \fn QPolygonF operator *(const QPolygonF &polygon, const QTransform &matrix)
@@ -1311,9 +1275,6 @@ QPolygonF QTransform::map(const QPolygonF &a) const
     if (t <= TxTranslate)
         return a.translated(m_matrix[2][0], m_matrix[2][1]);
 
-    if (t >= QTransform::TxProject)
-        return mapProjective(*this, a);
-
     int size = a.size();
     int i;
     QPolygonF p(size);
@@ -1321,7 +1282,7 @@ QPolygonF QTransform::map(const QPolygonF &a) const
     QPointF *dp = p.data();
 
     for(i = 0; i < size; ++i) {
-        MAP(da[i].xp, da[i].yp, dp[i].xp, dp[i].yp);
+        do_map(da[i].x(), da[i].y(), dp[i].rx(), dp[i].ry());
     }
     return p;
 }
@@ -1341,9 +1302,6 @@ QPolygon QTransform::map(const QPolygon &a) const
     if (t <= TxTranslate)
         return a.translated(qRound(m_matrix[2][0]), qRound(m_matrix[2][1]));
 
-    if (t >= QTransform::TxProject)
-        return mapProjective(*this, QPolygonF(a)).toPolygon();
-
     int size = a.size();
     int i;
     QPolygon p(size);
@@ -1352,9 +1310,9 @@ QPolygon QTransform::map(const QPolygon &a) const
 
     for(i = 0; i < size; ++i) {
         qreal nx = 0, ny = 0;
-        MAP(da[i].xp, da[i].yp, nx, ny);
-        dp[i].xp = qRound(nx);
-        dp[i].yp = qRound(ny);
+        do_map(da[i].x(), da[i].y(), nx, ny);
+        dp[i].rx() = qRound(nx);
+        dp[i].ry() = qRound(ny);
     }
     return p;
 }
@@ -1368,7 +1326,7 @@ QPolygon QTransform::map(const QPolygon &a) const
     \sa QTransform::map()
 */
 
-extern QPainterPath qt_regionToPath(const QRegion &region);
+Q_GUI_EXPORT extern QPainterPath qt_regionToPath(const QRegion &region);
 
 /*!
     \fn QRegion QTransform::map(const QRegion &region) const
@@ -1569,11 +1527,11 @@ QPainterPath QTransform::map(const QPainterPath &path) const
     if (t == TxTranslate) {
         copy.translate(m_matrix[2][0], m_matrix[2][1]);
     } else {
-        copy.detach();
+        copy.setDirty(true);
         // Full xform
         for (int i=0; i<path.elementCount(); ++i) {
             QPainterPath::Element &e = copy.d_ptr->elements[i];
-            MAP(e.x, e.y, e.x, e.y);
+            do_map(e.x, e.y, e.x, e.y);
         }
     }
 
@@ -1626,12 +1584,12 @@ QPolygon QTransform::mapToPolygon(const QRect &rect) const
         y[2] = y[0]+h;
         y[3] = y[2];
     } else {
-        qreal right = rect.x() + rect.width();
-        qreal bottom = rect.y() + rect.height();
-        MAP(rect.x(), rect.y(), x[0], y[0]);
-        MAP(right, rect.y(), x[1], y[1]);
-        MAP(right, bottom, x[2], y[2]);
-        MAP(rect.x(), bottom, x[3], y[3]);
+        auto right = rect.x() + rect.width();
+        auto bottom = rect.y() + rect.height();
+        do_map(rect.x(), rect.y(), x[0], y[0]);
+        do_map(right, rect.y(), x[1], y[1]);
+        do_map(right, bottom, x[2], y[2]);
+        do_map(rect.x(), bottom, x[3], y[3]);
     }
 
     // all coordinates are correctly, transform to a pointarray
@@ -1652,7 +1610,7 @@ QPolygon QTransform::mapToPolygon(const QRect &rect) const
 */
 bool QTransform::squareToQuad(const QPolygonF &quad, QTransform &trans)
 {
-    if (quad.size() != 4)
+    if (quad.size() != (quad.isClosed() ? 5 : 4))
         return false;
 
     qreal dx0 = quad[0].x();
@@ -1774,14 +1732,6 @@ void QTransform::setMatrix(qreal m11, qreal m12, qreal m13,
     m_dirty = TxProject;
 }
 
-static inline bool needsPerspectiveClipping(const QRectF &rect, const QTransform &transform)
-{
-    const qreal wx = qMin(transform.m13() * rect.left(), transform.m13() * rect.right());
-    const qreal wy = qMin(transform.m23() * rect.top(), transform.m23() * rect.bottom());
-
-    return wx + wy + transform.m33() < Q_NEAR_CLIP;
-}
-
 QRect QTransform::mapRect(const QRect &rect) const
 {
     TransformationType t = inline_type();
@@ -1802,34 +1752,29 @@ QRect QTransform::mapRect(const QRect &rect) const
             y -= h;
         }
         return QRect(x, y, w, h);
-    } else if (t < TxProject || !needsPerspectiveClipping(rect, *this)) {
-        // see mapToPolygon for explanations of the algorithm.
+    } else {
         qreal x = 0, y = 0;
-        MAP(rect.left(), rect.top(), x, y);
+        do_map(rect.left(), rect.top(), x, y);
         qreal xmin = x;
         qreal ymin = y;
         qreal xmax = x;
         qreal ymax = y;
-        MAP(rect.right() + 1, rect.top(), x, y);
+        do_map(rect.right() + 1, rect.top(), x, y);
         xmin = qMin(xmin, x);
         ymin = qMin(ymin, y);
         xmax = qMax(xmax, x);
         ymax = qMax(ymax, y);
-        MAP(rect.right() + 1, rect.bottom() + 1, x, y);
+        do_map(rect.right() + 1, rect.bottom() + 1, x, y);
         xmin = qMin(xmin, x);
         ymin = qMin(ymin, y);
         xmax = qMax(xmax, x);
         ymax = qMax(ymax, y);
-        MAP(rect.left(), rect.bottom() + 1, x, y);
+        do_map(rect.left(), rect.bottom() + 1, x, y);
         xmin = qMin(xmin, x);
         ymin = qMin(ymin, y);
         xmax = qMax(xmax, x);
         ymax = qMax(ymax, y);
-        return QRect(qRound(xmin), qRound(ymin), qRound(xmax)-qRound(xmin), qRound(ymax)-qRound(ymin));
-    } else {
-        QPainterPath path;
-        path.addRect(rect);
-        return map(path).boundingRect().toRect();
+        return QRectF(xmin, ymin, xmax-xmin, ymax-ymin).toRect();
     }
 }
 
@@ -1872,33 +1817,29 @@ QRectF QTransform::mapRect(const QRectF &rect) const
             y -= h;
         }
         return QRectF(x, y, w, h);
-    } else if (t < TxProject || !needsPerspectiveClipping(rect, *this)) {
+    } else {
         qreal x = 0, y = 0;
-        MAP(rect.x(), rect.y(), x, y);
+        do_map(rect.x(), rect.y(), x, y);
         qreal xmin = x;
         qreal ymin = y;
         qreal xmax = x;
         qreal ymax = y;
-        MAP(rect.x() + rect.width(), rect.y(), x, y);
+        do_map(rect.x() + rect.width(), rect.y(), x, y);
         xmin = qMin(xmin, x);
         ymin = qMin(ymin, y);
         xmax = qMax(xmax, x);
         ymax = qMax(ymax, y);
-        MAP(rect.x() + rect.width(), rect.y() + rect.height(), x, y);
+        do_map(rect.x() + rect.width(), rect.y() + rect.height(), x, y);
         xmin = qMin(xmin, x);
         ymin = qMin(ymin, y);
         xmax = qMax(xmax, x);
         ymax = qMax(ymax, y);
-        MAP(rect.x(), rect.y() + rect.height(), x, y);
+        do_map(rect.x(), rect.y() + rect.height(), x, y);
         xmin = qMin(xmin, x);
         ymin = qMin(ymin, y);
         xmax = qMax(xmax, x);
         ymax = qMax(ymax, y);
         return QRectF(xmin, ymin, xmax-xmin, ymax - ymin);
-    } else {
-        QPainterPath path;
-        path.addRect(rect);
-        return map(path).boundingRect();
     }
 }
 
@@ -1928,8 +1869,7 @@ QRectF QTransform::mapRect(const QRectF &rect) const
 */
 void QTransform::map(qreal x, qreal y, qreal *tx, qreal *ty) const
 {
-    TransformationType t = inline_type();
-    MAP(x, y, *tx, *ty);
+    do_map(x, y, *tx, *ty);
 }
 
 /*!
@@ -1942,9 +1882,8 @@ void QTransform::map(qreal x, qreal y, qreal *tx, qreal *ty) const
 */
 void QTransform::map(int x, int y, int *tx, int *ty) const
 {
-    TransformationType t = inline_type();
     qreal fx = 0, fy = 0;
-    MAP(x, y, fx, fy);
+    do_map(x, y, fx, fy);
     *tx = qRound(fx);
     *ty = qRound(fy);
 }

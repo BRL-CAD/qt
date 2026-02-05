@@ -32,6 +32,43 @@
 QT_BEGIN_NAMESPACE
 
 using namespace Qt::StringLiterals;
+// Convenience class providing a bool read() function.
+namespace {
+class ImageReader
+{
+public:
+    ImageReader(const QString &fileName, QSize size)
+        : m_reader(fileName)
+        , m_atEnd(false)
+    {
+        if (m_reader.supportsOption(QImageIOHandler::ScaledSize))
+            m_reader.setScaledSize(size);
+    }
+
+    QByteArray format() const { return m_reader.format(); }
+    bool supportsReadSize() const { return m_reader.supportsOption(QImageIOHandler::Size); }
+    QSize size() const { return m_reader.size(); }
+    bool jumpToNextImage() { return m_reader.jumpToNextImage(); }
+    void jumpToImage(int index) { m_reader.jumpToImage(index); }
+
+    bool read(QImage *image)
+    {
+        if (m_atEnd)
+            return false;
+        *image = m_reader.read();
+        if (!image->size().isValid()) {
+            m_atEnd = true;
+            return false;
+        }
+        m_atEnd = !m_reader.jumpToNextImage();
+        return true;
+    }
+
+private:
+    QImageReader m_reader;
+    bool m_atEnd;
+};
+} // namespace
 
 /*!
     \enum QIcon::Mode
@@ -62,8 +99,8 @@ using namespace Qt::StringLiterals;
   This enum describes the state for which a pixmap is intended to be
   used. The \e state can be:
 
-  \value Off  Display the pixmap when the widget is in an "off" state
   \value On  Display the pixmap when the widget is in an "on" state
+  \value Off  Display the pixmap when the widget is in an "off" state
 */
 
 static int nextSerialNumCounter()
@@ -107,7 +144,7 @@ void QIconPrivate::clearIconCache()
 /*! \internal
     Computes the displayDevicePixelRatio for a pixmap.
 
-    If displayDevicePixelRatio is 1.0 the reurned value is 1.0, always.
+    If displayDevicePixelRatio is 1.0 the returned value is 1.0, always.
 
     For a displayDevicePixelRatio of 2.0 the returned value will be between
     1.0 and 2.0, depending on requestedSize and actualsize:
@@ -124,8 +161,9 @@ qreal QIconPrivate::pixmapDevicePixelRatio(qreal displayDevicePixelRatio, const 
         return displayDevicePixelRatio;
     }
     qreal scale = 0.5 * (qreal(actualSize.width()) / qreal(targetSize.width()) +
-                         qreal(actualSize.height() / qreal(targetSize.height())));
-    return qMax(qreal(1.0), displayDevicePixelRatio *scale);
+                         qreal(actualSize.height()) / qreal(targetSize.height()));
+    qreal dpr = qMax(qreal(1.0), displayDevicePixelRatio * scale);
+    return qRound(dpr * 100) / 100.0;
 }
 
 QPixmapIconEngine::QPixmapIconEngine()
@@ -145,12 +183,11 @@ void QPixmapIconEngine::paint(QPainter *painter, const QRect &rect, QIcon::Mode 
 {
     auto paintDevice = painter->device();
     qreal dpr = paintDevice ? paintDevice->devicePixelRatio() : qApp->devicePixelRatio();
-    const QSize pixmapSize = rect.size() * dpr;
-    QPixmap px = scaledPixmap(pixmapSize, mode, state, dpr);
+    QPixmap px = scaledPixmap(rect.size(), mode, state, dpr);
     painter->drawPixmap(rect, px);
 }
 
-static inline int area(const QSize &s) { return s.width() * s.height(); }
+static inline qint64 area(const QSize &s) { return qint64(s.width()) * s.height(); }
 
 // Returns the smallest of the two that is still larger than or equal to size.
 // Pixmaps at the correct scale are preferred, pixmaps at lower scale are
@@ -160,32 +197,36 @@ static inline int area(const QSize &s) { return s.width() * s.height(); }
 // the 2x pixmaps then.)
 static QPixmapIconEngineEntry *bestSizeScaleMatch(const QSize &size, qreal scale, QPixmapIconEngineEntry *pa, QPixmapIconEngineEntry *pb)
 {
-
+    const auto scaleA = pa->pixmap.devicePixelRatio();
+    const auto scaleB = pb->pixmap.devicePixelRatio();
     // scale: we can only differentiate on scale if the scale differs
-    if (pa->scale != pb->scale) {
+    if (scaleA != scaleB) {
 
         // Score the pixmaps: 0 is an exact scale match, positive
         // scores have more detail than requested, negative scores
         // have less detail than requested.
-        qreal ascore = pa->scale - scale;
-        qreal bscore = pb->scale - scale;
+        qreal ascore = scaleA - scale;
+        qreal bscore = scaleB - scale;
 
+        // always prefer positive scores to prevent upscaling
+        if ((ascore < 0) != (bscore < 0))
+            return bscore < 0 ? pa : pb;
         // Take the one closest to 0
         return (qAbs(ascore) < qAbs(bscore)) ? pa : pb;
     }
 
-    int s = area(size);
+    qint64 s = area(size * scale);
     if (pa->size == QSize() && pa->pixmap.isNull()) {
         pa->pixmap = QPixmap(pa->fileName);
         pa->size = pa->pixmap.size();
     }
-    int a = area(pa->size);
+    qint64 a = area(pa->size);
     if (pb->size == QSize() && pb->pixmap.isNull()) {
         pb->pixmap = QPixmap(pb->fileName);
         pb->size = pb->pixmap.size();
     }
-    int b = area(pb->size);
-    int res = a;
+    qint64 b = area(pb->size);
+    qint64 res = a;
     if (qMin(a,b) >= s)
         res = qMin(a,b);
     else
@@ -198,18 +239,19 @@ static QPixmapIconEngineEntry *bestSizeScaleMatch(const QSize &size, qreal scale
 QPixmapIconEngineEntry *QPixmapIconEngine::tryMatch(const QSize &size, qreal scale, QIcon::Mode mode, QIcon::State state)
 {
     QPixmapIconEngineEntry *pe = nullptr;
-    for (int i = 0; i < pixmaps.size(); ++i)
-        if (pixmaps.at(i).mode == mode && pixmaps.at(i).state == state) {
+    for (auto &entry : pixmaps) {
+        if (entry.mode == mode && entry.state == state) {
             if (pe)
-                pe = bestSizeScaleMatch(size, scale, &pixmaps[i], pe);
+                pe = bestSizeScaleMatch(size, scale, &entry, pe);
             else
-                pe = &pixmaps[i];
+                pe = &entry;
         }
+    }
     return pe;
 }
 
 
-QPixmapIconEngineEntry *QPixmapIconEngine::bestMatch(const QSize &size, qreal scale, QIcon::Mode mode, QIcon::State state, bool sizeOnly)
+QPixmapIconEngineEntry *QPixmapIconEngine::bestMatch(const QSize &size, qreal scale, QIcon::Mode mode, QIcon::State state)
 {
     QPixmapIconEngineEntry *pe = tryMatch(size, scale, mode, state);
     while (!pe){
@@ -252,10 +294,38 @@ QPixmapIconEngineEntry *QPixmapIconEngine::bestMatch(const QSize &size, qreal sc
             return pe;
     }
 
-    if (sizeOnly ? (pe->size.isNull() || !pe->size.isValid()) : pe->pixmap.isNull()) {
-        pe->pixmap = QPixmap(pe->fileName);
-        if (!pe->pixmap.isNull())
-            pe->size = pe->pixmap.size();
+    if (pe->pixmap.isNull()) {
+        // delay-load the image
+        QImage image, prevImage;
+        const QSize realSize = size * scale;
+        ImageReader imageReader(pe->fileName, realSize);
+        bool fittingImageFound = false;
+        if (imageReader.supportsReadSize()) {
+            // find the image with the best size without loading the entire image
+            do {
+                fittingImageFound = imageReader.size() == realSize;
+            } while (!fittingImageFound && imageReader.jumpToNextImage());
+        }
+        if (!fittingImageFound) {
+            imageReader.jumpToImage(0);
+            while (imageReader.read(&image) && image.size() != realSize)
+                prevImage = image;
+            if (image.isNull())
+                image = prevImage;
+        } else {
+            imageReader.read(&image);
+        }
+        if (!image.isNull()) {
+            pe->pixmap.convertFromImage(image);
+            if (!pe->pixmap.isNull()) {
+                pe->size = pe->pixmap.size();
+                pe->pixmap.setDevicePixelRatio(scale);
+            }
+        }
+        if (!pe->size.isValid()) {
+            removePixmapEntry(pe);
+            pe = nullptr;
+        }
     }
 
     return pe;
@@ -268,41 +338,34 @@ QPixmap QPixmapIconEngine::pixmap(const QSize &size, QIcon::Mode mode, QIcon::St
 
 QPixmap QPixmapIconEngine::scaledPixmap(const QSize &size, QIcon::Mode mode, QIcon::State state, qreal scale)
 {
-
     QPixmap pm;
-    QPixmapIconEngineEntry *pe = bestMatch(size, scale, mode, state, false);
+    QPixmapIconEngineEntry *pe = bestMatch(size, scale, mode, state);
     if (pe)
         pm = pe->pixmap;
+    else
+        return pm;
 
     if (pm.isNull()) {
-        int idx = pixmaps.size();
-        while (--idx >= 0) {
-            if (pe == &pixmaps.at(idx)) {
-                pixmaps.remove(idx);
-                break;
-            }
-        }
+        removePixmapEntry(pe);
         if (pixmaps.isEmpty())
             return pm;
-        else
-            return pixmap(size, mode, state);
+        return scaledPixmap(size, mode, state, scale);
     }
 
-    QSize actualSize = pm.size();
-    if (!actualSize.isNull() && (actualSize.width() > size.width() || actualSize.height() > size.height()))
-        actualSize.scale(size, Qt::KeepAspectRatio);
-
+    const auto actualSize = adjustSize(size * scale, pm.size());
+    const auto calculatedDpr = QIconPrivate::pixmapDevicePixelRatio(scale, size, actualSize);
     QString key = "qt_"_L1
                   % HexString<quint64>(pm.cacheKey())
-                  % HexString<uint>(pe ? pe->mode : QIcon::Normal)
+                  % HexString<quint8>(pe->mode)
                   % HexString<quint64>(QGuiApplication::palette().cacheKey())
                   % HexString<uint>(actualSize.width())
-                  % HexString<uint>(actualSize.height());
+                  % HexString<uint>(actualSize.height())
+                  % HexString<quint16>(qRound(calculatedDpr * 1000));
 
     if (mode == QIcon::Active) {
-        if (QPixmapCache::find(key % HexString<uint>(mode), &pm))
+        if (QPixmapCache::find(key % HexString<quint8>(mode), &pm))
             return pm; // horray
-        if (QPixmapCache::find(key % HexString<uint>(QIcon::Normal), &pm)) {
+        if (QPixmapCache::find(key % HexString<quint8>(QIcon::Normal), &pm)) {
             QPixmap active = pm;
             if (QGuiApplication *guiApp = qobject_cast<QGuiApplication *>(qApp))
                 active = static_cast<QGuiApplicationPrivate*>(QObjectPrivate::get(guiApp))->applyQIconStyleHelper(QIcon::Active, pm);
@@ -311,7 +374,7 @@ QPixmap QPixmapIconEngine::scaledPixmap(const QSize &size, QIcon::Mode mode, QIc
         }
     }
 
-    if (!QPixmapCache::find(key % HexString<uint>(mode), &pm)) {
+    if (!QPixmapCache::find(key % HexString<quint8>(mode), &pm)) {
         if (pm.size() != actualSize)
             pm = pm.scaled(actualSize, Qt::IgnoreAspectRatio, Qt::SmoothTransformation);
         if (pe->mode != mode && mode != QIcon::Normal) {
@@ -321,7 +384,8 @@ QPixmap QPixmapIconEngine::scaledPixmap(const QSize &size, QIcon::Mode mode, QIc
             if (!generated.isNull())
                 pm = generated;
         }
-        QPixmapCache::insert(key % HexString<uint>(mode), pm);
+        pm.setDevicePixelRatio(calculatedDpr);
+        QPixmapCache::insert(key % HexString<quint8>(mode), pm);
     }
     return pm;
 }
@@ -335,15 +399,10 @@ QSize QPixmapIconEngine::actualSize(const QSize &size, QIcon::Mode mode, QIcon::
     // does not proviode extra actual sizes not also provided by the 1x versions.
     qreal scale = 1;
 
-    if (QPixmapIconEngineEntry *pe = bestMatch(size, scale, mode, state, true))
+    if (QPixmapIconEngineEntry *pe = bestMatch(size, scale, mode, state))
         actualSize = pe->size;
 
-    if (actualSize.isNull())
-        return actualSize;
-
-    if (!actualSize.isNull() && (actualSize.width() > size.width() || actualSize.height() > size.height()))
-        actualSize.scale(size, Qt::KeepAspectRatio);
-    return actualSize;
+    return adjustSize(size, actualSize);
 }
 
 QList<QSize> QPixmapIconEngine::availableSizes(QIcon::Mode mode, QIcon::State state)
@@ -365,8 +424,9 @@ QList<QSize> QPixmapIconEngine::availableSizes(QIcon::Mode mode, QIcon::State st
 void QPixmapIconEngine::addPixmap(const QPixmap &pixmap, QIcon::Mode mode, QIcon::State state)
 {
     if (!pixmap.isNull()) {
-        QPixmapIconEngineEntry *pe = tryMatch(pixmap.size(), pixmap.devicePixelRatio(), mode, state);
-        if (pe && pe->size == pixmap.size() && pe->scale == pixmap.devicePixelRatio()) {
+        QPixmapIconEngineEntry *pe = tryMatch(pixmap.size() / pixmap.devicePixelRatio(),
+                                              pixmap.devicePixelRatio(), mode, state);
+        if (pe && pe->size == pixmap.size() && pe->pixmap.devicePixelRatio() == pixmap.devicePixelRatio()) {
             pe->pixmap = pixmap;
             pe->fileName.clear();
         } else {
@@ -384,40 +444,12 @@ static inline int origIcoDepth(const QImage &image)
 
 static inline int findBySize(const QList<QImage> &images, const QSize &size)
 {
-    for (int i = 0; i < images.size(); ++i) {
+    for (qsizetype i = 0; i < images.size(); ++i) {
         if (images.at(i).size() == size)
             return i;
     }
     return -1;
 }
-
-// Convenience class providing a bool read() function.
-namespace {
-class ImageReader
-{
-public:
-    ImageReader(const QString &fileName) : m_reader(fileName), m_atEnd(false) {}
-
-    QByteArray format() const { return m_reader.format(); }
-
-    bool read(QImage *image)
-    {
-        if (m_atEnd)
-            return false;
-        *image = m_reader.read();
-        if (!image->size().isValid()) {
-            m_atEnd = true;
-            return false;
-        }
-        m_atEnd = !m_reader.jumpToNextImage();
-        return true;
-    }
-
-private:
-    QImageReader m_reader;
-    bool m_atEnd;
-};
-} // namespace
 
 void QPixmapIconEngine::addFile(const QString &fileName, const QSize &size, QIcon::Mode mode, QIcon::State state)
 {
@@ -425,20 +457,23 @@ void QPixmapIconEngine::addFile(const QString &fileName, const QSize &size, QIco
         return;
     const QString abs = fileName.startsWith(u':') ? fileName : QFileInfo(fileName).absoluteFilePath();
     const bool ignoreSize = !size.isValid();
-    ImageReader imageReader(abs);
+    ImageReader imageReader(abs, size);
     const QByteArray format = imageReader.format();
     if (format.isEmpty()) // Device failed to open or unsupported format.
         return;
     QImage image;
     if (format != "ico") {
         if (ignoreSize) { // No size specified: Add all images.
-            while (imageReader.read(&image))
-                pixmaps += QPixmapIconEngineEntry(abs, image, mode, state);
+            if (imageReader.supportsReadSize()) {
+                do {
+                    pixmaps += QPixmapIconEngineEntry(abs, imageReader.size(), mode, state);
+                } while (imageReader.jumpToNextImage());
+            } else {
+                while (imageReader.read(&image))
+                    pixmaps += QPixmapIconEngineEntry(abs, image, mode, state);
+            }
         } else {
-            // Try to match size. If that fails, add a placeholder with the filename and empty pixmap for the size.
-            while (imageReader.read(&image) && image.size() != size) {}
-            pixmaps += image.size() == size ?
-                QPixmapIconEngineEntry(abs, image, mode, state) : QPixmapIconEngineEntry(abs, size, mode, state);
+            pixmaps += QPixmapIconEngineEntry(abs, size, mode, state);
         }
         return;
     }
@@ -575,14 +610,22 @@ QFactoryLoader *qt_iconEngineFactoryLoader()
   QImageWriter::supportedImageFormats() functions to retrieve a
   complete list of the supported file formats.
 
+  \note If using an SVG image file, make sure to add it before any non-SVG files,
+  so that the correct \l{Icon Engines}{icon engine} gets selected.
+
   \section1 Creating an icon from a theme or icon library
 
   The most convenient way to construct an icon is by using the
   \l{QIcon::}{fromTheme()} factory function. Qt implements access to
   the native icon library on platforms that support the
-  \l {Freedesktop Icon Theme Specification}. Since Qt 6.7, Qt also
-  provides access to the native icon library on macOS, iOS, and
-  Windows 10 and 11. On Android, Qt can access icons from the Material
+  \l {Freedesktop Icon Theme Specification}.
+
+  Applications can use the same theming specification to provide
+  their own icon library. See below for an example theme description
+  and the corresponding directory structure for the image files.
+
+  Since Qt 6.7, Qt also provides access to the native icon library on macOS,
+  iOS, and Windows 10 and 11. On Android, Qt can access icons from the Material
   design system as long as the
   \l{https://github.com/google/material-design-icons/tree/master/font}
   {MaterialIcons-Regular} font is available on the system, or bundled
@@ -591,20 +634,38 @@ QFactoryLoader *qt_iconEngineFactoryLoader()
 
   \snippet code/src_gui_image_qicon.cpp fromTheme
 
-  Applications can use the same theming specification to provide
-  their own icon library. See below for an example theme description
-  and the corresponding directory structure for the image files.
-  Icons from an application-provided theme take precedence over the
-  native icon library.
+  Since Qt 6.9, Qt can generate icons from named glyphs in an available icon
+  font. Set the \l{QIcon::themeName()}{theme name} to the family name of the
+  font, and use \l{QIcon::}{fromTheme()} with the name of the glyph.
 
-  In addition, it is possible to provide custom \l {QIconEngine}
-  {icon engines}. This allows applications to customize every aspect
-  of generated icons. With QIconEnginePlugin it is possible to register
-  different icon engines for different file suffixes, making it possible
-  for third parties to provide additional icon engines to those included
+  \snippet code/src_gui_image_qicon.cpp iconFont
+
+  The icon font can be installed on the system, or bundled as an
+  \l{QFontDatabase::addApplicationFont()}{application font}.
+
+  \section1 Icon Engines
+
+  Internally, QIcon instantiates an \l {QIconEngine} {icon engine}
+  backend to handle and render the icon images. The type of icon
+  engine is determined by the first file or pixmap or theme added to a
+  QIcon object. Additional files or pixmaps will then be handled by
+  the same engine.
+
+  Icon engines differ in the way they handle and render icons. The
+  default pixmap-based engine only deals with fixed images, while the
+  QtSvg module provides an icon engine that can re-render the provided
+  vector graphics files at the requested size for better quality. The
+  theme icon engines will typically only provide images from native
+  platform icon library, and ignore any added files or pixmaps.
+
+  In addition, it is possible to provide custom icon engines. This
+  allows applications to customize every aspect of generated
+  icons. With QIconEnginePlugin it is possible to register different
+  icon engines for different file suffixes, making it possible for
+  third parties to provide additional icon engines to those included
   with Qt.
 
-  \section1 Making Classes that Use QIcon
+  \section1 Using QIcon in the User Interface
 
   If you write your own widgets that have an option to set a small
   pixmap, consider allowing a QIcon to be set for that pixmap.  The
@@ -630,15 +691,22 @@ QFactoryLoader *qt_iconEngineFactoryLoader()
   selected item. If the widget can be toggled, the "On" mode might be
   used to draw a different icon.
 
+  QIcons generated from the native icon library, or from an icon font, use the
+  same glyph for both the \c On and \c Off states of the icon. Applications can
+  change the icon depending on the state of the respective UI control or action.
+  In a Qt Quick application, this can be done with a binding.
+
+  \snippet code/src_gui_image_qicon.qml iconFont
+
   \image icon.png QIcon
 
   \note QIcon needs a QGuiApplication instance before the icon is created.
 
   \section1 High DPI Icons
 
-  Icons that are provided by the native icon library are usually based
-  on vector graphics, and will automatically be rendered in the appropriate
-  resolution.
+  Icons that are provided by the native icon library, or generated from the
+  glyph in an icon font, are usually based on vector graphics, and will
+  automatically be rendered in the appropriate resolution.
 
   When providing your own image files via \l addFile(), then QIcon will
   use Qt's \l {High Resolution Versions of Images}{"@nx" high DPI syntax}.
@@ -784,10 +852,7 @@ QIcon &QIcon::operator=(const QIcon &other)
 
 /*!
     \fn void QIcon::swap(QIcon &other)
-    \since 4.8
-
-    Swaps icon \a other with this icon. This operation is very
-    fast and never fails.
+    \memberswap{icon}
 */
 
 /*!
@@ -802,7 +867,6 @@ QIcon::operator QVariant() const
     Returns a number that identifies the contents of this QIcon
     object. Distinct QIcon objects can have the same key if
     they refer to the same contents.
-    \since 4.3
 
     The cacheKey() will change when the icon is altered via
     addPixmap() or addFile().
@@ -863,6 +927,12 @@ QPixmap QIcon::pixmap(const QSize &size, Mode mode, State state) const
   might be smaller than requested, but never larger, unless the device-pixel ratio
   of the returned pixmap is larger than 1.
 
+  \note The requested devicePixelRatio might not match the returned one. This delays the
+  scaling of the QPixmap until it is drawn later on.
+  \note Prior to Qt 6.8 this function wronlgy passed the device dependent pixmap size to
+  QIconEngine::scaledPixmap(), since Qt 6.8 it's the device independent size (not scaled
+  with the \a devicePixelRatio).
+
   \sa  actualSize(), paint()
 */
 QPixmap QIcon::pixmap(const QSize &size, qreal devicePixelRatio, Mode mode, State state) const
@@ -874,15 +944,10 @@ QPixmap QIcon::pixmap(const QSize &size, qreal devicePixelRatio, Mode mode, Stat
     if (devicePixelRatio == -1)
         devicePixelRatio = qApp->devicePixelRatio();
 
-    // Handle the simple normal-dpi case
-    if (!(devicePixelRatio > 1.0)) {
-        QPixmap pixmap = d->engine->pixmap(size, mode, state);
-        pixmap.setDevicePixelRatio(1.0);
-        return pixmap;
-    }
-
-    // Try get a pixmap that is big enough to be displayed at device pixel resolution.
-    QPixmap pixmap = d->engine->scaledPixmap(size * devicePixelRatio, mode, state, devicePixelRatio);
+    QPixmap pixmap = d->engine->scaledPixmap(size, mode, state, devicePixelRatio);
+    // even though scaledPixmap() should return a pixmap with an appropriate size, we
+    // can not rely on it. Therefore we simply set the dpr to a correct size to make
+    // sure the pixmap is not larger than requested.
     pixmap.setDevicePixelRatio(d->pixmapDevicePixelRatio(devicePixelRatio, size, pixmap.size()));
     return pixmap;
 }
@@ -1112,6 +1177,7 @@ void QIcon::addFile(const QString &fileName, const QSize &size, Mode mode, State
     if (fileName.isEmpty())
         return;
     detach();
+    bool alreadyAdded = false;
     if (!d) {
 
         QFileInfo info(fileName);
@@ -1121,20 +1187,36 @@ void QIcon::addFile(const QString &fileName, const QSize &size, Mode mode, State
             suffix = QMimeDatabase().mimeTypeForFile(info).preferredSuffix(); // determination from contents
 #endif // mimetype
         QIconEngine *engine = iconEngineFromSuffix(fileName, suffix);
+        if (engine)
+            alreadyAdded = !engine->isNull();
         d = new QIconPrivate(engine ? engine : new QPixmapIconEngine);
     }
+    if (!alreadyAdded)
+        d->engine->addFile(fileName, size, mode, state);
 
-    d->engine->addFile(fileName, size, mode, state);
+    if (d->engine->key() == "svg"_L1)   // not needed and also not supported
+        return;
 
     // Check if a "@Nx" file exists and add it.
-    QString atNxFileName = qt_findAtNxFile(fileName, qApp->devicePixelRatio());
-    if (atNxFileName != fileName)
-        d->engine->addFile(atNxFileName, size, mode, state);
+    QVarLengthArray<int, 4> devicePixelRatios;
+    const auto screens = qApp->screens();
+    for (const auto *screen : screens) {
+        const auto dpr = qCeil(screen->devicePixelRatio()); // qt_findAtNxFile only supports integer values
+        if (dpr >= 1 && !devicePixelRatios.contains(dpr))
+            devicePixelRatios.push_back(dpr);
+    }
+    std::sort(devicePixelRatios.begin(), devicePixelRatios.end(), std::greater<int>());
+    qreal sourceDevicePixelRatio = std::numeric_limits<qreal>::max();
+    for (const auto dpr : std::as_const(devicePixelRatios)) {
+        if (dpr >= sourceDevicePixelRatio)
+            continue;
+        const QString atNxFileName = qt_findAtNxFile(fileName, dpr, &sourceDevicePixelRatio);
+        if (atNxFileName != fileName)
+            d->engine->addFile(atNxFileName, size, mode, state);
+    }
 }
 
 /*!
-    \since 4.5
-
     Returns a list of available icon sizes for the specified \a mode and
     \a state.
 */
@@ -1146,8 +1228,6 @@ QList<QSize> QIcon::availableSizes(Mode mode, State state) const
 }
 
 /*!
-    \since 4.7
-
     Returns the name used to create the icon, if available.
 
     Depending on the way the icon was created, it may have an associated
@@ -1163,8 +1243,6 @@ QString QIcon::name() const
 }
 
 /*!
-    \since 4.6
-
     Sets the search paths for icon themes to \a paths.
 
     The content of \a paths should follow the theme format
@@ -1178,8 +1256,6 @@ void QIcon::setThemeSearchPaths(const QStringList &paths)
 }
 
 /*!
-    \since 4.6
-
     Returns the search paths for icon themes.
 
     The default search paths will be defined by the platform.
@@ -1234,16 +1310,17 @@ void QIcon::setFallbackSearchPaths(const QStringList &paths)
 }
 
 /*!
-    \since 4.6
-
     Sets the current icon theme to \a name.
 
-    The theme will be will be looked up in themeSearchPaths().
+    If the theme matches the name of an installed font that provides named
+    glyphs, then QIcon::fromTheme calls that match one of the glyphs will
+    produce an icon for that glyph.
 
-    At the moment the only supported icon theme format is the
-    \l{Freedesktop Icon Theme Specification}. The \a name should
-    correspond to a directory name in the themeSearchPath()
-    containing an \c index.theme file describing its contents.
+    Otherwise, the theme will be looked up in themeSearchPaths(). At the moment
+    the only supported icon theme format is the \l{Freedesktop Icon Theme
+    Specification}. The \a name should correspond to a directory name in the
+    themeSearchPath() containing an \c index.theme file describing its
+    contents.
 
     \sa themeSearchPaths(), themeName(),
     {Freedesktop Icon Theme Specification}
@@ -1254,8 +1331,6 @@ void QIcon::setThemeName(const QString &name)
 }
 
 /*!
-    \since 4.6
-
     Returns the name of the current icon theme.
 
     If not set, the current icon theme will be defined by the
@@ -1316,8 +1391,6 @@ void QIcon::setFallbackThemeName(const QString &name)
 }
 
 /*!
-    \since 4.6
-
     Returns the QIcon corresponding to \a name in the
     \l{themeName()}{current icon theme}.
 
@@ -1387,8 +1460,6 @@ QIcon QIcon::fromTheme(const QString &name, const QIcon &fallback)
 }
 
 /*!
-    \since 4.6
-
     Returns \c true if there is an icon available for \a name in the
     current icon theme or any of the fallbacks, as described by
     fromTheme(), otherwise returns \c false.
@@ -1745,7 +1816,7 @@ static constexpr QLatin1StringView themeIconName(QIcon::ThemeIcon icon)
 
     \omitvalue NThemeIcons
 
-    \sa {QIcon#Creating an icon from a theme or icon library},
+    \sa {Creating an icon from a theme or icon library},
         fromTheme()
 */
 
@@ -1806,6 +1877,9 @@ QIcon QIcon::fromTheme(QIcon::ThemeIcon icon, const QIcon &fallback)
 */
 void QIcon::setIsMask(bool isMask)
 {
+    if (isMask == (d && d->is_mask))
+        return;
+
     detach();
     if (!d)
         d = new QIconPrivate(new QPixmapIconEngine);
@@ -1835,7 +1909,6 @@ bool QIcon::isMask() const
 /*!
     \fn QDataStream &operator<<(QDataStream &stream, const QIcon &icon)
     \relates QIcon
-    \since 4.2
 
     Writes the given \a icon to the given \a stream as a PNG
     image. If the icon contains more than one image, all images will
@@ -1876,7 +1949,6 @@ QDataStream &operator<<(QDataStream &s, const QIcon &icon)
 /*!
     \fn QDataStream &operator>>(QDataStream &stream, QIcon &icon)
     \relates QIcon
-    \since 4.2
 
     Reads an image, or a set of images, from the given \a stream into
     the given \a icon.
@@ -1981,6 +2053,8 @@ QDebug operator<<(QDebug dbg, const QIcon &i)
 QString qt_findAtNxFile(const QString &baseFileName, qreal targetDevicePixelRatio,
                         qreal *sourceDevicePixelRatio)
 {
+    if (sourceDevicePixelRatio)
+        *sourceDevicePixelRatio = 1;
     if (targetDevicePixelRatio <= 1.0)
         return baseFileName;
 

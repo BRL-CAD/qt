@@ -1,5 +1,6 @@
 // Copyright (C) 2016 The Qt Company Ltd.
 // SPDX-License-Identifier: LicenseRef-Qt-Commercial OR LGPL-3.0-only OR GPL-2.0-only OR GPL-3.0-only
+// Qt-Security score:significant reason:default
 
 #ifndef QAUTHENTICATOR_P_H
 #define QAUTHENTICATOR_P_H
@@ -26,6 +27,7 @@
 QT_BEGIN_NAMESPACE
 
 class QHttpResponseHeader;
+class QHttpHeaders;
 #if QT_CONFIG(sspi) // SSPI
 class QSSPIWindowsHandles;
 #elif QT_CONFIG(gssapi) // GSSAPI
@@ -80,8 +82,7 @@ public:
     static QHash<QByteArray, QByteArray>
     parseDigestAuthenticationChallenge(QByteArrayView challenge);
 
-    void parseHttpResponse(const QList<QPair<QByteArray, QByteArray>> &, bool isProxy,
-                           QStringView host);
+    void parseHttpResponse(const QHttpHeaders &headers, bool isProxy, QStringView host);
     void updateCredentials();
 
     static bool isMethodSupported(QByteArrayView method);

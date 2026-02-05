@@ -1,5 +1,6 @@
 -- Copyright (C) 2020 The Qt Company Ltd.
 -- SPDX-License-Identifier: LicenseRef-Qt-Commercial OR LGPL-3.0-only OR GPL-2.0-only OR GPL-3.0-only
+-- Qt-Security score:critical reason:data-parser
 
 %parser QXmlStreamGrammar
 %impl           qxmlstreamparser_p.h
@@ -111,6 +112,7 @@
 
 /.// Copyright (C) 2020 The Qt Company Ltd.
 // SPDX-License-Identifier: LicenseRef-Qt-Commercial OR LGPL-3.0-only OR GPL-2.0-only OR GPL-3.0-only
+// Qt-Security score:critical reason:data-parser
 
 
 //
@@ -241,7 +243,7 @@ bool QXmlStreamReaderPrivate::parse()
 
     act = state_stack[tos];
 
-    forever {
+    while (true) {
         if (token == -1 && - TERMINAL_COUNT != action_index[act]) {
             uint cu = getChar();
             token = NOTOKEN;
@@ -1115,8 +1117,8 @@ attribute_value_content ::= literal_content | char_ref | entity_ref_in_attribute
 attribute ::= qname space_opt EQ space_opt attribute_value;
 /.
         case $rule_number: {
-            XmlStringRef prefix = symPrefix(1);
-            if (prefix.isEmpty() && symString(1) == "xmlns"_L1 && namespaceProcessing) {
+            const XmlStringRef prfx = symPrefix(1);
+            if (prfx.isEmpty() && symString(1) == "xmlns"_L1 && namespaceProcessing) {
                 NamespaceDeclaration &namespaceDeclaration = namespaceDeclarations.push();
                 namespaceDeclaration.prefix.clear();
 
@@ -1165,7 +1167,7 @@ attribute ::= qname space_opt EQ space_opt attribute_value;
                     attribute.value.pos = pos;
                     attribute.value.len = n;
                 }
-                if (prefix == "xmlns"_L1 && namespaceProcessing) {
+                if (prfx == "xmlns"_L1 && namespaceProcessing) {
                     NamespaceDeclaration &namespaceDeclaration = namespaceDeclarations.push();
                     XmlStringRef namespacePrefix = symString(attribute.key);
                     XmlStringRef namespaceUri = symString(attribute.value);

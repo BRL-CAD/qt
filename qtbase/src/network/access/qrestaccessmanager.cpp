@@ -1,5 +1,6 @@
 // Copyright (C) 2023 The Qt Company Ltd.
 // SPDX-License-Identifier: LicenseRef-Qt-Commercial OR LGPL-3.0-only OR GPL-2.0-only OR GPL-3.0-only
+// Qt-Security score:significant reason:default
 
 #include "qrestaccessmanager.h"
 #include "qrestaccessmanager_p.h"
@@ -30,8 +31,6 @@ Q_LOGGING_CATEGORY(lcQrest, "qt.network.access.rest")
     \ingroup network
     \inmodule QtNetwork
     \reentrant
-
-    \preliminary
 
     QRestAccessManager is a convenience wrapper on top of
     QNetworkAccessManager. It amends datatypes and HTTP methods
@@ -689,7 +688,11 @@ QNetworkReply *QRestAccessManager::putWithDataImpl(const QNetworkRequest &reques
     return d->executeRequest([&](auto qnam) { return qnam->put(request, data); }, context, slot);
 }
 
-static const auto PATCH = "PATCH"_ba;
+static const QByteArray& PATCH()
+{
+    static auto patch = "PATCH"_ba;
+    return patch;
+}
 
 QNetworkReply *QRestAccessManager::patchWithDataImpl(const QNetworkRequest &request,
                                                 const QJsonDocument &data, const QObject *context,
@@ -697,7 +700,7 @@ QNetworkReply *QRestAccessManager::patchWithDataImpl(const QNetworkRequest &requ
 {
     Q_D(QRestAccessManager);
     return d->executeRequest(
-           [](auto qnam, auto req, auto data) { return qnam->sendCustomRequest(req, PATCH, data); },
+           [](auto qnam, auto req, auto data) { return qnam->sendCustomRequest(req, PATCH(), data); },
            data, request, context, slot);
 }
 
@@ -713,7 +716,7 @@ QNetworkReply *QRestAccessManager::patchWithDataImpl(const QNetworkRequest &requ
                                                 QtPrivate::QSlotObjectBase *slot)
 {
     Q_D(QRestAccessManager);
-    return d->executeRequest([&](auto qnam) { return qnam->sendCustomRequest(request, PATCH, data); },
+    return d->executeRequest([&](auto qnam) { return qnam->sendCustomRequest(request, PATCH(), data); },
                              context, slot);
 }
 
@@ -721,7 +724,7 @@ QNetworkReply *QRestAccessManager::patchWithDataImpl(const QNetworkRequest &requ
                                            const QObject *context, QtPrivate::QSlotObjectBase *slot)
 {
     Q_D(QRestAccessManager);
-    return d->executeRequest([&](auto qnam) { return qnam->sendCustomRequest(request, PATCH, data); },
+    return d->executeRequest([&](auto qnam) { return qnam->sendCustomRequest(request, PATCH(), data); },
                              context, slot);
 }
 
@@ -757,11 +760,11 @@ QNetworkReply *QRestAccessManager::customWithDataImpl(const QNetworkRequest &req
 
 QNetworkReply *QRestAccessManagerPrivate::createActiveRequest(QNetworkReply *reply,
                                                     const QObject *contextObject,
-                                                    QtPrivate::QSlotObjectBase *slot)
+                                                    QtPrivate::SlotObjUniquePtr slot)
 {
     Q_Q(QRestAccessManager);
     Q_ASSERT(reply);
-    QtPrivate::SlotObjSharedPtr slotPtr(QtPrivate::SlotObjUniquePtr{slot}); // adopts
+    QtPrivate::SlotObjSharedPtr slotPtr(std::move(slot)); // adopts
     activeRequests.insert(reply, CallerInfo{contextObject, slotPtr});
     // The signal connections below are made to 'q' to avoid stray signal
     // handling upon its destruction while requests were still in progress

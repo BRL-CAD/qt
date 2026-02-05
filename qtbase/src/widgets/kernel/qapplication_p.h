@@ -1,5 +1,6 @@
 // Copyright (C) 2016 The Qt Company Ltd.
 // SPDX-License-Identifier: LicenseRef-Qt-Commercial OR LGPL-3.0-only OR GPL-2.0-only OR GPL-3.0-only
+// Qt-Security score:significant reason:default
 
 #ifndef QAPPLICATION_P_H
 #define QAPPLICATION_P_H
@@ -75,6 +76,7 @@ public:
     static void dispatchEnterLeave(QWidget *enter, QWidget *leave, const QPointF &globalPosF);
     static QWidget *desktop();
     void notifyWindowIconChanged() override;
+    bool compressEvent(QEvent *event, QObject *receiver, QPostEventList *postedEvents) final;
 
 #ifndef QT_NO_ACTION
     QActionPrivate *createActionPrivate() const override;
@@ -107,10 +109,10 @@ public:
     static void setActiveWindow(QWidget* act);
 
     static bool inPopupMode();
-    bool popupActive() override { return inPopupMode(); }
-    bool closeAllPopups() override;
     void closePopup(QWidget *popup);
     void openPopup(QWidget *popup);
+    static bool replayMousePress;
+
     static void setFocusWidget(QWidget *focus, Qt::FocusReason reason);
     static QWidget *focusNextPrevChild_helper(QWidget *toplevel, bool next,
                                               bool *wrappingOccurred = nullptr);
@@ -122,7 +124,7 @@ public:
 #endif
 
     QBasicTimer toolTipWakeUp, toolTipFallAsleep;
-    QPoint toolTipPos, toolTipGlobalPos, hoverGlobalPos;
+    QPoint toolTipPos, toolTipGlobalPos;
     QPointer<QWidget> toolTipWidget;
 
     static QSize app_strut;
@@ -170,7 +172,7 @@ public:
     static QString styleSheet;
 #endif
     static QPointer<QWidget> leaveAfterRelease;
-    static QWidget *pickMouseReceiver(QWidget *candidate, const QPoint &windowPos, QPoint *pos,
+    static QWidget *pickMouseReceiver(QWidget *candidate, const QPointF &windowPos, QPointF *pos,
                                       QEvent::Type type, Qt::MouseButtons buttons,
                                       QWidget *buttonDown, QWidget *alienWidget);
     static bool sendMouseEvent(QWidget *receiver, QMouseEvent *event, QWidget *alienWidget,

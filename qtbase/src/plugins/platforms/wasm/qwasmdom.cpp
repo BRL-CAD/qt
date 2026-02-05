@@ -3,6 +3,7 @@
 
 #include "qwasmdom.h"
 
+#include <QtCore/qdebug.h>
 #include <QtCore/qdir.h>
 #include <QtCore/qfile.h>
 #include <QtCore/qpoint.h>
@@ -181,10 +182,9 @@ void DataTransfer::toMimeDataWithFile(std::function<void(QMimeData *)> callback)
                     mimeContext->deref();
                     return;
                 }
-                if (file.write(fileContent) < 0) {
+                if (file.write(fileContent) < 0)
                     qWarning() << "Write failed";
-                    file.close();
-                }
+                file.close();
                 mimeContext->deref();
             });
             break;

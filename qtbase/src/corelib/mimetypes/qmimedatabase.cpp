@@ -1,6 +1,7 @@
 // Copyright (C) 2016 The Qt Company Ltd.
 // Copyright (C) 2015 Klaralvdalens Datakonsult AB, a KDAB Group company, info@kdab.com, author David Faure <david.faure@kdab.com>
 // SPDX-License-Identifier: LicenseRef-Qt-Commercial OR LGPL-3.0-only OR GPL-2.0-only OR GPL-3.0-only
+// Qt-Security score:critical reason:data-parser
 
 #include <qplatformdefs.h> // always first
 
@@ -71,7 +72,11 @@ bool QMimeDatabasePrivate::shouldCheck()
 
 static QStringList locateMimeDirectories()
 {
-    return QStandardPaths::locateAll(QStandardPaths::GenericDataLocation, QStringLiteral("mime"), QStandardPaths::LocateDirectory);
+    QStringList dirs =
+            QStandardPaths::locateAll(QStandardPaths::GenericDataLocation, QStringLiteral("mime"),
+                                      QStandardPaths::LocateDirectory);
+    dirs.append(u":/qt-project.org/qmime"_s);
+    return dirs;
 }
 
 #if defined(Q_OS_UNIX) && !defined(Q_OS_INTEGRITY)
@@ -390,9 +395,9 @@ QMimeType QMimeDatabasePrivate::mimeTypeForFileNameAndData(const QString &fileNa
             if (candidateByData.isValid() && magicAccuracy > 0) {
                 const QString sniffedMime = candidateByData.name();
                 // If the sniffedMime matches a highest-weight glob match, use it
-                if (candidatesByName.m_matchingMimeTypes.contains(sniffedMime)) {
+                if (candidatesByName.m_matchingMimeTypes.contains(sniffedMime))
                     return candidateByData;
-                }
+
                 for (const QString &m : std::as_const(candidatesByName.m_allMatchingMimeTypes)) {
                     if (inherits(m, sniffedMime)) {
                         // We have magic + pattern pointing to this, so it's a pretty good match

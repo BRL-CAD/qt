@@ -1,5 +1,6 @@
 // Copyright (C) 2016 The Qt Company Ltd.
 // SPDX-License-Identifier: LicenseRef-Qt-Commercial OR LGPL-3.0-only OR GPL-2.0-only OR GPL-3.0-only
+// Qt-Security score:significant reason:default
 
 #include "qwindowdefs.h"
 #include "qfontdialog.h"
@@ -108,8 +109,6 @@ QFontDialogPrivate::~QFontDialogPrivate()
 */
 
 /*!
-    \since 4.5
-
     Constructs a standard font dialog.
 
     Use setCurrentFont() to set the initial font attributes.
@@ -126,8 +125,6 @@ QFontDialog::QFontDialog(QWidget *parent)
 }
 
 /*!
-    \since 4.5
-
     Constructs a standard font dialog with the given \a parent and specified
     \a initial font.
 */
@@ -330,10 +327,6 @@ QFontDialog::~QFontDialog()
   \snippet code/src_gui_dialogs_qfontdialog.cpp 3
   In this example, if the user clicks OK the font they chose will be
   used, and if they click Cancel the original font is used.
-
-  \warning Do not delete \a parent during the execution of the dialog.
-           If you want to do this, you should create the dialog
-           yourself using one of the QFontDialog constructors.
 */
 QFont QFontDialog::getFont(bool *ok, const QFont &initial, QWidget *parent, const QString &title,
                            FontDialogOptions options)
@@ -356,10 +349,6 @@ QFont QFontDialog::getFont(bool *ok, const QFont &initial, QWidget *parent, cons
 
   Example:
   \snippet code/src_gui_dialogs_qfontdialog.cpp 4
-
-  \warning Do not delete \a parent during the execution of the dialog.
-           If you want to do this, you should create the dialog
-           yourself using one of the QFontDialog constructors.
 */
 QFont QFontDialog::getFont(bool *ok, QWidget *parent)
 {
@@ -370,17 +359,17 @@ QFont QFontDialog::getFont(bool *ok, QWidget *parent)
 QFont QFontDialogPrivate::getFont(bool *ok, const QFont &initial, QWidget *parent,
                                   const QString &title, QFontDialog::FontDialogOptions options)
 {
-    QFontDialog dlg(parent);
-    dlg.setOptions(options);
-    dlg.setCurrentFont(initial);
+    QAutoPointer<QFontDialog> dlg(new QFontDialog(parent));
+    dlg->setOptions(options);
+    dlg->setCurrentFont(initial);
     if (!title.isEmpty())
-        dlg.setWindowTitle(title);
+        dlg->setWindowTitle(title);
 
-    int ret = (dlg.exec() || (options & QFontDialog::NoButtons));
+    int ret = (dlg->exec() || (options & QFontDialog::NoButtons));
     if (ok)
         *ok = !!ret;
-    if (ret) {
-        return dlg.selectedFont();
+    if (ret && bool(dlg)) {
+        return dlg->selectedFont();
     } else {
         return initial;
     }
@@ -509,7 +498,7 @@ void QFontDialogPrivate::updateFamilies()
 
         //and try some fall backs
         match_t type = MATCH_NONE;
-        if (bestFamilyType <= MATCH_NONE && familyName2 == QStringLiteral("helvetica"))
+        if (bestFamilyType <= MATCH_NONE && familyName2 == "helvetica"_L1)
             type = MATCH_LAST_RESORT;
         if (bestFamilyType <= MATCH_LAST_RESORT && familyName2 == f.families().constFirst())
             type = MATCH_APP;
@@ -773,15 +762,11 @@ void QFontDialog::changeEvent(QEvent *e)
 }
 
 /*!
-    \since 4.5
-
     \property QFontDialog::currentFont
     \brief the current font of the dialog.
 */
 
 /*!
-    \since 4.5
-
     Sets the font highlighted in the QFontDialog to the given \a font.
 
     \sa selectedFont()
@@ -807,8 +792,6 @@ void QFontDialog::setCurrentFont(const QFont &font)
 }
 
 /*!
-    \since 4.5
-
     Returns the current font.
 
     \sa selectedFont()
@@ -840,7 +823,6 @@ QFont QFontDialog::selectedFont() const
 
 /*!
     \enum QFontDialog::FontDialogOption
-    \since 4.5
 
     This enum specifies various options that affect the look and feel
     of a font dialog.
@@ -891,7 +873,6 @@ bool QFontDialog::testOption(FontDialogOption option) const
 /*!
     \property QFontDialog::options
     \brief the various options that affect the look and feel of the dialog
-    \since 4.5
 
     By default, all options are disabled.
 
@@ -919,8 +900,6 @@ QFontDialog::FontDialogOptions QFontDialog::options() const
 }
 
 /*!
-    \since 4.5
-
     Opens the dialog and connects its fontSelected() signal to the slot specified
     by \a receiver and \a member.
 
@@ -936,8 +915,6 @@ void QFontDialog::open(QObject *receiver, const char *member)
 }
 
 /*!
-    \since 4.5
-
     \fn void QFontDialog::currentFontChanged(const QFont &font)
 
     This signal is emitted when the current font is changed. The new font is
@@ -950,8 +927,6 @@ void QFontDialog::open(QObject *receiver, const char *member)
 */
 
 /*!
-    \since 4.5
-
     \fn void QFontDialog::fontSelected(const QFont &font)
 
     This signal is emitted when a font has been selected. The selected font is
@@ -982,7 +957,9 @@ void QFontDialog::setVisible(bool visible)
 */
 void QFontDialogPrivate::setVisible(bool visible)
 {
-    Q_Q(QFontDialog);
+    // Don't use Q_Q here! This function is called from ~QDialog,
+    // so Q_Q calling q_func() invokes undefined behavior (invalid cast in q_func()).
+    const auto q = static_cast<QDialog *>(q_ptr);
 
     if (canBeNativeDialog())
         setNativeDialogVisible(visible);

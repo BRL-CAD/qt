@@ -1,5 +1,6 @@
 // Copyright (C) 2022 The Qt Company Ltd.
 // SPDX-License-Identifier: LicenseRef-Qt-Commercial OR LGPL-3.0-only OR GPL-2.0-only OR GPL-3.0-only
+// Qt-Security score:significant reason:default
 
 #ifndef QGTK3STORAGE_P_H
 #define QGTK3STORAGE_P_H
@@ -27,17 +28,24 @@
 #include <private/qflatmap_p.h>
 
 QT_BEGIN_NAMESPACE
+
+#if QT_CONFIG(dbus)
+class QGnomePortalInterface;
+#endif
+
 class QGtk3Storage
 {
     Q_GADGET
 public:
     QGtk3Storage();
+    ~QGtk3Storage();
 
     // Enum documented in cpp file. Please keep it in line with updates made here.
     enum class SourceType {
         Gtk,
         Fixed,
         Modified,
+        Mixed,
         Invalid
     };
     Q_ENUM(SourceType)
@@ -77,6 +85,27 @@ public:
         }
     };
 
+    // Mixed source: Populate a brush by mixing two brushes.
+    // Useful for creating disabled color by mixing,
+    // for example the background and foreground colors.
+    struct MixSources {
+        QPalette::ColorGroup sourceGroup; // source group of the mixing color roles
+        QPalette::ColorRole colorRole1;
+        QPalette::ColorRole colorRole2;
+        QDebug operator<<(QDebug dbg)
+        {
+            return dbg << "QGtkStorage::MixSources(sourceGroup=" << sourceGroup
+                       << ", colorRole1=" << colorRole1
+                       << ", colorRole2=" << colorRole2 << ")";
+        }
+        static inline QColor mixColors(const QColor &color1, const QColor &color2)
+        {
+            return QColor{ (color1.red() + color2.red()) / 2,
+                           (color1.green() + color2.green()) / 2,
+                           (color1.blue() + color2.blue()) / 2 };
+        }
+    };
+
     // Fixed source: Populate a brush with fixed values rather than reading GTK
     struct FixedSource  {
         QBrush fixedBrush;
@@ -92,6 +121,7 @@ public:
         Gtk3Source gtk3;
         RecursiveSource rec;
         FixedSource fix;
+        MixSources mix;
 
         // GTK constructor
         Source(QGtk3Interface::QGtkWidget wtype, QGtk3Interface::QGtkColorSource csource,
@@ -115,7 +145,7 @@ public:
             rec.lighter = p_lighter;
         }
 
-        // Recursive ocnstructor for color modification
+        // Recursive constructor for color modification
         Source(QPalette::ColorGroup group, QPalette::ColorRole role,
                Qt::ColorScheme scheme, int p_red, int p_green, int p_blue)
                : sourceType(SourceType::Modified)
@@ -142,14 +172,24 @@ public:
             rec.deltaBlue = p_blue;
         }
 
+        // Mixed constructor for color modification
+        Source(QPalette::ColorGroup sourceGroup,
+               QPalette::ColorRole role1, QPalette::ColorRole role2)
+            : sourceType(SourceType::Mixed)
+        {
+            mix.sourceGroup = sourceGroup;
+            mix.colorRole1 = role1;
+            mix.colorRole2 = role2;
+        }
+
         // Fixed Source constructor
         Source(const QBrush &brush) : sourceType(SourceType::Fixed)
         {
             fix.fixedBrush = brush;
-        };
+        }
 
         // Invalid constructor and getter
-        Source() : sourceType(SourceType::Invalid) {};
+        Source() : sourceType(SourceType::Invalid) {}
         bool isValid() const { return sourceType != SourceType::Invalid; }
 
         // Debug
@@ -168,11 +208,11 @@ public:
         // Generic constructor
         TargetBrush(QPalette::ColorGroup group, QPalette::ColorRole role,
                     Qt::ColorScheme scheme = Qt::ColorScheme::Unknown) :
-                    colorGroup(group), colorRole(role), colorScheme(scheme) {};
+                    colorGroup(group), colorRole(role), colorScheme(scheme) {}
 
         // Copy constructor with color scheme modifier for dark/light aware search
         TargetBrush(const TargetBrush &other, Qt::ColorScheme scheme) :
-            colorGroup(other.colorGroup), colorRole(other.colorRole), colorScheme(scheme) {};
+            colorGroup(other.colorGroup), colorRole(other.colorRole), colorScheme(scheme) {}
 
         // struct becomes key of a map, so operator< is needed
         bool operator<(const TargetBrush& other) const {
@@ -190,9 +230,9 @@ public:
     // Public getters
     const QPalette *palette(QPlatformTheme::Palette = QPlatformTheme::SystemPalette) const;
     QPixmap standardPixmap(QPlatformTheme::StandardPixmap standardPixmap, const QSizeF &size) const;
-    Qt::ColorScheme colorScheme() const { return m_colorScheme; };
+    Qt::ColorScheme colorScheme() const { return m_colorScheme; }
     static QPalette standardPalette();
-    const QString themeName() const { return m_interface ? m_interface->themeName() : QString(); };
+    const QString themeName() const { return m_interface ? m_interface->themeName() : QString(); }
     const QFont *font(QPlatformTheme::Font type) const;
     QIcon fileIcon(const QFileInfo &fileInfo) const;
 
@@ -205,7 +245,9 @@ private:
     PaletteMap m_palettes;
 
     std::unique_ptr<QGtk3Interface> m_interface;
-
+#if QT_CONFIG(dbus)
+    std::unique_ptr<QGnomePortalInterface> m_portalInterface;
+#endif
 
     Qt::ColorScheme m_colorScheme = Qt::ColorScheme::Unknown;
 

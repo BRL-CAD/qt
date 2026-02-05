@@ -105,11 +105,11 @@
 
     Constructs an array with the contents in the iterator range [\a first, \a last).
 
-    This constructor only participates in overload resolution if
+    The value type of \c InputIterator must be convertible to \c T.
+
+    \constraints
     \c InputIterator meets the requirements of an
     \l {https://en.cppreference.com/w/cpp/named_req/InputIterator} {LegacyInputIterator}.
-
-    The value type of \c InputIterator must be convertible to \c T.
 */
 
 
@@ -138,6 +138,15 @@
     Same as size().
 
     \sa isEmpty(), resize()
+*/
+
+/*! \fn template<class T, qsizetype Prealloc> qsizetype QVarLengthArray<T, Prealloc>::max_size() const
+    \fn template<class T, qsizetype Prealloc> qsizetype QVarLengthArray<T, Prealloc>::maxSize()
+    \since 6.8
+
+    It returns the maximum number of elements that the array can
+    theoretically hold. In practice, the number can be much smaller,
+    limited by the amount of memory available to the system.
 */
 
 /*! \fn template<class T, qsizetype Prealloc> T& QVarLengthArray<T, Prealloc>::first()
@@ -460,6 +469,15 @@
 
     If the index \a i is out of bounds, the function returns
     \a defaultValue.
+*/
+
+/*
+    \var QVarLengthArray::PreallocatedSize
+    \since 6.8
+
+    The same value as the \c{Prealloc} template argument. Provided for easier
+    access compared to manually extracting the value from the template
+    argument.
 */
 
 /*!
@@ -858,6 +876,21 @@
     of \c operator<().
 */
 
+/*! \fn template<typename T, qsizetype Prealloc1, qsizetype Prealloc2> auto operator<=>(const QVarLengthArray<T,Prealloc1> &lhs, const QVarLengthArray<T,Prealloc2> &rhs)
+    \since 6.9
+    \relates QVarLengthArray
+
+    Compares the contents of \a lhs and \a rhs
+    \l {https://en.cppreference.com/w/cpp/algorithm/lexicographical_compare_three_way}
+    {lexicographically}. Returns the result of the strongest applicable category
+    type, that is \c {decltype(lhs[0] <=> rhs[0])} if \c {operator<=>()} is
+    available for type \c {T}; otherwise \c {std::weak_ordering}.
+
+    \note This operator is only available in C++20 mode, and when the underlying
+    type \c T models the \c {std::three_way_comparable} concept
+    or provides \c {operator<()}.
+*/
+
 /*! \fn template<class T, qsizetype Prealloc> QVarLengthArray<T, Prealloc> &QVarLengthArray<T, Prealloc>::operator<<(const T &value)
 
     \since 4.8
@@ -932,11 +965,8 @@
 
 /*!
     \fn template <typename T, qsizetype Prealloc> size_t qHash(const QVarLengthArray<T, Prealloc> &key, size_t seed = 0)
-    \relates QVarLengthArray
+    \qhasholdT{QVarLengthArray}{T}
     \since 5.14
-
-    Returns the hash value for \a key, using \a seed to seed the
-    calculation.
 */
 
 /*! \fn template <typename T, qsizetype Prealloc> template <typename AT = T> qsizetype QVarLengthArray<T, Prealloc>::removeAll(const AT &t)
@@ -1010,11 +1040,11 @@
     range [\a first, \a last). This function will only allocate memory if the
     number of elements in the range exceeds the capacity of the container.
 
-    This function overload only participates in overload resolution if
+    The behavior is undefined if either argument is an iterator into *this.
+
+    \constraints
     \c InputIterator meets the requirements of an
     \l {https://en.cppreference.com/w/cpp/named_req/InputIterator} {LegacyInputIterator}.
-
-    The behavior is undefined if either argument is an iterator into *this.
 */
 
 /*! \fn template <class T, qsizetype Prealloc> QVarLengthArray<T, Prealloc>& QVarLengthArray<T, Prealloc>::assign(std::initializer_list<T> list)

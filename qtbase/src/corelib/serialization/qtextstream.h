@@ -1,13 +1,15 @@
 // Copyright (C) 2016 The Qt Company Ltd.
 // SPDX-License-Identifier: LicenseRef-Qt-Commercial OR LGPL-3.0-only OR GPL-2.0-only OR GPL-3.0-only
+// Qt-Security score:significant reason:header-decls-only
 
 #ifndef QTEXTSTREAM_H
 #define QTEXTSTREAM_H
 
 #include <QtCore/qiodevicebase.h>
 #include <QtCore/qchar.h>
-#include <QtCore/qscopedpointer.h>
 #include <QtCore/qstringconverter_base.h>
+
+#include <memory>
 
 #include <stdio.h>
 
@@ -169,12 +171,14 @@ public:
     QTextStream &operator<<(const char *c);
     QTextStream &operator<<(const void *ptr);
 
+    explicit operator bool() const noexcept { return status() == Ok; }
+
 private:
     Q_DISABLE_COPY(QTextStream)
     friend class QDebugStateSaverPrivate;
     friend class QDebug;
 
-    QScopedPointer<QTextStreamPrivate> d_ptr;
+    std::unique_ptr<QTextStreamPrivate> d_ptr;
 };
 
 Q_DECLARE_OPERATORS_FOR_FLAGS(QTextStream::NumberFlags)

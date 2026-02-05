@@ -26,6 +26,8 @@ private Q_SLOTS:
     void operators();
     void timeout();
     void userInfo();
+    void priority();
+    void attributes();
 
 private:
     const QUrl url1{u"http://foo.io"_s};
@@ -63,6 +65,15 @@ void tst_QNetworkRequestFactory::urlAndPath_data()
     QTest::newRow("baseUrl_withpath_withslash_2") << base << u"/path/to"_s << result;
     QTest::newRow("baseUrl_withpath_withslash_3") << base << u"path/to"_s << result;
 
+    base.setUrl("http://xyz.io/v1/");
+    // if '!' isn't encoded, it stays not encoded.
+    result.setUrl("http://xyz.io/v1/path/to/Hello%20World!.xml");
+    QTest::newRow("baseUrl_withpath_not_encoded_1") << base << u"/path/to/Hello%20World!.xml"_s << result;
+
+    // if '!' is encoded, then createRequest() should NOT decode it, see QTBUG-138878
+    result.setUrl("http://xyz.io/v1/path/to/Hello%20World%21.xml");
+    QTest::newRow("baseUrl_withpath_encoded_2") << base << u"/path/to/Hello%20World%21.xml"_s << result;
+
     // Currently we keep any double '//', but not sure if there is a use case for it, or could
     // it be corrected to a single '/'
     base.setUrl("http://xyz.io/v1//");
@@ -91,7 +102,10 @@ void tst_QNetworkRequestFactory::urlAndPath()
     QNetworkRequest request = factory1.createRequest();
     QCOMPARE(request.url(), baseUrl); // No path was provided for createRequest(), expect baseUrl
     request = factory1.createRequest(requestPath);
+
     QCOMPARE(request.url(), expectedRequestUrl);
+    QCOMPARE(request.url().toEncoded(), expectedRequestUrl.toEncoded());
+    QCOMPARE(request.url().toString(), expectedRequestUrl.toString());
 
     // Check the request path didn't change base url
     QCOMPARE(factory1.baseUrl(), baseUrl);
@@ -218,7 +232,6 @@ void tst_QNetworkRequestFactory::headers()
     h1.clear();
     h1.append(name1, value1);
     h1.append(name2, value2);
-
     factory.setCommonHeaders(h1);
     QVERIFY(factory.commonHeaders().contains(name1));
     QVERIFY(factory.commonHeaders().contains(name2));
@@ -353,6 +366,69 @@ void tst_QNetworkRequestFactory::userInfo()
     factory.clearPassword();
     QVERIFY(factory.userName().isEmpty());
     QVERIFY(factory.password().isEmpty());
+}
+
+void tst_QNetworkRequestFactory::priority()
+{
+    QNetworkRequestFactory factory(u"http://example.com"_s);
+    QCOMPARE(factory.priority(), QNetworkRequest::NormalPriority);
+    auto request = factory.createRequest("/index.html");
+    QCOMPARE(request.priority(), QNetworkRequest::NormalPriority);
+
+    factory.setPriority(QNetworkRequest::HighPriority);
+    QCOMPARE(factory.priority(), QNetworkRequest::HighPriority);
+    request = factory.createRequest("/index.html");
+    QCOMPARE(request.priority(), QNetworkRequest::HighPriority);
+}
+
+void tst_QNetworkRequestFactory::attributes()
+{
+    const auto attribute1 = QNetworkRequest::Attribute::BackgroundRequestAttribute;
+    const auto attribute2 = QNetworkRequest::User;
+    QNetworkRequestFactory factory;
+    QNetworkRequest request;
+
+    // Empty factory
+    QVERIFY(!factory.attribute(attribute1).isValid());
+    request = factory.createRequest();
+    QVERIFY(!request.attribute(attribute1).isValid());
+
+    // (Re-)set and clear individual attribute
+    factory.setAttribute(attribute1, true);
+    QVERIFY(factory.attribute(attribute1).isValid());
+    QCOMPARE(factory.attribute(attribute1).toBool(), true);
+    request = factory.createRequest();
+    QVERIFY(request.attribute(attribute1).isValid());
+    QCOMPARE(request.attribute(attribute1).toBool(), true);
+    // Replace previous value
+    factory.setAttribute(attribute1, false);
+    QVERIFY(factory.attribute(attribute1).isValid());
+    QCOMPARE(factory.attribute(attribute1).toBool(), false);
+    request = factory.createRequest();
+    QVERIFY(request.attribute(attribute1).isValid());
+    QCOMPARE(request.attribute(attribute1).toBool(), false);
+    // Clear individual attribute
+    factory.clearAttribute(attribute1);
+    QVERIFY(!factory.attribute(attribute1).isValid());
+
+    // Getter default value
+    QCOMPARE(factory.attribute(attribute2, 111).toInt(), 111); // default value returned
+    factory.setAttribute(attribute2, 222);
+    QCOMPARE(factory.attribute(attribute2, 111).toInt(), 222); // actual value returned
+    factory.clearAttribute(attribute2);
+    QCOMPARE(factory.attribute(attribute2, 111).toInt(), 111); // default value returned
+
+    // Clear attributes
+    factory.setAttribute(attribute1, true);
+    factory.setAttribute(attribute2, 333);
+    QVERIFY(factory.attribute(attribute1).isValid());
+    QVERIFY(factory.attribute(attribute2).isValid());
+    factory.clearAttributes();
+    QVERIFY(!factory.attribute(attribute1).isValid());
+    QVERIFY(!factory.attribute(attribute2).isValid());
+    request = factory.createRequest();
+    QVERIFY(!request.attribute(attribute1).isValid());
+    QVERIFY(!request.attribute(attribute2).isValid());
 }
 
 QTEST_MAIN(tst_QNetworkRequestFactory)

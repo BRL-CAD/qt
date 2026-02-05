@@ -11,7 +11,7 @@
 #include "qwindowsintegration.h"
 #include "qwindowsdropdataobject.h"
 #include "qwindowswindow.h"
-#include "qwindowsmousehandler.h"
+#include "qwindowspointerhandler.h"
 #include "qwindowscursor.h"
 #include "qwindowskeymapper.h"
 
@@ -183,8 +183,8 @@ public:
     void createCursors();
 
     // IDropSource methods
-    STDMETHOD(QueryContinueDrag)(BOOL fEscapePressed, DWORD grfKeyState) override;
-    STDMETHOD(GiveFeedback)(DWORD dwEffect) override;
+    STDMETHOD(QueryContinueDrag)(BOOL fEscapePressed, DWORD grfKeyState) noexcept override;
+    STDMETHOD(GiveFeedback)(DWORD dwEffect) noexcept override;
 
 private:
     struct CursorEntry {
@@ -254,8 +254,9 @@ void QWindowsOleDropSource::createCursors()
         if (const QScreen *primaryScreen = QGuiApplication::primaryScreen())
             platformScreen = primaryScreen->handle();
     }
-    Q_ASSERT(platformScreen);
-    QPlatformCursor *platformCursor = platformScreen->cursor();
+    QPlatformCursor *platformCursor = nullptr;
+    if (platformScreen)
+        platformCursor = platformScreen->cursor();
 
     if (GetSystemMetrics (SM_REMOTESESSION) != 0) {
         /* Workaround for RDP issues with large cursors.
@@ -272,7 +273,7 @@ void QWindowsOleDropSource::createCursors()
         hotSpotScaleFactor = QHighDpiScaling::factor(platformScreen);
         pixmapScaleFactor = hotSpotScaleFactor / pixmap.devicePixelRatio();
     }
-    QPixmap scaledPixmap = qFuzzyCompare(pixmapScaleFactor, 1.0)
+    QPixmap scaledPixmap = (!hasPixmap || qFuzzyCompare(pixmapScaleFactor, 1.0))
         ? pixmap
         :  pixmap.scaled((QSizeF(pixmap.size()) * pixmapScaleFactor).toSize(),
                          Qt::KeepAspectRatio, Qt::SmoothTransformation);
@@ -336,12 +337,12 @@ void QWindowsOleDropSource::createCursors()
 */
 
 QT_ENSURE_STACK_ALIGNED_FOR_SSE STDMETHODIMP
-QWindowsOleDropSource::QueryContinueDrag(BOOL fEscapePressed, DWORD grfKeyState)
+QWindowsOleDropSource::QueryContinueDrag(BOOL fEscapePressed, DWORD grfKeyState) noexcept
 {
     // In some rare cases, when a mouse button is released but the mouse is static,
     // grfKeyState will not be updated with these released buttons until the mouse
     // is moved. So we use the async key state given by queryMouseButtons() instead.
-    Qt::MouseButtons buttons = QWindowsMouseHandler::queryMouseButtons();
+    Qt::MouseButtons buttons = QWindowsPointerHandler::queryMouseButtons();
 
     SCODE result = S_OK;
     if (fEscapePressed || QWindowsDrag::isCanceled()) {
@@ -366,7 +367,7 @@ QWindowsOleDropSource::QueryContinueDrag(BOOL fEscapePressed, DWORD grfKeyState)
                 const QPoint localPos = m_windowUnderMouse->handle()->mapFromGlobal(globalPos);
                 QWindowSystemInterface::handleMouseEvent(m_windowUnderMouse.data(),
                                                          QPointF(localPos), QPointF(globalPos),
-                                                         QWindowsMouseHandler::queryMouseButtons(),
+                                                         QWindowsPointerHandler::queryMouseButtons(),
                                                          Qt::LeftButton, QEvent::MouseButtonRelease);
             }
             m_currentButtons = Qt::NoButton;
@@ -390,7 +391,7 @@ QWindowsOleDropSource::QueryContinueDrag(BOOL fEscapePressed, DWORD grfKeyState)
 */
 
 QT_ENSURE_STACK_ALIGNED_FOR_SSE STDMETHODIMP
-QWindowsOleDropSource::GiveFeedback(DWORD dwEffect)
+QWindowsOleDropSource::GiveFeedback(DWORD dwEffect) noexcept
 {
     const Qt::DropAction action = translateToQDragDropAction(dwEffect);
     m_drag->updateAction(action);
@@ -460,7 +461,7 @@ void QWindowsOleDropTarget::handleDrag(QWindow *window, DWORD grfKeyState,
     const Qt::DropActions actions = translateToQDragDropActions(*pdwEffect);
 
     lastModifiers = toQtKeyboardModifiers(grfKeyState);
-    lastButtons = QWindowsMouseHandler::queryMouseButtons();
+    lastButtons = QWindowsPointerHandler::queryMouseButtons();
 
     const QPlatformDragQtResponse response =
           QWindowSystemInterface::handleDrag(window, windowsDrag->dropData(),
@@ -484,7 +485,7 @@ void QWindowsOleDropTarget::handleDrag(QWindow *window, DWORD grfKeyState,
 
 QT_ENSURE_STACK_ALIGNED_FOR_SSE STDMETHODIMP
 QWindowsOleDropTarget::DragEnter(LPDATAOBJECT pDataObj, DWORD grfKeyState,
-                                 POINTL pt, LPDWORD pdwEffect)
+                                 POINTL pt, LPDWORD pdwEffect) noexcept
 {
     if (IDropTargetHelper* dh = QWindowsDrag::instance()->dropHelper())
         dh->DragEnter(reinterpret_cast<HWND>(m_window->winId()), pDataObj, reinterpret_cast<POINT*>(&pt), *pdwEffect);
@@ -500,7 +501,7 @@ QWindowsOleDropTarget::DragEnter(LPDATAOBJECT pDataObj, DWORD grfKeyState,
 }
 
 QT_ENSURE_STACK_ALIGNED_FOR_SSE STDMETHODIMP
-QWindowsOleDropTarget::DragOver(DWORD grfKeyState, POINTL pt, LPDWORD pdwEffect)
+QWindowsOleDropTarget::DragOver(DWORD grfKeyState, POINTL pt, LPDWORD pdwEffect) noexcept
 {
     if (IDropTargetHelper* dh = QWindowsDrag::instance()->dropHelper())
         dh->DragOver(reinterpret_cast<POINT*>(&pt), *pdwEffect);
@@ -521,7 +522,7 @@ QWindowsOleDropTarget::DragOver(DWORD grfKeyState, POINTL pt, LPDWORD pdwEffect)
 }
 
 QT_ENSURE_STACK_ALIGNED_FOR_SSE STDMETHODIMP
-QWindowsOleDropTarget::DragLeave()
+QWindowsOleDropTarget::DragLeave() noexcept
 {
     if (IDropTargetHelper* dh = QWindowsDrag::instance()->dropHelper())
         dh->DragLeave();
@@ -530,7 +531,7 @@ QWindowsOleDropTarget::DragLeave()
 
     const auto *keyMapper = QWindowsContext::instance()->keyMapper();
     lastModifiers = keyMapper->queryKeyboardModifiers();
-    lastButtons = QWindowsMouseHandler::queryMouseButtons();
+    lastButtons = QWindowsPointerHandler::queryMouseButtons();
 
     QWindowSystemInterface::handleDrag(m_window, nullptr, QPoint(), Qt::IgnoreAction,
                                        Qt::NoButton, Qt::NoModifier);
@@ -546,7 +547,7 @@ QWindowsOleDropTarget::DragLeave()
 
 QT_ENSURE_STACK_ALIGNED_FOR_SSE STDMETHODIMP
 QWindowsOleDropTarget::Drop(LPDATAOBJECT pDataObj, DWORD grfKeyState,
-                            POINTL pt, LPDWORD pdwEffect)
+                            POINTL pt, LPDWORD pdwEffect) noexcept
 {
     if (IDropTargetHelper* dh = QWindowsDrag::instance()->dropHelper())
         dh->Drop(pDataObj, reinterpret_cast<POINT*>(&pt), *pdwEffect);
@@ -559,7 +560,7 @@ QWindowsOleDropTarget::Drop(LPDATAOBJECT pDataObj, DWORD grfKeyState,
     QWindowsDrag *windowsDrag = QWindowsDrag::instance();
 
     lastModifiers = toQtKeyboardModifiers(grfKeyState);
-    lastButtons = QWindowsMouseHandler::queryMouseButtons();
+    lastButtons = QWindowsPointerHandler::queryMouseButtons();
 
     const QPlatformDropQtResponse response =
         QWindowSystemInterface::handleDrop(m_window, windowsDrag->dropData(),

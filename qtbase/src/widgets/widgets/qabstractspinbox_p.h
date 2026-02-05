@@ -1,5 +1,6 @@
 // Copyright (C) 2016 The Qt Company Ltd.
 // SPDX-License-Identifier: LicenseRef-Qt-Commercial OR LGPL-3.0-only OR GPL-2.0-only OR GPL-3.0-only
+// Qt-Security score:significant reason:default
 
 #ifndef QABSTRACTSPINBOX_P_H
 #define QABSTRACTSPINBOX_P_H
@@ -21,6 +22,7 @@
 #include "QtWidgets/qlineedit.h"
 #include "QtWidgets/qstyleoption.h"
 #include "QtGui/qvalidator.h"
+#include "QtCore/qbasictimer.h"
 #include "QtCore/qdatetime.h"
 #include "QtCore/qvariant.h"
 #include "private/qwidget_p.h"
@@ -98,9 +100,9 @@ public:
     QLineEdit *edit = nullptr;
     QSpinBoxValidator *validator = nullptr;
     QMetaType::Type type = QMetaType::UnknownType;
-    int spinClickTimerId = -1;
+    QBasicTimer spinClickTimer;
     int spinClickTimerInterval = 100;
-    int spinClickThresholdTimerId = -1;
+    QBasicTimer spinClickThresholdTimer;
     int spinClickThresholdTimerInterval = -1;
     qreal effectiveSpinRepeatRate = 1;
     int acceleration = 0;

@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: LicenseRef-Qt-Commercial OR LGPL-3.0-only OR GPL-2.0-only OR GPL-3.0-only
 
 #include <QtCore/qglobal.h>
+#include <QtCore/qcompare.h>
 #include <QtCore/qversionnumber.h>
 
 #ifndef QOPERATINGSYSTEMVERSION_H
@@ -29,7 +30,8 @@ public:
         IOS,
         TvOS,
         WatchOS,
-        Android
+        Android,
+        VisionOS,
     };
 
     constexpr QOperatingSystemVersionBase(OSType osType,
@@ -56,6 +58,8 @@ public:
         return TvOS;
 #elif defined(Q_OS_WATCHOS)
         return WatchOS;
+#elif defined(Q_OS_VISIONOS)
+        return VisionOS;
 #elif defined(Q_OS_ANDROID)
         return Android;
 #else
@@ -79,22 +83,39 @@ public:
     constexpr OSType type() const { return m_os; }
     inline QString name() const { return name(*this); }
 
-    friend bool operator>(QOperatingSystemVersionBase lhs, QOperatingSystemVersionBase rhs)
-    { return lhs.type() == rhs.type() && QOperatingSystemVersionBase::compare(lhs, rhs) > 0; }
-
-    friend bool operator>=(QOperatingSystemVersionBase lhs, QOperatingSystemVersionBase rhs)
-    { return lhs.type() == rhs.type() && QOperatingSystemVersionBase::compare(lhs, rhs) >= 0; }
-
-    friend bool operator<(QOperatingSystemVersionBase lhs, QOperatingSystemVersionBase rhs)
-    { return lhs.type() == rhs.type() && QOperatingSystemVersionBase::compare(lhs, rhs) < 0; }
-
-    friend bool operator<=(QOperatingSystemVersionBase lhs, QOperatingSystemVersionBase rhs)
-    { return lhs.type() == rhs.type() && QOperatingSystemVersionBase::compare(lhs, rhs) <= 0; }
-
-
 protected:
     static Q_CORE_EXPORT int compare(QOperatingSystemVersionBase v1,
-                                     QOperatingSystemVersionBase v2);
+                                     QOperatingSystemVersionBase v2) noexcept;
+
+    friend Qt::partial_ordering compareThreeWay(const QOperatingSystemVersionBase &lhs,
+                                                const QOperatingSystemVersionBase &rhs) noexcept
+    {
+        if (lhs.type() != rhs.type())
+            return Qt::partial_ordering::unordered;
+        const int res = QOperatingSystemVersionBase::compare(lhs, rhs);
+        return Qt::compareThreeWay(res, 0);
+    }
+#ifdef __cpp_lib_three_way_comparison
+    friend std::partial_ordering
+    operator<=>(QOperatingSystemVersionBase lhs, QOperatingSystemVersionBase rhs) noexcept
+    { return compareThreeWay(lhs, rhs); }
+#else
+    friend bool
+    operator>(QOperatingSystemVersionBase lhs, QOperatingSystemVersionBase rhs) noexcept
+    { return is_gt(compareThreeWay(lhs, rhs)); }
+
+    friend bool
+    operator>=(QOperatingSystemVersionBase lhs, QOperatingSystemVersionBase rhs) noexcept
+    { return is_gteq(compareThreeWay(lhs, rhs)); }
+
+    friend bool
+    operator<(QOperatingSystemVersionBase lhs, QOperatingSystemVersionBase rhs) noexcept
+    { return is_lt(compareThreeWay(lhs, rhs)); }
+
+    friend bool
+    operator<=(QOperatingSystemVersionBase lhs, QOperatingSystemVersionBase rhs) noexcept
+    { return is_lteq(compareThreeWay(lhs, rhs)); }
+#endif
 
     QOperatingSystemVersionBase() = default;
 private:
@@ -117,12 +138,16 @@ public:
 class QOperatingSystemVersion : public QOperatingSystemVersionBase
 {
     using QOperatingSystemVersionUnexported = QOperatingSystemVersionBase;
+public:
 #endif
 
     // ### Qt7: Regroup with the rest below
-    static constexpr QOperatingSystemVersionBase MacOSSonoma { QOperatingSystemVersionBase::MacOS, 14, 0 };
+    static constexpr QOperatingSystemVersionBase MacOSSonoma { QOperatingSystemVersionBase::MacOS, 14 };
+    static constexpr QOperatingSystemVersionBase MacOSSequoia { QOperatingSystemVersionBase::MacOS, 15 };
+    static constexpr QOperatingSystemVersionBase MacOSTahoe { QOperatingSystemVersionBase::MacOS, 26 };
     static constexpr QOperatingSystemVersionBase Android14 { QOperatingSystemVersionBase::Android, 14, 0 };
     static constexpr QOperatingSystemVersionBase Windows11_23H2 { QOperatingSystemVersionBase::Windows, 10, 0, 22631 };
+    static constexpr QOperatingSystemVersionBase Windows11_24H2 { QOperatingSystemVersionBase::Windows, 10, 0, 26100 };
 
 #if QT_VERSION < QT_VERSION_CHECK(7, 0, 0) && !defined(QT_BOOTSTRAPPED) && !defined(Q_QDOC)
 };
@@ -140,7 +165,8 @@ public:
         IOS,
         TvOS,
         WatchOS,
-        Android
+        Android,
+        VisionOS,
     };
 #endif
 
@@ -190,8 +216,8 @@ public:
     static constexpr QOperatingSystemVersionBase MacOSHighSierra { QOperatingSystemVersionBase::MacOS, 10, 13 };
     static constexpr QOperatingSystemVersionBase MacOSMojave { QOperatingSystemVersionBase::MacOS, 10, 14 };
     static constexpr QOperatingSystemVersionBase MacOSCatalina { QOperatingSystemVersionBase::MacOS, 10, 15 };
-    static constexpr QOperatingSystemVersionBase MacOSBigSur = { QOperatingSystemVersionBase::MacOS, 11, 0 };
-    static constexpr QOperatingSystemVersionBase MacOSMonterey = { QOperatingSystemVersionBase::MacOS, 12, 0 };
+    static constexpr QOperatingSystemVersionBase MacOSBigSur = { QOperatingSystemVersionBase::MacOS, 11 };
+    static constexpr QOperatingSystemVersionBase MacOSMonterey = { QOperatingSystemVersionBase::MacOS, 12 };
 
     static constexpr QOperatingSystemVersionBase AndroidJellyBean { QOperatingSystemVersionBase::Android, 4, 1 };
     static constexpr QOperatingSystemVersionBase AndroidJellyBean_MR1 { QOperatingSystemVersionBase::Android, 4, 2 };
@@ -225,7 +251,7 @@ public:
     static constexpr QOperatingSystemVersionBase Android12L { QOperatingSystemVersionBase::Android, 12, 0 };
     static constexpr QOperatingSystemVersionBase Android13 { QOperatingSystemVersionBase::Android, 13, 0 };
 
-    static constexpr QOperatingSystemVersionBase MacOSVentura { QOperatingSystemVersionBase::MacOS, 13, 0 };
+    static constexpr QOperatingSystemVersionBase MacOSVentura { QOperatingSystemVersionBase::MacOS, 13 };
 
     constexpr QOperatingSystemVersion(const QOperatingSystemVersionBase &osversion)
         : QOperatingSystemVersionUnexported(osversion) {}

@@ -41,9 +41,9 @@ public:
     QAccessible::Id insert(QObject *object, QAccessibleInterface *iface) const;
     void deleteInterface(QAccessible::Id id, QObject *obj = nullptr);
 
-#ifdef Q_OS_MAC
+#ifdef Q_OS_APPLE
     QT_MANGLE_NAMESPACE(QMacAccessibilityElement) *elementForId(QAccessible::Id axid) const;
-    void insertElement(QAccessible::Id axid, QT_MANGLE_NAMESPACE(QMacAccessibilityElement) *element) const;
+    bool insertElement(QAccessible::Id axid, QT_MANGLE_NAMESPACE(QMacAccessibilityElement) *element) const;
 #endif
 
 private Q_SLOTS:
@@ -54,11 +54,11 @@ private:
 
     mutable QHash<QAccessible::Id, QAccessibleInterface *> idToInterface;
     mutable QHash<QAccessibleInterface *, QAccessible::Id> interfaceToId;
-    mutable QMultiHash<QObject *, QPair<QAccessible::Id, const QMetaObject*>> objectToId;
+    mutable QMultiHash<QObject *, std::pair<QAccessible::Id, const QMetaObject*>> objectToId;
 
-#ifdef Q_OS_MAC
-    void removeCocoaElement(QAccessible::Id axid);
-    mutable QHash<QAccessible::Id, QT_MANGLE_NAMESPACE(QMacAccessibilityElement) *> cocoaElements;
+#ifdef Q_OS_APPLE
+    void removeAccessibleElement(QAccessible::Id axid);
+    mutable QHash<QAccessible::Id, QT_MANGLE_NAMESPACE(QMacAccessibilityElement) *> accessibleElements;
 #endif
 
     friend class QAccessible;

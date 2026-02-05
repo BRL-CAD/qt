@@ -32,6 +32,9 @@
 #include <private/qabstractitemview_p.h>
 #include <QtWidgets/private/qapplication_p.h>
 
+#include <vector>
+#include <memory>
+
 Q_DECLARE_METATYPE(Qt::ItemFlags);
 
 using namespace QTestPrivate;
@@ -152,6 +155,8 @@ private slots:
     void testSpinBoxAsEditor();
     void removeIndexWhileEditing();
     void focusNextOnHide();
+    void shiftSelectionAfterModelSetCurrentIndex();
+    void QTBUG72333_isPersistentEditorOpen();
 
 private:
     static QAbstractItemView *viewFromString(const QByteArray &viewType, QWidget *parent = nullptr)
@@ -295,6 +300,10 @@ void tst_QAbstractItemView::getSetCheck()
     QCOMPARE(20, obj1->autoScrollMargin());
     obj1->setAutoScrollMargin(16);
     QCOMPARE(16, obj1->autoScrollMargin());
+
+    QCOMPARE(200U, obj1->updateThreshold());
+    obj1->setUpdateThreshold(4711);
+    QCOMPARE(4711U, obj1->updateThreshold());
 }
 
 void tst_QAbstractItemView::cleanup()
@@ -1051,7 +1060,6 @@ void tst_QAbstractItemView::setItemDelegate()
     centerOnScreen(&v);
     moveCursorAway(&v);
     v.show();
-    QApplicationPrivate::setActiveWindow(&v);
     QVERIFY(QTest::qWaitForWindowActive(&v));
 
     QModelIndex index = model.index(cellToEdit.y(), cellToEdit.x());
@@ -1260,7 +1268,6 @@ void tst_QAbstractItemView::task221955_selectedEditor()
     tree.show();
     tree.setFocus();
     tree.setCurrentIndex(tree.model()->index(1,0));
-    QApplicationPrivate::setActiveWindow(&tree);
     QVERIFY(QTest::qWaitForWindowActive(&tree));
 
     QVERIFY(! tree.selectionModel()->selectedIndexes().contains(tree.model()->index(3,0)));
@@ -1559,7 +1566,6 @@ void tst_QAbstractItemView::QTBUG6407_extendedSelection()
     moveCursorAway(&view);
 
     view.show();
-    QApplicationPrivate::setActiveWindow(&view);
     QVERIFY(QTest::qWaitForWindowActive(&view));
     QCOMPARE(&view, QApplication::activeWindow());
 
@@ -1627,6 +1633,7 @@ void tst_QAbstractItemView::testDelegateDestroyEditor()
 
 void tst_QAbstractItemView::testDelegateDestroyEditorChild()
 {
+    std::vector<std::unique_ptr<QTreeWidgetItem>> reaper;
     QTreeWidget tree;
     MyAbstractItemDelegate delegate;
     tree.setItemDelegate(&delegate);
@@ -1642,8 +1649,10 @@ void tst_QAbstractItemView::testDelegateDestroyEditorChild()
     tree.openPersistentEditor(levelTwo2);
     QCOMPARE(delegate.virtualCtorCallCount, 4);
     levelOne1->removeChild(levelTwo1);
+    reaper.emplace_back(levelTwo1);
     QCOMPARE(delegate.virtualDtorCallCount, 1);
     topLevel->removeChild(levelOne2);
+    reaper.emplace_back(levelOne2);
     QCOMPARE(delegate.virtualDtorCallCount, 3);
 }
 
@@ -1657,7 +1666,6 @@ void tst_QAbstractItemView::testClickedSignal()
     centerOnScreen(&view);
     moveCursorAway(&view);
     view.showNormal();
-    QApplicationPrivate::setActiveWindow(&view);
     QVERIFY(QTest::qWaitForWindowActive(&view));
     QCOMPARE(&view, QApplication::activeWindow());
 
@@ -1708,7 +1716,6 @@ void tst_QAbstractItemView::testChangeEditorState()
     centerOnScreen(&view);
     moveCursorAway(&view);
     view.show();
-    QApplicationPrivate::setActiveWindow(&view);
     QVERIFY(QTest::qWaitForWindowActive(&view));
     QCOMPARE(&view, QApplication::activeWindow());
 
@@ -1729,7 +1736,6 @@ void tst_QAbstractItemView::deselectInSingleSelection()
     QVERIFY(QTest::qWaitForWindowExposed(&view));
     view.setSelectionMode(QAbstractItemView::SingleSelection);
     view.setEditTriggers(QAbstractItemView::NoEditTriggers);
-    QApplicationPrivate::setActiveWindow(&view);
     QVERIFY(QTest::qWaitForWindowExposed(&view));
     // mouse
     QModelIndex index22 = s.index(2, 2);
@@ -1776,7 +1782,6 @@ void tst_QAbstractItemView::testNoActivateOnDisabledItem()
     moveCursorAway(&treeView);
     treeView.show();
 
-    QApplicationPrivate::setActiveWindow(&treeView);
     QVERIFY(QTest::qWaitForWindowActive(&treeView));
 
     QSignalSpy activatedSpy(&treeView, &QAbstractItemView::activated);
@@ -1823,7 +1828,6 @@ void tst_QAbstractItemView::testFocusPolicy()
     moveCursorAway(&window);
 
     window.show();
-    QApplicationPrivate::setActiveWindow(&window);
     QVERIFY(QTest::qWaitForWindowActive(&window));
 
     // itemview accepts focus => editor is closed => return focus to the itemview
@@ -1861,8 +1865,7 @@ void tst_QAbstractItemView::QTBUG31411_noSelection()
     moveCursorAway(&window);
 
     window.show();
-    QApplicationPrivate::setActiveWindow(&window);
-    QVERIFY(QTest::qWaitForWindowActive(&window));
+    QVERIFY(QTest::qWaitForWindowFocused(&window));
 
     qRegisterMetaType<QItemSelection>();
     QSignalSpy selectionChangeSpy(table->selectionModel(), &QItemSelectionModel::selectionChanged);
@@ -2461,15 +2464,11 @@ void tst_QAbstractItemView::inputMethodEnabled()
 
     // Check focus by switching the activation of the window to force a focus in
     view->setCurrentIndex(model->index(1, 0));
-    QApplicationPrivate::setActiveWindow(nullptr);
-    QApplicationPrivate::setActiveWindow(view.data());
     QVERIFY(QTest::qWaitForWindowActive(view.data()));
     QCOMPARE(view->testAttribute(Qt::WA_InputMethodEnabled), result);
 
     view->setCurrentIndex(QModelIndex());
     QVERIFY(!view->testAttribute(Qt::WA_InputMethodEnabled));
-    QApplicationPrivate::setActiveWindow(nullptr);
-    QApplicationPrivate::setActiveWindow(view.data());
     QVERIFY(QTest::qWaitForWindowActive(view.data()));
     QModelIndex index = model->index(1, 0);
     QPoint p = view->visualRect(index).center();
@@ -2479,8 +2478,6 @@ void tst_QAbstractItemView::inputMethodEnabled()
     QCOMPARE(view->testAttribute(Qt::WA_InputMethodEnabled), result);
 
     index = model->index(0, 0);
-    QApplicationPrivate::setActiveWindow(nullptr);
-    QApplicationPrivate::setActiveWindow(view.data());
     QVERIFY(QTest::qWaitForWindowActive(view.data()));
     p = view->visualRect(index).center();
     QTest::mouseClick(view->viewport(), Qt::LeftButton, Qt::NoModifier, p);
@@ -3566,7 +3563,7 @@ void tst_QAbstractItemView::focusNextOnHide()
     widget.show();
     QVERIFY(QTest::qWaitForWindowExposed(&widget));
 
-    QVERIFY(table.hasFocus());
+    QTRY_VERIFY(table.hasFocus());
     QCOMPARE(table.currentIndex(), table.model()->index(0, 0));
     QTest::keyPress(&table, Qt::Key_Tab);
     QCOMPARE(table.currentIndex(), table.model()->index(0, 1));
@@ -3574,6 +3571,62 @@ void tst_QAbstractItemView::focusNextOnHide()
     table.hide();
     QCOMPARE(table.currentIndex(), table.model()->index(0, 1));
     QVERIFY(lineEdit.hasFocus());
+}
+
+// Tests for QTBUG-127381, where shift-selecting after calling
+// QItemSelectionModel::setCurrentIndex() would produce unexpected results.
+void tst_QAbstractItemView::shiftSelectionAfterModelSetCurrentIndex()
+{
+    QStandardItemModel model(5, 1);
+    QTreeView view;
+    view.setSelectionBehavior(QAbstractItemView::SelectRows);
+    view.setSelectionMode(QAbstractItemView::ExtendedSelection);
+    view.setModel(&model);
+
+    view.show();
+    QVERIFY(QTest::qWaitForWindowExposed(&view));
+
+    QModelIndex index = model.index(0, 0);
+    view.setCurrentIndex(index);
+    index = model.index(2, 0);
+    view.selectionModel()->setCurrentIndex(index, QItemSelectionModel::ClearAndSelect | QItemSelectionModel::Rows);
+
+    QTest::keyPress(&view, Qt::Key_Down, Qt::ShiftModifier);
+
+    QItemSelection selection = view.selectionModel()->selection();
+    QCOMPARE(selection.size(), 1);
+    QCOMPARE(selection.first().top(), 2);
+    QCOMPARE(selection.first().bottom(), 3);
+
+    QTest::keyPress(&view, Qt::Key_Up, Qt::ShiftModifier);
+
+    selection = view.selectionModel()->selection();
+    QCOMPARE(selection.first().top(), 2);
+    QCOMPARE(selection.first().bottom(), 2);
+}
+
+void tst_QAbstractItemView::QTBUG72333_isPersistentEditorOpen()
+{
+    QStandardItemModel model(1, 1);
+    model.setData(model.index(0, 0), QStringLiteral("Test"));
+
+    QTableView view;
+    view.setModel(&model);
+    view.show();
+
+    const QModelIndex index = model.index(0, 0);
+
+    view.edit(index);
+    QVERIFY(view.state() == QAbstractItemView::EditingState);
+    QVERIFY(!view.isPersistentEditorOpen(index));
+
+    view.closeEditor(view.indexWidget(index), QAbstractItemDelegate::RevertModelCache);
+
+    view.openPersistentEditor(index);
+    QVERIFY(view.isPersistentEditorOpen(index));
+
+    view.closePersistentEditor(index);
+    QVERIFY(!view.isPersistentEditorOpen(index));
 }
 
 QTEST_MAIN(tst_QAbstractItemView)

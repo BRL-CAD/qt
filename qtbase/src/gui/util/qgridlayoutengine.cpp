@@ -1,5 +1,6 @@
 // Copyright (C) 2016 The Qt Company Ltd.
 // SPDX-License-Identifier: LicenseRef-Qt-Commercial OR LGPL-3.0-only OR GPL-2.0-only OR GPL-3.0-only
+// Qt-Security score:significant reason:default
 
 #include "qglobal.h"
 
@@ -720,7 +721,7 @@ void QGridLayoutItem::dump(int indent) const
     if (q_alignment != 0)
         qDebug("%*s Alignment: %x", indent, "", uint(q_alignment));
     qDebug("%*s Horizontal size policy: %x Vertical size policy: %x",
-        indent, "", sizePolicy(Qt::Horizontal), sizePolicy(Qt::Vertical));
+        indent, "", (unsigned int)sizePolicy(Qt::Horizontal), (unsigned int)sizePolicy(Qt::Vertical));
 }
 #endif
 
@@ -964,8 +965,11 @@ void QGridLayoutEngine::insertItem(QGridLayoutItem *item, int index)
 
     for (int i = item->firstRow(); i <= item->lastRow(); ++i) {
         for (int j = item->firstColumn(); j <= item->lastColumn(); ++j) {
-            if (itemAt(i, j))
-                qWarning("QGridLayoutEngine::addItem: Cell (%d, %d) already taken", i, j);
+            const auto existingItem = itemAt(i, j);
+            if (existingItem) {
+                qWarning("QGridLayoutEngine::addItem: Can't add %s at cell (%d, %d) because it's already taken by %s",
+                    qPrintable(item->toString()), i, j, qPrintable(existingItem->toString()));
+            }
             setItemAt(i, j, item);
         }
     }
@@ -1067,8 +1071,8 @@ QRectF QGridLayoutEngine::cellRect(const QRectF &contentsGeometry, int row, int 
 
     ensureGeometries(contentsGeometry.size(), styleInfo);
 
-    int lastColumn = qMax(column + columnSpan, columnCount()) - 1;
-    int lastRow = qMax(row + rowSpan, rowCount()) - 1;
+    int lastColumn = qMin(column + columnSpan, columnCount()) - 1;
+    int lastRow = qMin(row + rowSpan, rowCount()) - 1;
 
     qreal x = q_xx[column];
     qreal y = q_yy[row];
@@ -1179,7 +1183,7 @@ void QGridLayoutEngine::dump(int indent) const
 {
     qDebug("%*sEngine", indent, "");
 
-    qDebug("%*s Items (%d)", indent, "", q_items.count());
+    qDebug("%*s Items (%lld)", indent, "", q_items.count());
     int i;
     for (i = 0; i < q_items.count(); ++i)
         q_items.at(i)->dump(indent + 2);
@@ -1410,7 +1414,7 @@ void QGridLayoutEngine::fillRowData(QGridLayoutRowData *rowData,
                             rowStretch = qMax(rowStretch, itemStretch);
                     } else {
                         QGridLayoutMultiCellData &multiCell =
-                                rowData->multiCellMap[qMakePair(row, itemRowSpan)];
+                                rowData->multiCellMap[std::pair(row, itemRowSpan)];
                         box = &multiCell.q_box;
                         multiCell.q_stretch = itemStretch;
                     }

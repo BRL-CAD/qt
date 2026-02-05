@@ -173,6 +173,7 @@ const char *PaintCommands::imageFormatTable[] = {
     "RGBx32FPx4",
     "RGBA32FPx4",
     "RGBA32FPx4_Premultiplied",
+    "CMYK32",
 };
 
 const char *PaintCommands::renderHintTable[] = {
@@ -441,6 +442,10 @@ void PaintCommands::staticInit()
                       "^drawText\\s+(-?\\w*)\\s+(-?\\w*)\\s+\"(.*)\"$",
                       "drawText <x> <y> <text>",
                       "drawText 10 10 \"my text\"");
+    DECL_PAINTCOMMAND("drawAlignedText", command_drawAlignedText,
+                      "^drawAlignedText\\s+(-?\\w*)\\s+(-?\\w*)\\s+(-?\\w*)\\s+(-?\\w*)\\s+(-?\\w*)\\s+\"(.*)\"$",
+                      "drawAlignedText <x> <y> <width> <height> <flags> <text>",
+                      "drawAlignedText 10 10 1000 1000 2 \"my text\"");
     DECL_PAINTCOMMAND("drawStaticText", command_drawStaticText,
                       "^drawStaticText\\s+(-?\\w*)\\s+(-?\\w*)\\s+\"(.*)\"$",
                       "drawStaticText <x> <y> <text>",
@@ -449,10 +454,12 @@ void PaintCommands::staticInit()
                       "^drawGlyphRun\\s+(-?\\w*)\\s+(-?\\w*)\\s+\"(.*)\"$",
                       "drawGlyphRun <x> <y> <text> - Will create glyph run using QTextLayout and draw this",
                       "drawGlyphRun 10 10 \"my text\"");
+#ifndef QT_NO_TEXTHTMLPARSER
     DECL_PAINTCOMMAND("drawTextDocument", command_drawTextDocument,
                       "^drawTextDocument\\s+(-?\\w*)\\s+(-?\\w*)\\s+\"(.*)\"$",
                       "drawTextDocument <x> <y> <html>",
                       "drawTextDocument 10 10 \"html\"");
+#endif
     DECL_PAINTCOMMAND("drawTiledPixmap", command_drawTiledPixmap,
                       "^drawTiledPixmap\\s+([\\w.:\\/]*)"
                       "\\s+(-?\\w*)\\s+(-?\\w*)\\s*(-?\\w*)\\s*(-?\\w*)"
@@ -1356,6 +1363,27 @@ void PaintCommands::command_drawText(QRegularExpressionMatch re)
     m_painter->drawText(x, y, txt);
 }
 
+/***************************************************************************************************/
+void PaintCommands::command_drawAlignedText(QRegularExpressionMatch re)
+{
+    if (!m_shouldDrawText)
+        return;
+    QStringList caps = re.capturedTexts();
+    int x = convertToInt(caps.at(1));
+    int y = convertToInt(caps.at(2));
+    int width = convertToInt(caps.at(3));
+    int height = convertToInt(caps.at(4));
+    int flags = convertToInt(caps.at(5));
+    QString txt = caps.at(6);
+
+    if (m_verboseMode) {
+        printf(" -(lance) drawText(%d, %d, %d, %d, %d, %s)\n",
+               x, y, width, height, flags, qPrintable(txt));
+    }
+
+    m_painter->drawText(x, y, width, height, flags, txt);
+}
+
 void PaintCommands::command_drawStaticText(QRegularExpressionMatch re)
 {
     if (!m_shouldDrawText)
@@ -1403,6 +1431,7 @@ void PaintCommands::command_drawGlyphRun(QRegularExpressionMatch re)
         m_painter->drawGlyphRun(QPointF(x, y), glyphRun);
 }
 
+#ifndef QT_NO_TEXTHTMLPARSER
 void PaintCommands::command_drawTextDocument(QRegularExpressionMatch re)
 {
     if (!m_shouldDrawText)
@@ -1424,6 +1453,7 @@ void PaintCommands::command_drawTextDocument(QRegularExpressionMatch re)
     doc.drawContents(m_painter);
     m_painter->restore();
 }
+#endif
 
 /***************************************************************************************************/
 void PaintCommands::command_fillRect(QRegularExpressionMatch re)

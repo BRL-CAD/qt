@@ -1,5 +1,6 @@
 // Copyright (C) 2016 The Qt Company Ltd.
 // SPDX-License-Identifier: LicenseRef-Qt-Commercial OR LGPL-3.0-only OR GPL-2.0-only OR GPL-3.0-only
+// Qt-Security score:significant reason:default
 
 #include "qwizard.h"
 #include <QtWidgets/private/qtwidgetsglobal_p.h>
@@ -33,7 +34,6 @@
 #include <QtGui/private/qcoregraphics_p.h>
 #elif QT_CONFIG(style_windowsvista)
 #include "qwizard_win_p.h"
-#include "qtimer.h"
 #endif
 
 #include "private/qdialog_p.h"
@@ -246,11 +246,14 @@ bool QWizardLayoutInfo::operator==(const QWizardLayoutInfo &other) const
 
 class QWizardHeader : public QWidget
 {
-public:
+protected:
     enum RulerType { Ruler };
 
+    explicit
     inline QWizardHeader(RulerType /* ruler */, QWidget *parent = nullptr)
         : QWidget(parent) { setFixedHeight(2); }
+public:
+    explicit
     QWizardHeader(QWidget *parent = nullptr);
 
     void setup(const QWizardLayoutInfo &info, const QString &title,
@@ -1738,7 +1741,6 @@ void QWizardAntiFlickerWidget::paintEvent(QPaintEvent *)
 
 /*!
     \class QWizard
-    \since 4.3
     \brief The QWizard class provides a framework for wizards.
 
     \inmodule QtWidgets
@@ -1753,10 +1755,6 @@ void QWizardAntiFlickerWidget::paintEvent(QPaintEvent *)
     QWizardPage (a QWidget subclass). To create your own wizards, you
     can use these classes directly, or you can subclass them for more
     control.
-
-    Topics:
-
-    \tableofcontents
 
     \section1 A Trivial Example
 
@@ -1795,14 +1793,14 @@ void QWizardAntiFlickerWidget::paintEvent(QPaintEvent *)
             \li ModernStyle
             \li MacStyle
             \li AeroStyle
-    \row    \li \inlineimage qtwizard-classic1.png
-            \li \inlineimage qtwizard-modern1.png
-            \li \inlineimage qtwizard-mac1.png
-            \li \inlineimage qtwizard-aero1.png
-    \row    \li \inlineimage qtwizard-classic2.png
-            \li \inlineimage qtwizard-modern2.png
-            \li \inlineimage qtwizard-mac2.png
-            \li \inlineimage qtwizard-aero2.png
+    \row    \li \inlineimage qtwizard-classic1.png {Wizard with ClassicStyle}
+            \li \inlineimage qtwizard-modern1.png {Wizard with ModernStyle}
+            \li \inlineimage qtwizard-mac1.png {Wizard with MacStyle}
+            \li \inlineimage qtwizard-aero1.png {Wizard with AeroStyle}
+    \row    \li \inlineimage qtwizard-classic2.png {Wizard with ClassicStyle}
+            \li \inlineimage qtwizard-modern2.png {Wizard with ModernStyle}
+            \li \inlineimage qtwizard-mac2.png {Wizard with MacStyle}
+            \li \inlineimage qtwizard-aero2.png {Wizard with AeroStyle}
     \endtable
 
     Note: AeroStyle has effect only on a Windows Vista system with alpha compositing enabled.
@@ -1846,7 +1844,7 @@ void QWizardAntiFlickerWidget::paintEvent(QPaintEvent *)
     The diagram belows shows how QWizard renders these attributes,
     assuming they are all present and ModernStyle is used:
 
-    \image qtwizard-nonmacpage.png
+    \image qtwizard-nonmacpage.png {Attributes on a wizard page}
 
     When a \l{QWizardPage::}{subTitle} is set, QWizard displays it
     in a header, in which case it also uses the BannerPixmap and the
@@ -1863,7 +1861,7 @@ void QWizardAntiFlickerWidget::paintEvent(QPaintEvent *)
     If the wizard's style is MacStyle, the page looks radically
     different:
 
-    \image qtwizard-macpage.png
+    \image qtwizard-macpage.png {Attributes on a wizard page using MacStyle}
 
     The watermark, banner, and logo pixmaps are ignored by the
     MacStyle. If the BackgroundPixmap is set, it is used as the
@@ -1977,10 +1975,10 @@ void QWizardAntiFlickerWidget::paintEvent(QPaintEvent *)
     Some wizards are more complex in that they allow different
     traversal paths based on the information provided by the user.
     The \l{dialogs/licensewizard}{License Wizard} example illustrates this.
-    It provides five wizard pages; depending on which options are
+    It provides several wizard pages; depending on which options are
     selected, the user can reach different pages.
 
-    \image licensewizard-flow.png
+    \image licensewizard-flow.png {Complex wizard page flow chart}
 
     In complex wizards, pages are identified by IDs. These IDs are
     typically defined using an enum. For example:
@@ -2219,7 +2217,6 @@ void QWizard::setPage(int theid, QWizardPage *page)
 
     \note Removing a page may influence the value of the startId property.
 
-    \since 4.5
     \sa addPage(), setPage(), pageRemoved(), startId()
 */
 void QWizard::removePage(int id)
@@ -2334,7 +2331,6 @@ QList<int> QWizard::visitedIds() const
 
 /*!
     Returns the list of page IDs.
-   \since 4.5
 */
 QList<int> QWizard::pageIds() const
 {
@@ -2395,9 +2391,6 @@ QWizardPage *QWizard::currentPage() const
 /*!
     \property QWizard::currentId
     \brief the ID of the current page
-
-    This property cannot be set directly. To change the current page,
-    call next(), back(), or restart().
 
     By default, this property has a value of -1, indicating that no page is
     currently shown.
@@ -2861,8 +2854,6 @@ void QWizard::setDefaultProperty(const char *className, const char *property,
 }
 
 /*!
-    \since 4.7
-
     Sets the given \a widget to be shown on the left side of the wizard.
     For styles which use the WatermarkPixmap (ClassicStyle and ModernStyle)
     the side widget is displayed on top of the watermark, for other styles
@@ -2896,8 +2887,6 @@ void QWizard::setSideWidget(QWidget *widget)
 }
 
 /*!
-    \since 4.7
-
     Returns the widget on the left side of the wizard or \nullptr.
 
     By default, no side widget is present.
@@ -2961,8 +2950,6 @@ QSize QWizard::sizeHint() const
 /*!
     \fn void QWizard::pageAdded(int id)
 
-    \since 4.7
-
     This signal is emitted whenever a page is added to the
     wizard. The page's \a id is passed as parameter.
 
@@ -2971,8 +2958,6 @@ QSize QWizard::sizeHint() const
 
 /*!
     \fn void QWizard::pageRemoved(int id)
-
-    \since 4.7
 
     This signal is emitted whenever a page is removed from the
     wizard. The page's \a id is passed as parameter.
@@ -3336,7 +3321,6 @@ int QWizard::nextId() const
 
 /*!
     \class QWizardPage
-    \since 4.3
     \brief The QWizardPage class is the base class for wizard pages.
 
     \inmodule QtWidgets
