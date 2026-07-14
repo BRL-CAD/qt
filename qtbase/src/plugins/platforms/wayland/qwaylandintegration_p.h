@@ -1,5 +1,6 @@
 // Copyright (C) 2019 The Qt Company Ltd.
 // SPDX-License-Identifier: LicenseRef-Qt-Commercial OR LGPL-3.0-only OR GPL-2.0-only OR GPL-3.0-only
+// Qt-Security score:significant reason:default
 
 #ifndef QPLATFORMINTEGRATION_WAYLAND_H
 #define QPLATFORMINTEGRATION_WAYLAND_H
@@ -36,9 +37,10 @@ class QWaylandInputDevice;
 class QWaylandScreen;
 class QWaylandCursor;
 class QWaylandPlatformServices;
+class QWaylandSessionManager;
 
 class Q_WAYLANDCLIENT_EXPORT QWaylandIntegration : public QPlatformIntegration
-#if QT_CONFIG(opengl)
+#if QT_CONFIG(opengl)  && QT_CONFIG(egl)
     , public QNativeInterface::Private::QEGLIntegration
 #endif
 {
@@ -52,8 +54,9 @@ public:
 
     bool hasCapability(QPlatformIntegration::Capability cap) const override;
     QPlatformWindow *createPlatformWindow(QWindow *window) const override;
-#if QT_CONFIG(opengl)
+#if QT_CONFIG(opengl) && QT_CONFIG(egl)
     QPlatformOpenGLContext *createPlatformOpenGLContext(QOpenGLContext *context) const override;
+    QPlatformOffscreenSurface *createPlatformOffscreenSurface(QOffscreenSurface *surface) const override;
     QOpenGLContext *createOpenGLContext(EGLContext context, EGLDisplay display, QOpenGLContext *shareContext) const override;
 #endif
     QPlatformBackingStore *createPlatformBackingStore(QWindow *window) const override;
@@ -131,6 +134,9 @@ private:
     void initializeShellIntegration();
     void initializeInputDeviceIntegration();
     QWaylandShellIntegration *createShellIntegration(const QString& interfaceName);
+#ifndef QT_NO_SESSIONMANAGER
+    QPlatformSessionManager *createPlatformSessionManager(const QString &id, const QString &key) const override;
+#endif
 
     const QString mPlatformName;
     QScopedPointer<QPlatformFontDatabase> mFontDb;

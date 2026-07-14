@@ -1,8 +1,10 @@
 // Copyright (C) 2016 The Qt Company Ltd.
 // SPDX-License-Identifier: LicenseRef-Qt-Commercial OR LGPL-3.0-only OR GPL-2.0-only OR GPL-3.0-only
+// Qt-Security score:significant reason:default
+
 
 #include "qsvgnode_p.h"
-#include "qsvgtinydocument_p.h"
+#include "qsvgdocument_p.h"
 #include "qsvggraphics_p.h"
 
 #include <QLoggingCategory>
@@ -10,7 +12,6 @@
 #include <QtGui/qimageiohandler.h>
 
 #include "qdebug.h"
-#include "qstack.h"
 
 #include <QtGui/private/qoutlinemapper_p.h>
 
@@ -43,6 +44,16 @@ void QSvgNode::draw(QPainter *p, QSvgExtraStates &states)
 #endif
 
     if (shouldDrawNode(p, states)) {
+        quint8 remainingDepth = states.trustedSource ? states.remainingNestedNodes
+                                                     : states.remainingNestedNodes - 1;
+        QScopedValueRollback<quint8> nestedNodesGuard(states.remainingNestedNodes, remainingDepth);
+        if (states.remainingNestedNodes == 0) {
+            qCWarning(lcSvgDraw) << "Too many nested nodes at" << qPrintable(typeName())
+                                 << "exceeding max nested limit of" << QtSvg::renderingMaxNestedNodes << "."
+                                 << "Enable AssumeTrustedSource in QSvgHandler or set QT_SVG_DEFAULT_OPTIONS=2 to disable this check.";
+            return;
+        }
+
         applyStyle(p, states);
         applyAnimatedStyle(p, states);
         QSvgNode *maskNode = this->hasMask() ? document()->namedNode(this->maskId()) : nullptr;
@@ -84,7 +95,7 @@ void QSvgNode::draw(QPainter *p, QSvgExtraStates &states)
             QImage proxy = drawIntoBuffer(p, states, boundsRect.toAlignedRect());
             applyBufferToCanvas(p, proxy);
         } else {
-            if (separateFillStroke())
+            if (separateFillStroke(p, states))
                 fillThenStroke(p, states);
             else
                 drawCommand(p, states);
@@ -153,7 +164,7 @@ QImage QSvgNode::drawIntoBuffer(QPainter *p, QSvgExtraStates &states, const QRec
     proxyPainter.translate(-boundsRect.topLeft());
     proxyPainter.setTransform(p->transform(), true);
     proxyPainter.setRenderHints(p->renderHints());
-    if (separateFillStroke())
+    if (separateFillStroke(p, states))
         fillThenStroke(&proxyPainter, states);
     else
         drawCommand(&proxyPainter, states);
@@ -190,7 +201,7 @@ bool QSvgNode::isDescendantOf(const QSvgNode *parent) const
 void QSvgNode::appendStyleProperty(QSvgStyleProperty *prop, const QString &id)
 {
     //qDebug()<<"appending "<<prop->type()<< " ("<< id <<") "<<"to "<<this<<this->type();
-    QSvgTinyDocument *doc;
+    QSvgDocument *doc;
     switch (prop->type()) {
     case QSvgStyleProperty::QUALITY:
         m_style.quality = static_cast<QSvgQualityStyle*>(prop);
@@ -233,6 +244,9 @@ void QSvgNode::appendStyleProperty(QSvgStyleProperty *prop, const QString &id)
         break;
     case QSvgStyleProperty::COMP_OP:
         m_style.compop = static_cast<QSvgCompOpStyle*>(prop);
+        break;
+    case QSvgStyleProperty::OFFSET:
+        m_style.offset = static_cast<QSvgOffsetStyle*>(prop);
         break;
     default:
         qDebug("QSvgNode: Trying to append unknown property!");
@@ -347,7 +361,7 @@ QSvgPaintStyleProperty *QSvgNode::styleProperty(QStringView id) const
 {
     if (id.startsWith(QLatin1Char('#')))
         id.slice(1);
-    QSvgTinyDocument *doc = document();
+    QSvgDocument *doc = document();
     return doc ? doc->namedStyle(id.toString()) : 0;
 }
 
@@ -380,14 +394,14 @@ QRectF QSvgNode::bounds() const
     return m_cachedBounds;
 }
 
-QSvgTinyDocument * QSvgNode::document() const
+QSvgDocument * QSvgNode::document() const
 {
-    QSvgTinyDocument *doc = nullptr;
+    QSvgDocument *doc = nullptr;
     QSvgNode *node = const_cast<QSvgNode*>(this);
     while (node && node->type() != QSvgNode::Doc) {
         node = node->parent();
     }
-    doc = static_cast<QSvgTinyDocument*>(node);
+    doc = static_cast<QSvgDocument*>(node);
 
     return doc;
 }
@@ -673,7 +687,7 @@ bool QSvgNode::shouldDrawNode(QPainter *p, QSvgExtraStates &states) const
     if (m_displayMode == DisplayMode::NoneMode)
         return false;
 
-    if (document() && document()->options().testFlag(QtSvg::AssumeTrustedSource))
+    if (document() && states.trustedSource)
         return true;
 
     QRectF brect = internalFastBounds(p, states);

@@ -255,8 +255,9 @@ bool QFontEngine::supportsTransformation(const QTransform &transform) const
     return transform.type() < QTransform::TxProject;
 }
 
-bool QFontEngine::expectsGammaCorrectedBlending() const
+bool QFontEngine::expectsGammaCorrectedBlending(QFontEngine::GlyphFormat format) const
 {
+    Q_UNUSED(format);
     return true;
 }
 
@@ -1059,6 +1060,7 @@ void QFontEngine::getUnscaledGlyph(glyph_t glyph, QPainterPath *path, glyph_metr
 }
 
 /*!
+    \internal
     Returns \c true if the font table idetified by \a tag exists in the font;
     returns \c false otherwise.
 

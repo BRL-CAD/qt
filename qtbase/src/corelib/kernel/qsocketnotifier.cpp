@@ -1,5 +1,6 @@
 // Copyright (C) 2016 The Qt Company Ltd.
 // SPDX-License-Identifier: LicenseRef-Qt-Commercial OR LGPL-3.0-only OR GPL-2.0-only OR GPL-3.0-only
+// Qt-Security score:significant reason:default
 
 #define BUILDING_QSOCKETNOTIFIER
 #include "qsocketnotifier.h"
@@ -153,10 +154,10 @@ QSocketNotifier::QSocketNotifier(qintptr socket, Type type, QObject *parent)
 
     if (!d->sockfd.isValid())
         qWarning("QSocketNotifier: Invalid socket specified");
-    else if (!thisThreadData->hasEventDispatcher())
-        qWarning("QSocketNotifier: Can only be used with threads started with QThread");
+    else if (auto dispatcher = thisThreadData->eventDispatcher.loadRelaxed())
+        dispatcher->registerSocketNotifier(this);
     else
-        thisThreadData->eventDispatcher.loadRelaxed()->registerSocketNotifier(this);
+        qWarning("QSocketNotifier: current thread's event dispatcher has already been destroyed");
 }
 
 /*!

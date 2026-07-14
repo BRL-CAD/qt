@@ -1,5 +1,6 @@
 // Copyright (C) 2012 BogDan Vatra <bogdan@kde.org>
 // SPDX-License-Identifier: LicenseRef-Qt-Commercial OR LGPL-3.0-only OR GPL-2.0-only OR GPL-3.0-only
+// Qt-Security score:significant reason:default
 
 #ifndef QANDROIDPLATFORMTHEME_H
 #define QANDROIDPLATFORMTHEME_H
@@ -54,13 +55,14 @@ public:
 
     static QAndroidPlatformTheme *instance(
                     QAndroidPlatformNativeInterface * androidPlatformNativeInterface = nullptr);
+    QIcon fileIcon(const QFileInfo &fileInfo, QPlatformTheme::IconOptions iconOptions) const override;
 
 private:
     QAndroidPlatformTheme(QAndroidPlatformNativeInterface * androidPlatformNativeInterface);
     static QAndroidPlatformTheme * m_instance;
     std::shared_ptr<AndroidStyle> m_androidStyleData;
     QPalette m_defaultPalette;
-    QFont m_systemFont;
+    QFont* m_systemFont;
     Qt::ColorScheme m_colorSchemeOverride = Qt::ColorScheme::Unknown;
 };
 

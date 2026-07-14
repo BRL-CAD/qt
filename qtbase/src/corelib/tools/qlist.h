@@ -1,6 +1,7 @@
 // Copyright (C) 2020 The Qt Company Ltd.
 // Copyright (C) 2019 Intel Corporation
 // SPDX-License-Identifier: LicenseRef-Qt-Commercial OR LGPL-3.0-only OR GPL-2.0-only OR GPL-3.0-only
+// Qt-Security score:significant reason:default
 
 #ifndef QLIST_H
 #define QLIST_H
@@ -585,7 +586,7 @@ public:
 
     template <typename InputIterator, if_input_iterator<InputIterator> = true>
     QList &assign(InputIterator first, InputIterator last)
-    { d.assign(first, last); return *this; }
+    { d->assign(first, last); return *this; }
 
     QList &assign(std::initializer_list<T> l)
     {

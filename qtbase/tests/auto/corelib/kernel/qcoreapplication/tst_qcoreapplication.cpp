@@ -245,7 +245,8 @@ static bool isPathListIncluded(const QStringList &l, const QStringList &r)
 
 void tst_QCoreApplication::libraryPaths()
 {
-    const QString testDir = QFileInfo(QFINDTESTDATA("CMakeLists.txt")).absolutePath();
+    const QString testDir = QStandardPaths::writableLocation(QStandardPaths::HomeLocation);
+
     QVERIFY(!testDir.isEmpty());
     {
         QCoreApplication::setLibraryPaths(QStringList() << testDir);
@@ -271,14 +272,15 @@ void tst_QCoreApplication::libraryPaths()
         // creating QCoreApplication adds the applicationDirPath and plugin install path to the libraryPath
         int argc = 1;
         QCoreApplication app(argc, &argv0);
-        QString appDirPath = QCoreApplication::applicationDirPath();
-        QString installPathPlugins =  QLibraryInfo::path(QLibraryInfo::PluginsPath);
-
         QStringList actual = QCoreApplication::libraryPaths();
         actual.sort();
 
         QStringList expected;
-        expected << installPathPlugins << appDirPath;
+#ifndef Q_OS_ANDROID
+        //Android doesn't use plugins dir at runtime, see QTBUG-141732
+        expected << QLibraryInfo::path(QLibraryInfo::PluginsPath);
+#endif
+        expected << QDir(QCoreApplication::applicationDirPath()).canonicalPath();
         expected = QSet<QString>(expected.constBegin(), expected.constEnd()).values();
         expected.sort();
 
@@ -387,7 +389,10 @@ void tst_QCoreApplication::libraryPaths_qt_plugin_path_2()
         // library path list should contain the default plus the one valid path
         QStringList expected =
             QStringList()
+#ifndef Q_OS_ANDROID
+            //Android doesn't use plugins dir at runtime, see QTBUG-141732
             << QLibraryInfo::path(QLibraryInfo::PluginsPath)
+#endif
             << QDir(QCoreApplication::applicationDirPath()).canonicalPath()
             << QDir(QDir::fromNativeSeparators(QString::fromLatin1(validPath))).canonicalPath();
 
@@ -411,9 +416,16 @@ void tst_QCoreApplication::libraryPaths_qt_plugin_path_2()
         // library path list should contain the default
         QStringList expected =
             QStringList()
+#ifndef Q_OS_ANDROID
+            //Android doesn't use plugins dir at runtime, see QTBUG-141732
             << QLibraryInfo::path(QLibraryInfo::PluginsPath)
-            << QCoreApplication::applicationDirPath();
-        QVERIFY(isPathListIncluded(QCoreApplication::libraryPaths(), expected));
+#endif
+            << QDir(QCoreApplication::applicationDirPath()).canonicalPath();
+
+        QVERIFY2(isPathListIncluded(QCoreApplication::libraryPaths(), expected),
+                qPrintable("actual:\n - "
+                           + QCoreApplication::libraryPaths().join("\n - ") +
+                           "\nexpected:\n - " + expected.join("\n - ")));
 
         qputenv("QT_PLUGIN_PATH", nullptr);
     }
@@ -801,6 +813,43 @@ void tst_QCoreApplication::processEventsAlwaysSendsPostedEvents()
         QCOMPARE(object.counter, i);
         ++i;
     } while (t.elapsed() < 1000);
+}
+
+void tst_QCoreApplication::queuedConnectionProcessEventsInSlot()
+{
+    // Regression test for QTBUG-142807
+
+    int argc = 1;
+    char *argv[] = { const_cast<char*>(QTest::currentAppName()) };
+    TestApplication app(argc, argv);
+
+    bool slot1Executed = false;
+    bool slot2Executed = false;
+    bool slot2DuringSlot1 = false;
+
+    QObject signalSource;
+    QObject *receiver1 = new QObject(&app);
+    QObject *receiver2 = new QObject(&app);
+
+    QObject::connect(&signalSource, &QObject::objectNameChanged, receiver1, [&] {
+        slot1Executed = true;
+        for (int i = 0; i < 10 && !slot2Executed; ++i)
+            QCoreApplication::processEvents();
+
+        if (slot2Executed)
+            slot2DuringSlot1 = true;
+    }, Qt::QueuedConnection);
+
+    QObject::connect(&signalSource, &QObject::objectNameChanged, receiver2, [&] {
+        slot2Executed = true;
+    }, Qt::QueuedConnection);
+
+    signalSource.setObjectName("trigger");
+    app.processEvents();
+
+    QVERIFY(slot1Executed);
+    QVERIFY(slot2Executed);
+    QVERIFY(slot2DuringSlot1);
 }
 
 #ifdef Q_OS_WIN

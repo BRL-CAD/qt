@@ -250,6 +250,7 @@ public:
     QByteArray memberToDisconnectOnClose;
     QByteArray signalToDisconnectOnClose;
     QSharedPointer<QMessageDialogOptions> options;
+    bool optionsExplicitlySet = false;
 private:
     void initHelper(QPlatformDialogHelper *) override;
     void helperPrepareShow(QPlatformDialogHelper *) override;
@@ -562,6 +563,10 @@ void QMessageBoxPrivate::helperClicked(QPlatformDialogHelper::StandardButton hel
     A message box can also display an \l{QMessageBox::icon} {icon}
     and \l{QMessageBox::standardButtons} {standard buttons} for
     accepting a user response.
+
+    While the parent parameter is optional, specifying it gives a hint
+    to the window manager, which can then take care of positioning, and
+    maintain a proper stacking order of the dialog window.
 
     Two APIs for using QMessageBox are provided, the property-based
     API, and the static functions. Calling one of the static functions
@@ -1261,6 +1266,9 @@ QCheckBox* QMessageBox::checkBox() const
 */
 void QMessageBox::setOption(QMessageBox::Option option, bool on)
 {
+    Q_D(QMessageBox);
+    d->optionsExplicitlySet = true;
+
     const QMessageBox::Options previousOptions = options();
     if (!(previousOptions & option) != !on)
         setOptions(previousOptions ^ option);
@@ -1283,10 +1291,10 @@ bool QMessageBox::testOption(QMessageBox::Option option) const
 void QMessageBox::setOptions(QMessageBox::Options options)
 {
     Q_D(QMessageBox);
+    d->optionsExplicitlySet = true;
 
     if (QMessageBox::options() == options)
         return;
-
     d->options->setOptions(QMessageDialogOptions::Option(int(options)));
 }
 
@@ -1488,13 +1496,18 @@ void QMessageBox::setTextInteractionFlags(Qt::TextInteractionFlags flags)
 */
 bool QMessageBox::event(QEvent *e)
 {
-    bool result =QDialog::event(e);
+    Q_D(QMessageBox);
+    bool result = QDialog::event(e);
     switch (e->type()) {
         case QEvent::LayoutRequest:
             d_func()->updateSize();
             break;
         case QEvent::LanguageChange:
             d_func()->retranslateStrings();
+            break;
+        case QEvent::Polish:
+            if (!d->optionsExplicitlySet && metaObject() != &QMessageBox::staticMetaObject)
+                setOption(QMessageBox::Option::DontUseNativeDialog);
             break;
         default:
             break;
@@ -2815,9 +2828,6 @@ bool QMessageBoxPrivate::canBeNativeDialog() const
         || (options->options() & QMessageDialogOptions::Option::DontUseNativeDialog)) {
         return false;
     }
-
-    if (strcmp(QMessageBox::staticMetaObject.className(), q->metaObject()->className()) != 0)
-        return false;
 
 #if QT_CONFIG(menu)
     for (auto *customButton : buttonBox->buttons()) {

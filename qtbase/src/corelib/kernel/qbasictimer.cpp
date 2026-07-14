@@ -1,5 +1,6 @@
 // Copyright (C) 2020 The Qt Company Ltd.
 // SPDX-License-Identifier: LicenseRef-Qt-Commercial OR LGPL-3.0-only OR GPL-2.0-only OR GPL-3.0-only
+// Qt-Security score:significant reason:default
 
 #include "qbasictimer.h"
 #include "qabstracteventdispatcher.h"
@@ -184,18 +185,21 @@ QT_BEGIN_NAMESPACE
  */
 void QBasicTimer::start(Duration duration, Qt::TimerType timerType, QObject *obj)
 {
-    QAbstractEventDispatcher *eventDispatcher = QAbstractEventDispatcher::instance();
     if (duration < 0ns) {
         qWarning("QBasicTimer::start: negative intervals aren't allowed; the "
                  "interval will be set to 1ms.");
         duration = 1ms;
     }
-    if (Q_UNLIKELY(!eventDispatcher)) {
-        qWarning("QBasicTimer::start: QBasicTimer can only be used with threads started with QThread");
+
+    QThreadData *currentData = QThreadData::current();
+    if (Q_UNLIKELY(obj && QObjectPrivate::get(obj)->threadData != currentData)) {
+        qWarning("QBasicTimer::start: Timers cannot be started from another thread");
         return;
     }
-    if (Q_UNLIKELY(obj && obj->thread() != eventDispatcher->thread())) {
-        qWarning("QBasicTimer::start: Timers cannot be started from another thread");
+
+    QAbstractEventDispatcher *eventDispatcher = currentData->eventDispatcher.loadRelaxed();
+    if (Q_UNLIKELY(!eventDispatcher)) {
+        qWarning("QBasicTimer::start: current thread's event dispatcher has already been destroyed");
         return;
     }
     stop();

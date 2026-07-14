@@ -174,7 +174,9 @@ endif()
 function(qt6_wrap_cpp)
     # check if the first argument is a target
     if(TARGET ${ARGV0})
-        _qt_internal_wrap_cpp(dummy TARGET ${ARGV})
+        _qt_internal_wrap_cpp(__qt_internal_target_signature_marker
+            TARGET ${ARGV}
+        )
     else()
         set(output_parameter ${ARGV0})
         _qt_internal_wrap_cpp(${ARGV})
@@ -194,9 +196,7 @@ function(qt6_wrap_cpp)
     endif()
 endfunction()
 
-# _qt_internal_wrap_cpp(outfiles inputfile ... )
-
-function(_qt_internal_wrap_cpp outfiles)
+function(_qt_internal_wrap_cpp outfiles_var)
     # get include dirs
     _qt_internal_get_moc_flags(moc_flags)
 
@@ -214,6 +214,7 @@ function(_qt_internal_wrap_cpp outfiles)
     set(moc_target ${_WRAP_CPP_TARGET})
     set(moc_depends ${_WRAP_CPP_DEPENDS})
 
+    set(outfiles "")
     set(metatypes_json_list "")
 
     foreach(it ${moc_files})
@@ -225,7 +226,7 @@ function(_qt_internal_wrap_cpp outfiles)
 
         if(it_ext MATCHES "${HEADER_REGEX}")
             _qt_internal_make_output_file("${it}" moc_ cpp outfile)
-            set(is_header_file TRUE)
+            list(APPEND outfiles "${outfile}")
         else()
             set(found_source_extension FALSE)
             foreach(LANG C CXX OBJC OBJCXX CUDA)
@@ -239,7 +240,7 @@ function(_qt_internal_wrap_cpp outfiles)
             if(found_extension)
                 if(TARGET ${moc_target})
                     _qt_internal_make_output_file(${it} "" moc outfile)
-                    target_sources(${moc_target} PRIVATE "${outfile}")
+                    list(APPEND outfiles "${outfile}")
                     target_include_directories("${moc_target}" PRIVATE
                         "${CMAKE_CURRENT_BINARY_DIR}")
                 else()
@@ -270,14 +271,27 @@ function(_qt_internal_wrap_cpp outfiles)
         _qt_internal_create_moc_command(
             ${it} ${outfile} "${moc_flags}" "${moc_options}" "${moc_target}" "${moc_depends}"
             "${out_json_file_var}")
-        list(APPEND ${outfiles} ${outfile})
         if(_WRAP_CPP___QT_INTERNAL_OUTPUT_MOC_JSON_FILES)
             list(APPEND metatypes_json_list "${${out_json_file_var}}")
         endif()
     endforeach()
 
-    if(is_header_file)
-        set(${outfiles} "${${outfiles}}" PARENT_SCOPE)
+    if(NOT outfiles STREQUAL "")
+        list(APPEND "${outfiles_var}" ${outfiles})
+        set("${outfiles_var}" "${${outfiles_var}}" PARENT_SCOPE)
+
+        if(TARGET ${moc_target})
+            get_target_property(moc_target_source_dir ${moc_target} SOURCE_DIR)
+            if(NOT moc_target_source_dir STREQUAL CMAKE_CURRENT_SOURCE_DIR)
+                # qt_wrap_cpp is not called in ${moc_target}'s directory scope.
+                # Add a custom target that drives the creation of moc's output files.
+                _qt_internal_unique_target_name(driver_target "_qt_${moc_target}_moc_driver")
+                add_custom_target(${driver_target} DEPENDS ${outfiles})
+                _qt_internal_assign_to_internal_targets_folder(${driver_target})
+                add_dependencies(${moc_target} ${driver_target})
+            endif()
+            target_sources(${moc_target} PRIVATE ${outfiles})
+        endif()
     endif()
 
     if(metatypes_json_list)
@@ -743,6 +757,9 @@ function(_qt_internal_create_executable target)
         )
 
         qt6_android_apply_arch_suffix("${target}")
+        if(QT_USE_ANDROID_MODERN_BUNDLE)
+            _qt_internal_set_android_application_gradle_defaults(${target})
+        endif()
     else()
         cmake_policy(PUSH)
         __qt_internal_set_cmp0156()
@@ -814,6 +831,8 @@ function(_qt_internal_finalize_executable target)
         else()
             _qt_internal_finalize_uikit_app("${target}")
         endif()
+    elseif(WIN32)
+        _qt_internal_finalize_windows_app("${target}")
     endif()
 
     # For finalizer mode of plugin importing to work safely, we need to know the list of Qt
@@ -1412,7 +1431,9 @@ function(qt6_extract_metatypes target)
             if(CMAKE_GENERATOR STREQUAL "Ninja" OR
                CMAKE_GENERATOR STREQUAL "Ninja Multi-Config" OR
                (CMAKE_GENERATOR MATCHES "Makefiles" AND
-                CMAKE_VERSION VERSION_GREATER_EQUAL "3.28"))
+                CMAKE_VERSION VERSION_GREATER_EQUAL "3.28") OR
+               ((CMAKE_GENERATOR STREQUAL "Xcode" OR CMAKE_GENERATOR MATCHES "^Visual Studio ")
+                AND CMAKE_VERSION VERSION_GREATER_EQUAL "4.4"))
                 if(DEFINED QT_USE_CMAKE_DEPFILES)
                     set(use_dep_files ${QT_USE_CMAKE_DEPFILES})
                 else()
@@ -1436,7 +1457,7 @@ function(qt6_extract_metatypes target)
             # Ensure the PRE_BUILD path is not taken by generating a dummy header file and adding it
             # as a source file to the target. This causes the file to be added to
             # cmQtAutoGenInitializer::AutogenTarget.DependFiles, which disables the PRE_BUILD path.
-            if(CMAKE_GENERATOR MATCHES "Visual Studio")
+            if(CMAKE_GENERATOR MATCHES "Visual Studio" AND CMAKE_VERSION VERSION_LESS "4.4")
                 # The file name should be target specific, but still short, so we don't hit path
                 # length issues.
                 string(MAKE_C_IDENTIFIER "ddf_${target}" dummy_dependency_file)
@@ -1555,9 +1576,22 @@ function(qt6_extract_metatypes target)
         VERBATIM
     )
 
-    if(CMAKE_GENERATOR MATCHES " Makefiles")
-        # Work around https://gitlab.kitware.com/cmake/cmake/-/issues/19005 to trigger the command
-        # that generates ${metatypes_file}.
+    if(CMAKE_GENERATOR MATCHES "Visual Studio")
+        # MSBuild cannot track BYPRODUCTS for dependency ordering between
+        # CustomBuild items. Without an explicit OUTPUT rule, MSBuild may run
+        # qmltyperegistrar (which depends on metatypes.json) before
+        # moc --collect-json (which produces metatypes.json as a BYPRODUCT).
+        # Use 'touch' instead of 'true' because MSBuild needs the output file's
+        # timestamp to be updated, otherwise the rule re-fires on every build.
+        add_custom_command(
+            OUTPUT ${metatypes_file}
+            DEPENDS ${metatypes_file_gen}
+            COMMAND ${CMAKE_COMMAND} -E touch ${metatypes_file}
+            VERBATIM
+        )
+    elseif(CMAKE_GENERATOR MATCHES " Makefiles")
+        # Work around https://gitlab.kitware.com/cmake/cmake/-/issues/19005
+        # to trigger the command that generates ${metatypes_file}.
         add_custom_command(
             OUTPUT ${metatypes_file}
             DEPENDS ${metatypes_file_gen}
@@ -3261,7 +3295,8 @@ function(_qt_internal_setup_deploy_support)
 
     list(JOIN candidate_paths "\n    " candidate_paths_joined)
 
-    if(WIN32 AND NOT QT_NO_QTPATHS_DEPLOYMENT_WARNING AND NOT target_qtpaths_path)
+    if(WIN32 AND NOT QT_BUILDING_QT AND NOT QT_NO_QTPATHS_DEPLOYMENT_WARNING
+        AND NOT target_qtpaths_path)
         message(WARNING
             "No qtpaths executable found for deployment purposes. Candidates searched: \n    "
             "${candidate_paths_joined}"
@@ -3717,6 +3752,7 @@ function(_qt_internal_get_i18n_catalogs_for_modules out_var)
             list(APPEND result ${catalog})
         endforeach()
     endforeach()
+    list(REMOVE_DUPLICATES result)
     set("${out_var}" "${result}" PARENT_SCOPE)
 endfunction()
 

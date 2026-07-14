@@ -1,5 +1,6 @@
 // Copyright (C) 2021 The Qt Company Ltd.
 // SPDX-License-Identifier: LicenseRef-Qt-Commercial OR LGPL-3.0-only OR GPL-2.0-only OR GPL-3.0-only
+// Qt-Security score:significant reason:default
 
 #include "qoperatingsystemversion.h"
 
@@ -112,7 +113,8 @@ QT_BEGIN_NAMESPACE
 */
 
 /*!
-    \fn QOperatingSystemVersion::current()
+    \fn QOperatingSystemVersion QOperatingSystemVersion::current()
+
     Returns a QOperatingSystemVersion indicating the current OS and its version number.
 
     \sa currentType()
@@ -483,6 +485,12 @@ const QOperatingSystemVersionBase QOperatingSystemVersion::Windows11_22H2;
     \variable QOperatingSystemVersion::Windows11_24H2
     \brief a version corresponding to Windows 11 Version 24H2 (version 10.0.26100).
     \since 6.8.1
+ */
+
+/*!
+    \variable QOperatingSystemVersion::Windows11_25H2
+    \brief a version corresponding to Windows 11 Version 25H2 (version 10.0.26200).
+    \since 6.11
  */
 
 /*!

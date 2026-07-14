@@ -15,6 +15,7 @@
 #endif
 
 #include <algorithm>
+#include <functional>
 
 #ifdef Q_OS_WIN
 #  include <QtCore/QVarLengthArray>
@@ -414,7 +415,7 @@ QFileSystemModelPrivate::QFileSystemNode *QFileSystemModelPrivate::node(const QS
 
     for (int i = 0; i < pathElements.size(); ++i) {
         QString element = pathElements.at(i);
-        if (i != 0)
+        if (i != 0 && !elementPath.endsWith(separator))
             elementPath.append(separator);
         elementPath.append(element);
         if (i == pathElements.size() - 1)
@@ -1130,8 +1131,10 @@ void QFileSystemModelPrivate::sortChildren(int column, const QModelIndex &parent
             iterator.value()->isVisible = false;
         }
     }
-    QFileSystemModelSorter ms(column);
-    std::sort(values.begin(), values.end(), ms);
+    {
+        const QFileSystemModelSorter ms(column);
+        std::sort(values.begin(), values.end(), std::cref(ms));
+    }
     // First update the new visible list
     indexNode->visibleChildren.clear();
     //No more dirty item we reset our internal dirty index

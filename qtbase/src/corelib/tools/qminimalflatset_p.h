@@ -1,5 +1,6 @@
 // Copyright (C) 2022 The Qt Company Ltd.
 // SPDX-License-Identifier: LicenseRef-Qt-Commercial OR LGPL-3.0-only OR GPL-2.0-only OR GPL-3.0-only
+// Qt-Security score:significant reason:default
 
 #ifndef QTCORE_QMINIMALFLATSET_P_H
 #define QTCORE_QMINIMALFLATSET_P_H
@@ -68,7 +69,7 @@ public:
     iterator begin() const { return c.cbegin(); }
     iterator end() const { return c.cend(); }
     iterator cbegin() const { return begin(); }
-    iterator cend() const { return cend(); }
+    iterator cend() const { return end(); }
 
     reverse_iterator rbegin() const { return c.crbegin(); }
     reverse_iterator rend() const { return c.crend(); }

@@ -1,5 +1,6 @@
 // Copyright (C) 2020 The Qt Company Ltd.
 // SPDX-License-Identifier: LicenseRef-Qt-Commercial OR LGPL-3.0-only OR GPL-2.0-only OR GPL-3.0-only
+// Qt-Security score:significant reason:default
 
 #include "qmetacontainer.h"
 #include "qmetatype.h"
@@ -210,7 +211,7 @@ void QMetaContainer::destroyIterator(const void *iterator) const
  */
 bool QMetaContainer::compareIterator(const void *i, const void *j) const
 {
-    return hasIterator() ? d_ptr->compareIteratorFn(i, j) : false;
+    return i == j || (hasIterator() && d_ptr->compareIteratorFn(i, j));
 }
 
 /*!
@@ -249,7 +250,7 @@ void QMetaContainer::advanceIterator(void *iterator, qsizetype step) const
  */
 qsizetype QMetaContainer::diffIterator(const void *i, const void *j) const
 {
-    return hasIterator() ? d_ptr->diffIteratorFn(i, j) : 0;
+    return (i != j && hasIterator()) ?  d_ptr->diffIteratorFn(i, j) : 0;
 }
 
 /*!
@@ -327,7 +328,7 @@ void QMetaContainer::destroyConstIterator(const void *iterator) const
  */
 bool QMetaContainer::compareConstIterator(const void *i, const void *j) const
 {
-    return hasConstIterator() ? d_ptr->compareConstIteratorFn(i, j) : false;
+    return i == j || (hasConstIterator() && d_ptr->compareConstIteratorFn(i, j));
 }
 
 /*!
@@ -366,7 +367,7 @@ void QMetaContainer::advanceConstIterator(void *iterator, qsizetype step) const
  */
 qsizetype QMetaContainer::diffConstIterator(const void *i, const void *j) const
 {
-    return hasConstIterator() ?  d_ptr->diffConstIteratorFn(i, j) : 0;
+    return (i != j && hasConstIterator()) ?  d_ptr->diffConstIteratorFn(i, j) : 0;
 }
 
 QT_END_NAMESPACE

@@ -54,18 +54,29 @@ uchar Frame::padding() const
 {
     Q_ASSERT(validateHeader() == FrameStatus::goodFrame);
 
-    if (!flags().testFlag(FrameFlag::PADDED))
+    if (!isPadded())
         return 0;
 
+    Q_ASSERT(buffer.size() > frameHeaderSize);
+    return buffer[frameHeaderSize];
+}
+
+bool Frame::isPadded() const
+{
+    return supportsPaddedFlag() && flags().testFlag(FrameFlag::PADDED);
+}
+
+bool Frame::supportsPaddedFlag() const
+{
     switch (type()) {
     case FrameType::DATA:
     case FrameType::PUSH_PROMISE:
     case FrameType::HEADERS:
-        Q_ASSERT(buffer.size() > frameHeaderSize);
-        return buffer[frameHeaderSize];
+        return true;
     default:
-        return 0;
+        break;
     }
+    return false;
 }
 
 bool Frame::priority(quint32 *streamID, uchar *weight) const
@@ -167,9 +178,10 @@ FrameStatus Frame::validatePayload() const
     case FrameType::DATA:
     case FrameType::HEADERS:
         if (frameFlags.testFlag(FrameFlag::PADDED)) {
-            if (!size || size < src[0])
+            // size must cover the 1-byte pad-length field plus src[0] padding bytes
+            if (!size || size - 1 < src[0])
                 return FrameStatus::sizeError;
-            size -= src[0];
+            size -= src[0] + 1;
         }
         if (type() == FrameType::HEADERS && frameFlags.testFlag(FrameFlag::PRIORITY)) {
             if (size < 5)
@@ -179,9 +191,10 @@ FrameStatus Frame::validatePayload() const
     // 6.6 PUSH_PROMISE
     case FrameType::PUSH_PROMISE:
         if (frameFlags.testFlag(FrameFlag::PADDED)) {
-            if (!size || size < src[0])
+            // size must cover the 1-byte pad-length field plus src[0] padding bytes
+            if (!size || size - 1 < src[0])
                 return FrameStatus::sizeError;
-            size -= src[0];
+            size -= src[0] + 1;
         }
 
         if (size < 4)
@@ -200,7 +213,7 @@ quint32 Frame::dataSize() const
     Q_ASSERT(validatePayload() == FrameStatus::goodFrame);
 
     quint32 size = payloadSize();
-    if (flags().testFlag(FrameFlag::PADDED)) {
+    if (isPadded()) {
         const uchar pad = padding();
         // + 1 one for a byte with padding number itself:
         size -= pad + 1;
@@ -237,7 +250,7 @@ const uchar *Frame::dataBegin() const
         return nullptr;
 
     const uchar *src = &buffer[0] + frameHeaderSize;
-    if (flags().testFlag(FrameFlag::PADDED))
+    if (isPadded())
         ++src;
 
     if (priority())
@@ -266,18 +279,19 @@ FrameStatus FrameReader::read(QIODevice &socket)
     if (offset < frameHeaderSize) {
         if (!readHeader(socket))
             return FrameStatus::incompleteFrame;
-
-        const auto status = frame.validateHeader();
-        if (status != FrameStatus::goodFrame) {
-            // No need to read any payload.
-            return status;
-        }
-
-        if (Http2PredefinedParameters::maxPayloadSize < frame.payloadSize())
-            return FrameStatus::sizeError;
-
-        frame.buffer.resize(frame.payloadSize() + frameHeaderSize);
     }
+
+    const auto status = frame.validateHeader();
+    if (status != FrameStatus::goodFrame) {
+        if (status == FrameStatus::sizeError && frame.streamID() != connectionStreamID) {
+            if (!discardPayload(socket))
+                return FrameStatus::incompleteFrame;
+        }
+        return status;
+    }
+
+    Q_ASSERT(maxPayloadSize >= frame.payloadSize());
+    frame.buffer.resize(frame.payloadSize() + frameHeaderSize);
 
     if (offset < frame.buffer.size() && !readPayload(socket))
         return FrameStatus::incompleteFrame;
@@ -318,6 +332,32 @@ bool FrameReader::readPayload(QIODevice &socket)
         offset += quint32(chunkSize);
 
     return offset == buffer.size();
+}
+
+// Returns true if there is nothing more to discard
+bool FrameReader::discardPayload(QIODevice &socket)
+{
+    Q_ASSERT(offset >= frameHeaderSize); // Frame header is already read when this is called
+
+    using namespace Http2;
+    auto frameType = frame.type();
+    if (frameType != FrameType::DATA && frameType != FrameType::PRIORITY &&
+        frameType != FrameType::WINDOW_UPDATE)
+        return true; // Connection will be closed, nothing needs to be discarded
+
+    const quint32 payload = frame.payloadSize();
+    Q_ASSERT(maxPayloadSize >= payload);
+    const quint32 totalFrameSize = frameHeaderSize + payload;
+    while (totalFrameSize > offset) {
+        const quint32 remainingSize = totalFrameSize - offset;
+        const auto skipped = socket.skip(remainingSize);
+        if (skipped > 0)
+            offset += quint32(skipped);
+        else
+            return false;
+    }
+    offset = 0;
+    return true;
 }
 
 FrameWriter::FrameWriter()

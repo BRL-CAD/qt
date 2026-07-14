@@ -1,5 +1,7 @@
 // Copyright (C) 2016 The Qt Company Ltd.
 // SPDX-License-Identifier: LicenseRef-Qt-Commercial OR LGPL-3.0-only OR GPL-2.0-only OR GPL-3.0-only
+// Qt-Security score:significant reason:default
+
 
 #include "qsvggenerator.h"
 
@@ -7,9 +9,10 @@
 
 #include "qpainterpath.h"
 
-#include "private/qpaintengine_p.h"
-#include "private/qtextengine_p.h"
 #include "private/qdrawhelper_p.h"
+#include "private/qpaintengine_p.h"
+#include "private/qpainter_p.h"
+#include "private/qtextengine_p.h"
 
 #include "qfile.h"
 #include "qtextstream.h"
@@ -62,7 +65,7 @@ public:
 
         attributes.document_title = QLatin1String("Qt SVG Document");
         attributes.document_description = QLatin1String("Generated with Qt");
-        attributes.font_family = QLatin1String("serif");
+        attributes.font_families << QLatin1String("serif");
         attributes.font_size = QLatin1String("10pt");
         attributes.font_style = QLatin1String("normal");
         attributes.font_weight = QLatin1String("normal");
@@ -75,7 +78,7 @@ public:
     QSize size;
     QRectF viewBox;
     QIODevice *outputDevice;
-    QTextStream *stream;
+    QTextStream *stream{nullptr};
     int resolution;
 
     QString header;
@@ -105,7 +108,7 @@ public:
         QString document_description;
         QString font_weight;
         QString font_size;
-        QString font_family;
+        QStringList font_families;
         QString font_style;
         QString stroke, strokeOpacity;
         QString dashPattern, dashOffset;
@@ -534,10 +537,10 @@ public:
             d->attributes.font_size = QString::number(d->font.pixelSize());
 
         d->attributes.font_weight = QString::number(d->font.weight());
-        d->attributes.font_family = d->font.family();
+        d->attributes.font_families = d->font.families();
         d->attributes.font_style = d->font.italic() ? QLatin1String("italic") : QLatin1String("normal");
 
-        *d->stream << "font-family=\"" << d->attributes.font_family << "\" "
+        *d->stream << "font-family=\"" << d->attributes.font_families.join(QStringLiteral(",")) << "\" "
                       "font-size=\"" << d->attributes.font_size << "\" "
                       "font-weight=\"" << d->attributes.font_weight << "\" "
                       "font-style=\"" << d->attributes.font_style << "\" "
@@ -570,7 +573,14 @@ public:
     by setting the \l size property, and in some cases where the drawing will be included in
     another, the \l viewBox property also needs to be set.
 
-    \snippet svggenerator/window.cpp configure SVG generator
+    \code
+    QSvgGenerator generator;
+    generator.setFileName(path);
+    generator.setSize(QSize(200, 200));
+    generator.setViewBox(QRect(0, 0, 200, 200));
+    generator.setTitle(tr("SVG Generator Drawing"));
+    generator.setDescription(tr("An SVG drawing created by the SVG Generator"));
+    \endcode
 
     Other meta-data can be specified by setting the \a title, \a description and \a resolution
     properties.
@@ -578,9 +588,12 @@ public:
     As with other QPaintDevice subclasses, a QPainter object is used to paint onto an instance
     of this class:
 
-    \snippet svggenerator/window.cpp begin painting
-    \dots
-    \snippet svggenerator/window.cpp end painting
+    \code
+    QPainter painter;
+    painter.begin(&generator);
+    ...
+    painter.end();
+    \endcode
 
     Painting is performed in the same way as for any other paint device. However,
     it is necessary to use the QPainter::begin() and \l{QPainter::}{end()} to
@@ -892,6 +905,21 @@ int QSvgGenerator::metric(QPaintDevice::PaintDeviceMetric metric) const
     return 0;
 }
 
+/*!
+    \since 6.11
+    \reimp
+*/
+void QSvgGenerator::initPainter(QPainter *painter) const
+{
+    QPainterPrivate *painterPrivate = QPainterPrivate::get(painter);
+
+    for (QFont *font : { &painterPrivate->state->deviceFont, &painterPrivate->state->font }) {
+        if (font->hintingPreference() == QFont::PreferDefaultHinting)
+            font->setHintingPreference(QFont::PreferNoHinting);
+    }
+    painterPrivate->setEngineDirtyFlags({ QPaintEngine::DirtyFont });
+}
+
 /*****************************************************************************
  * class QSvgPaintEngine
  */
@@ -1139,10 +1167,22 @@ void QSvgPaintEngine::drawPath(const QPainterPath &p)
                << (p.fillRule() == Qt::OddEvenFill ? "evenodd" : "nonzero")
                << "\" d=\"";
 
-    for (int i=0; i<p.elementCount(); ++i) {
+    int i = 0;
+    QPointF subPathStart;
+    auto endSubPath = [&]() {
+        if (i > 0) {
+            const QPointF subPathEnd = p.elementAt(i - 1);
+            if (subPathEnd == subPathStart)
+                *d->stream << "Z ";
+        }
+    };
+
+    for (i = 0; i < p.elementCount(); ++i) {
         const QPainterPath::Element &e = p.elementAt(i);
         switch (e.type) {
         case QPainterPath::MoveToElement:
+            endSubPath();
+            subPathStart = e;
             *d->stream << 'M' << e.x << ',' << e.y;
             break;
         case QPainterPath::LineToElement:
@@ -1161,14 +1201,15 @@ void QSvgPaintEngine::drawPath(const QPainterPath &p)
                 *d->stream << e.x << ',' << e.y;
                 ++i;
             }
+            if (i == p.elementCount())
+                --i; // don't overshoot, outer for-loop will increment again, see QTBUG-145372
             break;
         default:
             break;
         }
-        if (i != p.elementCount() - 1) {
-            *d->stream << ' ';
-        }
+        *d->stream << ' ';
     }
+    endSubPath();
 
     *d->stream << "\"/>" << Qt::endl;
 }
@@ -1180,23 +1221,22 @@ void QSvgPaintEngine::drawPolygon(const QPointF *points, int pointCount,
 
     //Q_D(QSvgPaintEngine);
 
-    QPainterPath path(points[0]);
-    for (int i=1; i<pointCount; ++i)
-        path.lineTo(points[i]);
+    if (mode == PolylineMode)
+        stream() << "<polyline fill=\"none\"";
+    else if (mode == OddEvenMode)
+        stream() << "<polygon fill-rule=\"evenodd\"";
+    else if (mode == WindingMode || mode == ConvexMode)
+        stream() << "<polygon fill-rule=\"nonzero\"";
 
-    if (mode == PolylineMode) {
-        stream() << "<polyline fill=\"none\" vector-effect=\""
-                 << (state->pen().isCosmetic() ? "non-scaling-stroke" : "none")
-                 << "\" points=\"";
-        for (int i = 0; i < pointCount; ++i) {
-            const QPointF &pt = points[i];
-            stream() << pt.x() << ',' << pt.y() << ' ';
-        }
-        stream() << "\" />" <<Qt::endl;
-    } else {
-        path.closeSubpath();
-        drawPath(path);
+    stream() << " vector-effect=\""
+             << (state->pen().isCosmetic() ? "non-scaling-stroke" : "none")
+             << "\" points=\"";
+    for (int i = 0; i < pointCount; ++i) {
+        const QPointF &pt = points[i];
+        stream() << pt.x() << ',' << pt.y() << ' ';
     }
+    stream() << "\" />" <<Qt::endl;
+
 }
 
 void QSvgPaintEngine::drawRects(const QRectF *rects, int rectCount)

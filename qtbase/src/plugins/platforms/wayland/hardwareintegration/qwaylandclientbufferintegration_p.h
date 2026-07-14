@@ -1,5 +1,6 @@
 // Copyright (C) 2016 The Qt Company Ltd.
 // SPDX-License-Identifier: LicenseRef-Qt-Commercial OR LGPL-3.0-only OR GPL-2.0-only OR GPL-3.0-only
+// Qt-Security score:significant reason:default
 
 #ifndef QWAYLANDCLIENTBUFFERINTEGRATION_H
 #define QWAYLANDCLIENTBUFFERINTEGRATION_H
@@ -17,7 +18,7 @@
 
 #include <QtCore/private/qglobal_p.h>
 #include <QtWaylandClient/qtwaylandclientglobal.h>
-#if QT_CONFIG(opengl)
+#if QT_CONFIG(opengl) && QT_CONFIG(egl)
 #include <QtGui/private/qeglplatformcontext_p.h>
 #endif
 
@@ -26,9 +27,11 @@ QT_BEGIN_NAMESPACE
 class QWindow;
 #if QT_CONFIG(opengl)
 class QOpenGLContext;
-#endif
 class QPlatformOpenGLContext;
+#endif
+class QPlatformOffscreenSurface;
 class QSurfaceFormat;
+class QOffscreenSurface;
 
 namespace QtWaylandClient {
 
@@ -49,9 +52,11 @@ public:
     virtual bool supportsWindowDecoration() const { return false; }
 
     virtual QWaylandWindow *createEglWindow(QWindow *window) = 0;
+    virtual bool canCreatePlatformOffscreenSurface() const { return false; }
+#if QT_CONFIG(opengl) && QT_CONFIG(egl)
     virtual QPlatformOpenGLContext *createPlatformOpenGLContext(const QSurfaceFormat &glFormat, QPlatformOpenGLContext *share) const = 0;
-#if QT_CONFIG(opengl)
     virtual QOpenGLContext *createOpenGLContext(EGLContext context, EGLDisplay contextDisplay, QOpenGLContext *shareContext) const = 0;
+    virtual QPlatformOffscreenSurface *createPlatformOffscreenSurface(QOffscreenSurface *surface) const { Q_UNUSED(surface); return nullptr; }
 #endif
 
     enum NativeResource {
@@ -60,7 +65,9 @@ public:
         EglContext
     };
     virtual void *nativeResource(NativeResource /*resource*/) { return nullptr; }
+#if QT_CONFIG(opengl)
     virtual void *nativeResourceForContext(NativeResource /*resource*/, QPlatformOpenGLContext */*context*/) { return nullptr; }
+#endif
 };
 
 }

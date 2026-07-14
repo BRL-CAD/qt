@@ -1,5 +1,6 @@
 // Copyright (C) 2016 The Qt Company Ltd.
 // SPDX-License-Identifier: LicenseRef-Qt-Commercial OR LGPL-3.0-only OR GPL-2.0-only OR GPL-3.0-only
+// Qt-Security score:significant reason:default
 
 #ifndef QLIBRARYINFO_H
 #define QLIBRARYINFO_H
@@ -15,11 +16,11 @@ class Q_CORE_EXPORT QLibraryInfo
 public:
     static const char *build() noexcept;
 
-    [[nodiscard]] static bool isDebugBuild() noexcept Q_DECL_CONST_FUNCTION;
-    [[nodiscard]] static bool isSharedBuild() noexcept Q_DECL_CONST_FUNCTION;
+    [[nodiscard]] Q_DECL_CONST_FUNCTION static bool isDebugBuild() noexcept;
+    [[nodiscard]] Q_DECL_CONST_FUNCTION static bool isSharedBuild() noexcept;
 
 #ifndef QT_BOOTSTRAPPED
-    static QVersionNumber version() noexcept Q_DECL_CONST_FUNCTION;
+    Q_DECL_CONST_FUNCTION static QVersionNumber version() noexcept;
 #endif
 
     enum LibraryPath {

@@ -299,8 +299,11 @@ struct QMetalCommandBuffer : public QRhiCommandBuffer
     QRhiCommandBuffer::IndexFormat currentIndexFormat;
     int currentCullMode;
     int currentTriangleFillMode;
+    int currentDepthClipMode;
     int currentFrontFaceWinding;
     std::pair<float, float> currentDepthBiasValues;
+    bool hasCustomScissorSet;
+    QRhiViewport currentViewport;
 
     const QRhiNativeHandles *nativeHandles();
     void resetState(double lastGpuTime = 0);
@@ -480,6 +483,8 @@ public:
                                        const QRhiCommandBuffer::DynamicOffset *dynamicOffsets,
                                        bool offsetOnlyChange,
                                        const QShader::NativeResourceBindingMap *nativeResourceBindingMaps[SUPPORTED_STAGES]);
+    void setDefaultScissor(QMetalCommandBuffer *cbD);
+
     struct TessDrawArgs {
         QMetalCommandBuffer *cbD;
         enum {
@@ -527,6 +532,7 @@ public:
         int maxThreadGroupSize = 512;
         bool multiView = false;
         bool shadingRateMap = false;
+        bool depthClamp = true;
     } caps;
 
     QRhiMetalData *d = nullptr;

@@ -1,5 +1,6 @@
 // Copyright (C) 2016 The Qt Company Ltd.
 // SPDX-License-Identifier: LicenseRef-Qt-Commercial OR LGPL-3.0-only OR GPL-2.0-only OR GPL-3.0-only
+// Qt-Security score:significant reason:default
 
 #ifndef QWINDOWSWINDOW_H
 #define QWINDOWSWINDOW_H
@@ -468,11 +469,7 @@ QPoint QWindowsGeometryHint::mapFromGlobal(const QWindow *w, const QPoint &p)
 
 inline QWindowsWindow *QWindowsWindow::windowsWindowOf(const QWindow *w)
 {
-    if (!w || !w->handle())
-        return nullptr;
-
-    const Qt::WindowType type = w->type();
-    if (type == Qt::Desktop || w->handle()->isForeignWindow())
+    if (!w || !w->handle() || w->handle()->isForeignWindow())
         return nullptr;
 
     return static_cast<QWindowsWindow *>(w->handle());

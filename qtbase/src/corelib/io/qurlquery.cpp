@@ -29,7 +29,8 @@ QT_BEGIN_NAMESPACE
 
   It is used to parse the query strings found in URLs like the following:
 
-  \image qurl-querystring.png
+  \image qurl-querystring.png {Illustration of a URL with part after question mark
+         highlighted as query string.}
 
   Query strings like the above are used to transmit options in the URL and are
   usually decoded into multiple key-value pairs. The one above would contain
@@ -548,7 +549,8 @@ QString QUrlQuery::query(QUrl::ComponentFormattingOptions encoding) const
     and between key-value pairs in the URL's query string. The default
     value delimiter is '=' and the default pair delimiter is '&'.
 
-    \image qurl-querystring.png
+    \image qurl-querystring.png {Illustration of a URL with part after
+         question mark highlighted as query string.}
 
     \a valueDelimiter will be used for separating keys from values,
     and \a pairDelimiter will be used to separate key-value pairs.
@@ -607,7 +609,9 @@ QChar QUrlQuery::queryPairDelimiter() const
     as the same, like HTML forms do. If you need spaces to be represented as
     plus signs, use actual plus signs.
 
-    \note The keys and values are expected to be in percent-encoded form.
+    \note The keys and values are expected to be in percent-encoded form. This
+    function will try to recover if improperly-encoded inputs are provided, but
+    that may produce data loss. See \l{QUrlQuery#Encoding} for more information.
 
     \sa queryItems(), isEmpty()
 */
@@ -653,7 +657,9 @@ QList<std::pair<QString, QString> > QUrlQuery::queryItems(QUrl::ComponentFormatt
     Returns \c true if there is a query string pair whose key is equal
     to \a key from the URL.
 
-    \note The key expected to be in percent-encoded form.
+    \note The key expected to be in percent-encoded form. This function will
+    try to recover if an improperly-encoded input is provided, but that may
+    produce data loss. See \l{QUrlQuery#Encoding} for more information.
 
     \sa addQueryItem(), queryItemValue()
 */
@@ -674,6 +680,9 @@ bool QUrlQuery::hasQueryItem(const QString &key) const
     plus signs, use actual plus signs.
 
     \note The key and value strings are expected to be in percent-encoded form.
+    This function will try to recover if improperly-encoded inputs are
+    provided, but that may produce data loss. See \l{QUrlQuery#Encoding} for
+    more information.
 
     \sa hasQueryItem(), queryItemValue()
 */
@@ -693,7 +702,9 @@ void QUrlQuery::addQueryItem(const QString &key, const QString &value)
     one found, in the order they were present in the query string or added
     using addQueryItem().
 
-    \note The key is expected to be in percent-encoded form.
+    \note The key is expected to be in percent-encoded form. This function will
+    try to recover if an improperly-encoded input is provided, but that may
+    produce data loss. See \l{QUrlQuery#Encoding} for more information.
 
     \sa addQueryItem(), allQueryItemValues(), {encoding}{Encoding}
 */
@@ -713,7 +724,9 @@ QString QUrlQuery::queryItemValue(const QString &key, QUrl::ComponentFormattingO
     the URL, using the options specified in \a encoding to encode the return
     value. If the key \a key is not found, this function returns an empty list.
 
-    \note The key is expected to be in percent-encoded form.
+    \note The key is expected to be in percent-encoded form. This function will
+    try to recover if an improperly-encoded input is provided, but that may
+    produce data loss. See \l{QUrlQuery#Encoding} for more information.
 
     \sa queryItemValue(), addQueryItem()
 */
@@ -737,7 +750,9 @@ QStringList QUrlQuery::allQueryItemValues(const QString &key, QUrl::ComponentFor
     item in the order they were present in the query string or added with
     addQueryItem().
 
-    \note The key is expected to be in percent-encoded form.
+    \note The key is expected to be in percent-encoded form. This function will
+    try to recover if an improperly-encoded input is provided, but that may
+    produce data loss. See \l{QUrlQuery#Encoding} for more information.
 
     \sa removeAllQueryItems()
 */
@@ -755,7 +770,9 @@ void QUrlQuery::removeQueryItem(const QString &key)
     Removes all the query string pairs whose key is equal to \a key
     from the URL.
 
-    \note The key is expected to be in percent-encoded form.
+    \note The key is expected to be in percent-encoded form. This function will
+    try to recover if an improperly-encoded input is provided, but that may
+    produce data loss. See \l{QUrlQuery#Encoding} for more information.
 
     \sa removeQueryItem()
 */

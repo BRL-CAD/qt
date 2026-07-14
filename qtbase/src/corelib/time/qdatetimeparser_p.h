@@ -1,5 +1,6 @@
 // Copyright (C) 2021 The Qt Company Ltd.
 // SPDX-License-Identifier: LicenseRef-Qt-Commercial OR LGPL-3.0-only OR GPL-2.0-only OR GPL-3.0-only
+// Qt-Security score:significant reason:default
 
 #ifndef QDATETIMEPARSER_P_H
 #define QDATETIMEPARSER_P_H
@@ -24,7 +25,6 @@
 #include "QtCore/qlist.h"
 #include "QtCore/qlocale.h"
 #include "QtCore/qstringlist.h"
-#include "QtCore/qtimezone.h"
 #ifndef QT_BOOTSTRAPPED
 # include "QtCore/qvariant.h"
 #endif
@@ -39,6 +39,7 @@ QT_REQUIRE_CONFIG(datetimeparser);
 #define QDATETIMEEDIT_DATE_INITIAL QDate(2000, 1, 1)
 
 QT_BEGIN_NAMESPACE
+class QTimeZone;
 
 class Q_CORE_EXPORT QDateTimeParser
 {
@@ -261,4 +262,4 @@ Q_DECLARE_OPERATORS_FOR_FLAGS(QDateTimeParser::FieldInfo)
 
 QT_END_NAMESPACE
 
-#endif // QDATETIME_P_H
+#endif // QDATETIMEPARSER_P_H

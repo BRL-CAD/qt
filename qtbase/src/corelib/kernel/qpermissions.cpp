@@ -1,5 +1,6 @@
 // Copyright (C) 2022 The Qt Company Ltd.
 // SPDX-License-Identifier: LicenseRef-Qt-Commercial OR LGPL-3.0-only OR GPL-2.0-only OR GPL-3.0-only
+// Qt-Security score:significant reason:default
 
 #include "qpermissions.h"
 #include "qpermissions_p.h"
@@ -119,7 +120,7 @@ Q_LOGGING_CATEGORY(lcPermissions, "qt.permissions", QtWarningMsg);
     To ensure the relevant permission backend is included with your
     application, please \l {QT_ANDROID_PACKAGE_SOURCE_DIR}
     {point the build system to your custom \c AndroidManifest.xml}
-    or use \l {qt_add_android_permission()}.
+    or use \l {qt_add_android_permission}().
 
     The relevant permission names are described in the documentation
     for each permission type.

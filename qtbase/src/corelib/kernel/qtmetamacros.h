@@ -1,6 +1,7 @@
 // Copyright (C) 2019 The Qt Company Ltd.
 // Copyright (C) 2019 Olivier Goffart <ogoffart@woboq.com>
 // SPDX-License-Identifier: LicenseRef-Qt-Commercial OR LGPL-3.0-only OR GPL-2.0-only OR GPL-3.0-only
+// Qt-Security score:significant reason:default
 
 #ifndef QTMETAMACROS_H
 #define QTMETAMACROS_H
@@ -79,7 +80,7 @@ QT_BEGIN_NAMESPACE
 #define Q_SIGNAL QT_ANNOTATE_FUNCTION(qt_signal)
 #define Q_SLOT QT_ANNOTATE_FUNCTION(qt_slot)
 #define Q_MOC_INCLUDE(...) QT_ANNOTATE_CLASS(qt_moc_include, __VA_ARGS__)
-#endif // QT_NO_META_MACROS
+#endif // !QT_NO_META_MACROS
 
 #ifndef QT_NO_TRANSLATION
 // full set of tr functions
@@ -176,7 +177,7 @@ private: \
 #define Q_NAMESPACE Q_NAMESPACE_EXPORT() \
     /*end*/
 
-#endif // QT_NO_META_MACROS
+#endif // !QT_NO_META_MACROS
 
 #else // Q_MOC_RUN
 #define slots slots

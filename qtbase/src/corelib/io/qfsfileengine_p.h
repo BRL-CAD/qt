@@ -82,7 +82,7 @@ public:
     bool setFileTime(const QDateTime &newDate, QFile::FileTime time) override;
     QDateTime fileTime(QFile::FileTime time) const override;
     void setFileName(const QString &file) override;
-    void setFileEntry(QFileSystemEntry &&entry);
+    virtual void setFileEntry(QFileSystemEntry &&entry);
     int handle() const override;
 
 #ifndef QT_NO_FILESYSTEMITERATOR
@@ -215,6 +215,41 @@ public:
         // ReadOnly by itself never creates.
         return (openMode & QFile::WriteOnly) && !(openMode & QFile::ExistingOnly);
     }
+
+#if defined(Q_OS_UNIX)
+    /*!
+        \internal
+
+        Returns the stdio open flags corresponding to a QIODevice::OpenMode.
+    */
+    static int openModeToOpenFlags(QIODevice::OpenMode mode)
+    {
+        int oflags = QT_OPEN_RDONLY;
+#  ifdef QT_LARGEFILE_SUPPORT
+        oflags |= QT_OPEN_LARGEFILE;
+#  endif
+
+        if ((mode & QIODevice::ReadWrite) == QIODevice::ReadWrite)
+            oflags = QT_OPEN_RDWR;
+        else if (mode & QIODevice::WriteOnly)
+            oflags = QT_OPEN_WRONLY;
+
+        if (openModeCanCreate(mode))
+            oflags |= QT_OPEN_CREAT;
+
+        if (mode & QIODevice::Truncate)
+            oflags |= QT_OPEN_TRUNC;
+
+        if (mode & QIODevice::Append)
+            oflags |= QT_OPEN_APPEND;
+
+        if (mode & QIODevice::NewOnly)
+            oflags |= QT_OPEN_EXCL;
+
+        return oflags;
+    }
+#endif // Q_OS_UNIX
+
 protected:
     QFSFileEnginePrivate(QAbstractFileEngine *q);
 

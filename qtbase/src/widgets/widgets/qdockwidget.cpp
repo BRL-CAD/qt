@@ -6,6 +6,9 @@
 
 #include <qaction.h>
 #include <qapplication.h>
+#if QT_CONFIG(accessibility)
+#include <qaccessible.h>
+#endif
 #include <qdrawutil.h>
 #include <qevent.h>
 #include <qfontmetrics.h>
@@ -779,7 +782,7 @@ void QDockWidgetPrivate::startDrag(DragScope scope)
     }
 
     if (state->ctrlDrag)
-        layout->restore();
+        layout->restore(QInternal::KeepSavedState);
 
     state->dragging = true;
 
@@ -826,7 +829,7 @@ void QDockWidgetPrivate::endDrag(EndDragMode mode)
                     delete state->widgetItem;
                     state->widgetItem = nullptr;
                 }
-                mwLayout->restore();
+                mwLayout->restore(QInternal::KeepSavedState);
                 QDockWidgetLayout *dwLayout = qobject_cast<QDockWidgetLayout*>(layout);
                 if (!dwLayout->nativeWindowDeco()) {
                     // get rid of the X11BypassWindowManager window flag and activate the resizer
@@ -1235,6 +1238,15 @@ void QDockWidgetPrivate::setWindowState(WindowStates states, const QRect &rect)
 
     if (floating != wasFloating) {
         emit q->topLevelChanged(floating);
+#if QT_CONFIG(accessibility)
+        if (QAccessible::isActive()) {
+            // Accessible role depends on whether QDockWidget is a top level or not,
+            // see QAccessibleDockWidget::role
+            QAccessibleEvent roleChangedEvent(q, QAccessible::RoleChanged);
+            QAccessible::updateAccessibility(&roleChangedEvent);
+        }
+#endif
+
         if (!floating && parent) {
             QMainWindowLayout *mwlayout = qt_mainwindow_layout_from_dock(q);
             if (mwlayout)
@@ -1361,13 +1373,11 @@ QDockWidget::QDockWidget(const QString &title, QWidget *parent, Qt::WindowFlags 
 */
 QDockWidget::~QDockWidget()
 {
-    Q_D(QDockWidget);
-    d->inDestructor = true;
-    // Do all the unregistering while we're still a QDockWidget. Otherwise, it
-    // would be ~QObject() which does that and then QDockAreaLayout::takeAt(),
-    // acting on QEvent::ChildRemoved, will try to access our QWidget-ness when
-    // replacing us with a QPlaceHolderItem, causing UB:
-    setParent(nullptr);
+    // Remove the QDockWidget from its layout while it's still a widget.
+    // Otherwise QEvent::ChildRemoved will cause QDock*Layout::takeAt() and
+    // subsequently a UB.
+    if (parentWidget() && parentWidget()->layout())
+        parentWidget()->layout()->removeWidget(this);
 }
 
 /*!
@@ -1599,6 +1609,8 @@ void QDockWidget::closeEvent(QCloseEvent *event)
     const QMainWindow *win = qobject_cast<QMainWindow*>(parentWidget());
     const bool canClose = (d->features & DockWidgetClosable)
                        || (!win || !win->isVisible());
+    if (canClose)
+        d->closed = true;
     event->setAccepted(canClose);
 }
 
@@ -1649,15 +1661,12 @@ bool QDockWidget::event(QEvent *event)
     case QEvent::Hide:
         if (layout != nullptr)
             layout->keepSize(this);
-        // If we are in the destructor, don't emit any signals, as those might
-        // be handled by a slot that requires this dock widget to still be alive.
-        if (!d->inDestructor) {
-            d->toggleViewAction->setChecked(false);
-            emit visibilityChanged(false);
-        }
+        d->toggleViewAction->setChecked(false);
+        emit visibilityChanged(false);
         break;
     case QEvent::Show: {
         d->toggleViewAction->setChecked(true);
+        d->closed = false;
         QPoint parentTopLeft(0, 0);
         if (isWindow()) {
             const QScreen *screen = d->associatedScreen();

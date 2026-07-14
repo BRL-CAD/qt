@@ -1,5 +1,6 @@
 // Copyright (C) 2017 Intel Corporation.
 // SPDX-License-Identifier: LicenseRef-Qt-Commercial OR LGPL-3.0-only OR GPL-2.0-only OR GPL-3.0-only
+// Qt-Security score:significant reason:default
 
 #ifndef MINIMUMLINUX_P_H
 #define MINIMUMLINUX_P_H
@@ -41,7 +42,6 @@ QT_BEGIN_NAMESPACE
  * - accept4                    2.6.28
  * - renameat2                  3.16                    QT_CONFIG(renameat2)
  * - getrandom                  3.17                    QT_CONFIG(getentropy)
- * - copy_file_range            4.5                     QT_CONFIG(copy_file_range)
  * - statx                      4.11                    STATX_BASIC_STATS
  */
 
@@ -50,10 +50,6 @@ QT_BEGIN_NAMESPACE
 // falls back to stat() for us.
 #  define QT_ELF_NOTE_OS_MAJOR      4
 #  define QT_ELF_NOTE_OS_MINOR      11
-#  define QT_ELF_NOTE_OS_PATCH      0
-#elif QT_CONFIG(copy_file_range)
-#  define QT_ELF_NOTE_OS_MAJOR      4
-#  define QT_ELF_NOTE_OS_MINOR      5
 #  define QT_ELF_NOTE_OS_PATCH      0
 #elif QT_CONFIG(getentropy)
 #  define QT_ELF_NOTE_OS_MAJOR      3

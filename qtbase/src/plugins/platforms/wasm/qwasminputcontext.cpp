@@ -1,8 +1,10 @@
 // Copyright (C) 2019 The Qt Company Ltd.
 // SPDX-License-Identifier: LicenseRef-Qt-Commercial OR GPL-3.0-only
+// Qt-Security score:significant reason:default
 
 #include "qwasminputcontext.h"
 #include "qwasmwindow.h"
+#include "qwasmaccessibility.h"
 
 #include <QRectF>
 #include <QLoggingCategory>
@@ -145,15 +147,13 @@ void QWasmInputContext::inputCallback(emscripten::val event)
          }
 
         event.call<void>("stopImmediatePropagation");
-#if QT_CONFIG(clipboard)
     } else if (!inputTypeString.compare("insertFromPaste")) {
-        insertText(QGuiApplication::clipboard()->text());
+        insertText(inputStr);
         event.call<void>("stopImmediatePropagation");
     // These can be supported here,
     // But now, keyCallback in QWasmWindow
     // will take them as exceptions.
     //} else if (!inputTypeString.compare("deleteByCut")) {
-#endif
     } else {
         qCWarning(qLcQpaWasmInputContext) << Q_FUNC_INFO << "inputType \"" <<
             inputType.as<std::string>() << "\" is not supported in Qt yet";
@@ -237,6 +237,9 @@ void QWasmInputContext::showInputPanel()
 
 void QWasmInputContext::updateGeometry()
 {
+    if (QWasmAccessibility::isEnabled())
+        return;
+
     if (m_inputElement.isNull())
         return;
 
@@ -261,6 +264,9 @@ void QWasmInputContext::updateGeometry()
 void QWasmInputContext::updateInputElement()
 {
     m_inputMethodAccepted = inputMethodAccepted();
+
+    if (QWasmAccessibility::isEnabled())
+        return;
 
     // Mobile devices can dismiss keyboard/IME and focus is still on input.
     // Successive clicks on the same input should open the keyboard/IME.
@@ -315,7 +321,23 @@ void QWasmInputContext::updateInputElement()
     else
         m_inputElement.set("type", "text");
 
-    m_inputElement.set("inputMode", std::string("text"));
+// change inputmode to suit Qt imhints
+
+    Qt::InputMethodHints imHints = static_cast<Qt::InputMethodHints>(query.value(Qt::ImHints).toInt());
+    std::string inMode = "text";
+
+    if (imHints & Qt::ImhDigitsOnly)
+        inMode = "numeric";
+    if (imHints & Qt::ImhFormattedNumbersOnly)
+        inMode = "decimal";
+    if (imHints & Qt::ImhDialableCharactersOnly)
+        inMode = "tel";
+    if (imHints & Qt::ImhEmailCharactersOnly)
+        inMode = "email";
+    if (imHints & Qt::ImhUrlCharactersOnly)
+        inMode = "url";
+    // search ??
+    m_inputElement.set("inputMode",inMode);
 
     m_inputElement.call<void>("focus");
 }

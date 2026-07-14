@@ -1,5 +1,6 @@
 // Copyright (C) 2018 The Qt Company Ltd.
 // SPDX-License-Identifier: LicenseRef-Qt-Commercial OR GPL-3.0-only
+// Qt-Security score:significant reason:default
 
 #include "qwasmintegration.h"
 #include "qwasmeventdispatcher.h"
@@ -95,8 +96,7 @@ EMSCRIPTEN_BINDINGS(qtQWasmIntegraton)
 QWasmIntegration *QWasmIntegration::s_instance;
 
 QWasmIntegration::QWasmIntegration()
-    : m_suspendResume(std::make_shared<QWasmSuspendResumeControl>()) // create early in order to register event handlers at startup
-    , m_fontDb(nullptr)
+    : m_fontDb(nullptr)
     , m_desktopServices(nullptr)
 #if QT_CONFIG(clipboard)
     , m_clipboard(new QWasmClipboard)
@@ -177,7 +177,7 @@ QWasmIntegration::~QWasmIntegration()
         elementAndScreen.wasmScreen->deleteScreen();
 
     m_screens.clear();
-
+    delete m_clipboard;
     s_instance = nullptr;
 }
 
@@ -187,7 +187,6 @@ bool QWasmIntegration::hasCapability(QPlatformIntegration::Capability cap) const
     case ThreadedPixmaps: return true;
     case OpenGL: return true;
     case ThreadedOpenGL: return false;
-    case RasterGLSurface: return false; // to enable this you need to fix qopenglwidget and quickwidget for wasm
     case MultipleWindows: return true;
     case WindowManagement: return true;
     case ForeignWindows: return true;
@@ -201,7 +200,7 @@ QWasmWindow *QWasmIntegration::createWindow(QWindow *window, WId nativeHandle) c
 {
     auto *wasmScreen = QWasmScreen::get(window->screen());
     QWasmCompositor *compositor = wasmScreen->compositor();
-    return new QWasmWindow(window, wasmScreen->deadKeySupport(), compositor,
+    return new QWasmWindow(window, compositor,
                            m_backingStores.value(window), nativeHandle);
 }
 
@@ -277,7 +276,7 @@ QPlatformFontDatabase *QWasmIntegration::fontDatabase() const
 
 QAbstractEventDispatcher *QWasmIntegration::createEventDispatcher() const
 {
-    return new QWasmEventDispatcher(m_suspendResume);
+    return new QWasmEventDispatcher();
 }
 
 QVariant QWasmIntegration::styleHint(QPlatformIntegration::StyleHint hint) const

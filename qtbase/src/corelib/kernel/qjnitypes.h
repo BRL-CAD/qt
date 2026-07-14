@@ -1,5 +1,6 @@
 // Copyright (C) 2022 The Qt Company Ltd.
 // SPDX-License-Identifier: LicenseRef-Qt-Commercial OR LGPL-3.0-only OR GPL-2.0-only OR GPL-3.0-only
+// Qt-Security score:significant reason:default
 
 #ifndef QJNITYPES_H
 #define QJNITYPES_H
@@ -19,12 +20,11 @@
 
 QT_BEGIN_NAMESPACE
 
-// QT_TECH_PREVIEW_API
 #define Q_DECLARE_JNI_TYPE_HELPER(Type)                         \
 struct Type##Tag { explicit Type##Tag() = default; };           \
 using Type = JObject<Type##Tag>;                                \
 
-// QT_TECH_PREVIEW_API
+// internal - Q_DECLARE_JNI_CLASS is the public macro
 #define Q_DECLARE_JNI_TYPE(Type, Signature)                     \
 namespace QtJniTypes {                                          \
 Q_DECLARE_JNI_TYPE_HELPER(Type)                                 \

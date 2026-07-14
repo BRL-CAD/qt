@@ -1,5 +1,7 @@
 // Copyright (C) 2024 The Qt Company Ltd.
 // SPDX-License-Identifier: LicenseRef-Qt-Commercial OR LGPL-3.0-only OR GPL-2.0-only OR GPL-3.0-only
+// Qt-Security score:significant reason:default
+
 
 #ifndef QSVGANIMATOR_P_H
 #define QSVGANIMATOR_P_H
@@ -18,6 +20,9 @@
 #include <QtSvg/private/qtsvgglobal_p.h>
 #include <QtSvg/private/qsvgnode_p.h>
 #include "qsvgabstractanimation_p.h"
+
+#include <QtCore/qhash.h>
+#include <QtCore/qlist.h>
 
 QT_BEGIN_NAMESPACE
 

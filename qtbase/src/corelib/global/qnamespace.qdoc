@@ -227,6 +227,7 @@
            application later.
            On Windows 8 and above the default value is also true, but it only applies
            to touch events. Mouse and window events remain unaffected by this flag.
+           On Wayland the default value is also true, but it only applies to mouse events.
            On other platforms, the default is false.
            (In the future, the compression feature may be implemented across platforms.)
            You can test the attribute to see whether compression is enabled.
@@ -827,6 +828,18 @@
     \value Unknown The appearance is unknown.
     \value Light The background colors are lighter than the text color, i.e. the theme is light.
     \value Dark The background colors are darker than the text color, i.e. the theme is dark.
+*/
+
+/*!
+    \enum Qt::ContrastPreference
+    \since 6.10
+
+    Represents the user's preferred contrast setting.
+    Styles can honor this setting by increasing the contrast of foreground and background colors,
+    as well as giving widgets and controls thicker borders.
+
+    \value NoPreference No specific preferences.
+    \value HighContrast The user prefers the application to be in high contrast.
 */
 
 /*!
@@ -2290,15 +2303,27 @@
     \value WindowMinimizeButtonHint  Adds a minimize button. On
            some platforms this implies Qt::WindowSystemMenuHint for it to work.
 
+           \note On many Wayland-based systems, button hints are not supported for
+           server-side decorations.
+
     \value WindowMaximizeButtonHint  Adds a maximize button. On
            some platforms this implies Qt::WindowSystemMenuHint for it to work.
+
+           \note On many Wayland-based systems, button hints are not supported for
+           server-side decorations.
 
     \value WindowMinMaxButtonsHint  Adds a minimize and a maximize
            button. On some platforms this implies Qt::WindowSystemMenuHint for it to work.
 
+           \note On many Wayland-based systems, button hints are not supported for
+           server-side decorations.
+
     \value WindowCloseButtonHint  Adds a close button. On
            some platforms this implies Qt::WindowSystemMenuHint for it
            to work.
+
+           \note On many Wayland-based systems, button hints are not supported for
+           server-side decorations.
 
     \value WindowContextHelpButtonHint  Adds a context help button to dialogs.
            On some platforms this implies Qt::WindowSystemMenuHint for it to work.
@@ -2660,8 +2685,15 @@
     \value ImhHiddenText             The input method should not show the characters while typing.
                                      This is automatically set when setting QLineEdit::echoMode to \c Password.
                                      Note that setting \c ImhHiddenText does not change the echo mode.
+
+                                     Note that Android IMEs deliberately only
+                                     allow Latin/ASCII character input for password fields.
     \value ImhSensitiveData          Typed text should not be stored by the active input method
                                      in any persistent storage like predictive user dictionary.
+
+                                     Note that the Qt Framework treats this as a visible password
+                                     and in this case Android IMEs deliberately only
+                                     allow Latin/ASCII character input.
     \value ImhNoAutoUppercase        The input method should not try to automatically switch to upper case
                                      when a sentence ends.
     \value ImhPreferNumbers          Numbers are preferred (but not required).
@@ -2829,6 +2861,7 @@
     \omitvalue StatusTipPropertyRole
     \omitvalue WhatsThisPropertyRole
     \omitvalue RangeModelDataRole
+    \omitvalue RangeModelAdapterRole
     \omitvalue StandardItemFlagsRole
     \omitvalue FileInfoRole
     \omitvalue RemoteObjectsCacheRole

@@ -1,6 +1,7 @@
 // Copyright (C) 2012 BogDan Vatra <bogdan@kde.org>
 // Copyright (C) 2021 The Qt Company Ltd.
 // SPDX-License-Identifier: LicenseRef-Qt-Commercial OR LGPL-3.0-only OR GPL-2.0-only OR GPL-3.0-only
+// Qt-Security score:significant reason:default
 
 #include "qandroidplatformintegration.h"
 
@@ -339,7 +340,6 @@ bool QAndroidPlatformIntegration::hasCapability(Capability cap) const
             return isValidAndroidContextForRendering();
         case ThreadedOpenGL:
             return !needsBasicRenderloopWorkaround() && isValidAndroidContextForRendering();
-        case RasterGLSurface: return QtAndroidPrivate::activity().isValid();
         case TopStackedNativeChildWindows: return false;
         case MaximizeUsingFullscreenGeometry: return true;
         // FIXME QTBUG-118849 - we do not implement grabWindow() anymore, calling it will return

@@ -1,5 +1,6 @@
 // Copyright (C) 2016 The Qt Company Ltd.
 // SPDX-License-Identifier: LicenseRef-Qt-Commercial OR LGPL-3.0-only OR GPL-2.0-only OR GPL-3.0-only
+// Qt-Security score:significant reason:default
 
 #ifndef RANGECONTROLS_H
 #define RANGECONTROLS_H
@@ -114,6 +115,10 @@ class QAccessibleAbstractSlider: public QAccessibleWidgetV2, public QAccessibleV
 public:
     explicit QAccessibleAbstractSlider(QWidget *w, QAccessible::Role r = QAccessible::Slider);
     void *interface_cast(QAccessible::InterfaceType t) override;
+
+    // QAccessibleAttributesInterface
+    QList<QAccessible::Attribute> attributeKeys() const override;
+    QVariant attributeValue(QAccessible::Attribute key) const override;
 
     // QAccessibleValueInterface
     QVariant currentValue() const override;

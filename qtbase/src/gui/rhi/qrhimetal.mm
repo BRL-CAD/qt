@@ -405,6 +405,7 @@ struct QMetalGraphicsPipelineData
     MTLWinding winding;
     MTLCullMode cullMode;
     MTLTriangleFillMode triangleFillMode;
+    MTLDepthClipMode depthClipMode;
     float depthBias;
     float slopeScaledDepthBias;
     QMetalShader vs;
@@ -654,6 +655,9 @@ bool QRhiMetal::create(QRhi::Flags flags)
     if (caps.shadingRateMap && caps.multiView)
         caps.shadingRateMap = [d->dev supportsRasterizationRateMapWithLayerCount: 2];
 
+    // QTBUG-144444: setDepthClipMode is not available on the Simulator
+    caps.depthClamp = [d->dev supportsFamily:MTLGPUFamilyApple3];
+
     if (rhiFlags.testFlag(QRhi::EnablePipelineCacheDataSave))
         d->setupBinaryArchive();
 
@@ -873,6 +877,10 @@ bool QRhiMetal::isFeatureSupported(QRhi::Feature feature) const
     case QRhi::PerRenderTargetBlending:
     case QRhi::SampleVariables:
         return true;
+    case QRhi::InstanceIndexIncludesBaseInstance:
+        return true;
+    case QRhi::DepthClamp:
+        return caps.depthClamp;
     default:
         Q_UNREACHABLE();
         return false;
@@ -1471,13 +1479,14 @@ void QRhiMetal::enqueueShaderResourceBindings(QMetalShaderResourceBindings *srbD
 
 void QMetalGraphicsPipeline::makeActiveForCurrentRenderPassEncoder(QMetalCommandBuffer *cbD)
 {
+    QRHI_RES_RHI(QRhiMetal);
+
     [cbD->d->currentRenderPassEncoder setRenderPipelineState: d->ps];
 
     if (cbD->d->currentDepthStencilState != d->ds) {
         [cbD->d->currentRenderPassEncoder setDepthStencilState: d->ds];
         cbD->d->currentDepthStencilState = d->ds;
     }
-
     if (cbD->currentCullMode == -1 || d->cullMode != uint(cbD->currentCullMode)) {
         [cbD->d->currentRenderPassEncoder setCullMode: d->cullMode];
         cbD->currentCullMode = int(d->cullMode);
@@ -1485,6 +1494,12 @@ void QMetalGraphicsPipeline::makeActiveForCurrentRenderPassEncoder(QMetalCommand
     if (cbD->currentTriangleFillMode == -1 || d->triangleFillMode != uint(cbD->currentTriangleFillMode)) {
         [cbD->d->currentRenderPassEncoder setTriangleFillMode: d->triangleFillMode];
         cbD->currentTriangleFillMode = int(d->triangleFillMode);
+    }
+    if (rhiD->caps.depthClamp) {
+        if (cbD->currentDepthClipMode == -1 || d->depthClipMode != uint(cbD->currentDepthClipMode)) {
+            [cbD->d->currentRenderPassEncoder setDepthClipMode: d->depthClipMode];
+            cbD->currentDepthClipMode = int(d->depthClipMode);
+        }
     }
     if (cbD->currentFrontFaceWinding == -1 || d->winding != uint(cbD->currentFrontFaceWinding)) {
         [cbD->d->currentRenderPassEncoder setFrontFacingWinding: d->winding];
@@ -1512,6 +1527,9 @@ void QRhiMetal::setGraphicsPipeline(QRhiCommandBuffer *cb, QRhiGraphicsPipeline 
     cbD->currentGraphicsPipeline = psD;
     cbD->currentComputePipeline = nullptr;
     cbD->currentPipelineGeneration = psD->generation;
+
+    if (cbD->hasCustomScissorSet && !psD->m_flags.testFlag(QRhiGraphicsPipeline::UsesScissor))
+        setDefaultScissor(cbD);
 
     if (!psD->d->tess.enabled && !psD->d->tess.failed)
         psD->makeActiveForCurrentRenderPassEncoder(cbD);
@@ -1575,6 +1593,7 @@ void QRhiMetal::setShaderResources(QRhiCommandBuffer *cb, QRhiShaderResourceBind
         {
             QMetalBuffer *bufD = QRHI_RES(QMetalBuffer, b->u.ubuf.buf);
             Q_ASSERT(bufD->m_usage.testFlag(QRhiBuffer::UniformBuffer));
+            sanityCheckResourceOwnership(bufD);
             executeBufferHostWritesForCurrentFrame(bufD);
             if (bufD->d->slotted)
                 hasSlottedResourceInSrb = true;
@@ -1601,6 +1620,8 @@ void QRhiMetal::setShaderResources(QRhiCommandBuffer *cb, QRhiShaderResourceBind
                 QMetalTexture *texD = QRHI_RES(QMetalTexture, data->texSamplers[elem].tex);
                 QMetalSampler *samplerD = QRHI_RES(QMetalSampler, data->texSamplers[elem].sampler);
                 Q_ASSERT(texD || samplerD);
+                sanityCheckResourceOwnership(texD);
+                sanityCheckResourceOwnership(samplerD);
                 const quint64 texId = texD ? texD->m_id : 0;
                 const uint texGen = texD ? texD->generation : 0;
                 const quint64 samplerId = samplerD ? samplerD->m_id : 0;
@@ -1628,6 +1649,7 @@ void QRhiMetal::setShaderResources(QRhiCommandBuffer *cb, QRhiShaderResourceBind
         case QRhiShaderResourceBinding::ImageLoadStore:
         {
             QMetalTexture *texD = QRHI_RES(QMetalTexture, b->u.simage.tex);
+            sanityCheckResourceOwnership(texD);
             if (texD->generation != bd.simage.generation || texD->m_id != bd.simage.id) {
                 resNeedsRebind = true;
                 bd.simage.id = texD->m_id;
@@ -1642,6 +1664,7 @@ void QRhiMetal::setShaderResources(QRhiCommandBuffer *cb, QRhiShaderResourceBind
         {
             QMetalBuffer *bufD = QRHI_RES(QMetalBuffer, b->u.sbuf.buf);
             Q_ASSERT(bufD->m_usage.testFlag(QRhiBuffer::StorageBuffer));
+            sanityCheckResourceOwnership(bufD);
 
             if (needsBufferSizeBuffer) {
                 for (int i = 0; i < 6; ++i) {
@@ -1871,6 +1894,32 @@ void QRhiMetal::setVertexInput(QRhiCommandBuffer *cb,
     }
 }
 
+void QRhiMetal::setDefaultScissor(QMetalCommandBuffer *cbD)
+{
+    cbD->hasCustomScissorSet = false;
+
+    const QSize outputSize = cbD->currentTarget->pixelSize();
+    std::array<float, 4> vp = cbD->currentViewport.viewport();
+    float x = 0, y = 0, w = 0, h = 0;
+
+    if (qFuzzyIsNull(vp[2]) && qFuzzyIsNull(vp[3])) {
+        x = 0;
+        y = 0;
+        w = outputSize.width();
+        h = outputSize.height();
+    } else {
+        // x,y is top-left in MTLScissorRect but bottom-left in QRhiScissor
+        qrhi_toTopLeftRenderTargetRect<Bounded>(outputSize, vp, &x, &y, &w, &h);
+    }
+
+    MTLScissorRect s;
+    s.x = NSUInteger(x);
+    s.y = NSUInteger(y);
+    s.width = NSUInteger(w);
+    s.height = NSUInteger(h);
+    [cbD->d->currentRenderPassEncoder setScissorRect: s];
+}
+
 void QRhiMetal::setViewport(QRhiCommandBuffer *cb, const QRhiViewport &viewport)
 {
     QMetalCommandBuffer *cbD = QRHI_RES(QMetalCommandBuffer, cb);
@@ -1906,15 +1955,11 @@ void QRhiMetal::setViewport(QRhiCommandBuffer *cb, const QRhiViewport &viewport)
 
     [cbD->d->currentRenderPassEncoder setViewport: vp];
 
+    cbD->currentViewport = viewport;
     if (cbD->currentGraphicsPipeline
-        && !cbD->currentGraphicsPipeline->m_flags.testFlag(QRhiGraphicsPipeline::UsesScissor)) {
-        MTLScissorRect s;
-        qrhi_toTopLeftRenderTargetRect<Bounded>(outputSize, viewport.viewport(), &x, &y, &w, &h);
-        s.x = NSUInteger(x);
-        s.y = NSUInteger(y);
-        s.width = NSUInteger(w);
-        s.height = NSUInteger(h);
-        [cbD->d->currentRenderPassEncoder setScissorRect: s];
+        && !cbD->currentGraphicsPipeline->m_flags.testFlag(QRhiGraphicsPipeline::UsesScissor))
+    {
+        setDefaultScissor(cbD);
     }
 }
 
@@ -1938,6 +1983,8 @@ void QRhiMetal::setScissor(QRhiCommandBuffer *cb, const QRhiScissor &scissor)
     s.height = NSUInteger(h);
 
     [cbD->d->currentRenderPassEncoder setScissorRect: s];
+
+    cbD->hasCustomScissorSet = true;
 }
 
 void QRhiMetal::setBlendConstants(QRhiCommandBuffer *cb, const QColor &c)
@@ -2684,30 +2731,29 @@ void QRhiMetal::enqueueSubresUpload(QMetalTexture *texD, void *mp, void *blitEnc
 
     if (!img.isNull()) {
         const qsizetype fullImageSizeBytes = img.sizeInBytes();
-        int w = img.width();
-        int h = img.height();
+        QSize size = img.size();
         int bpl = img.bytesPerLine();
 
         if (!subresDesc.sourceSize().isEmpty() || !subresDesc.sourceTopLeft().isNull()) {
             const int sx = subresDesc.sourceTopLeft().x();
             const int sy = subresDesc.sourceTopLeft().y();
-            if (!subresDesc.sourceSize().isEmpty()) {
-                w = subresDesc.sourceSize().width();
-                h = subresDesc.sourceSize().height();
-            }
-            if (w == img.width()) {
+            if (!subresDesc.sourceSize().isEmpty())
+                size = subresDesc.sourceSize();
+            size = clampedSubResourceUploadSize(size, dp, level, texD->m_pixelSize);
+            if (size.width() == img.width()) {
                 const int bpc = qMax(1, img.depth() / 8);
-                Q_ASSERT(h * img.bytesPerLine() <= fullImageSizeBytes);
+                Q_ASSERT(size.height() * img.bytesPerLine() <= fullImageSizeBytes);
                 memcpy(reinterpret_cast<char *>(mp) + *curOfs,
                        img.constBits() + sy * img.bytesPerLine() + sx * bpc,
-                       h * img.bytesPerLine());
+                       size.height() * img.bytesPerLine());
             } else {
-                img = img.copy(sx, sy, w, h);
+                img = img.copy(sx, sy, size.width(), size.height());
                 bpl = img.bytesPerLine();
                 Q_ASSERT(img.sizeInBytes() <= fullImageSizeBytes);
                 memcpy(reinterpret_cast<char *>(mp) + *curOfs, img.constBits(), size_t(img.sizeInBytes()));
             }
         } else {
+            size = clampedSubResourceUploadSize(size, dp, level, texD->m_pixelSize);
             memcpy(reinterpret_cast<char *>(mp) + *curOfs, img.constBits(), size_t(fullImageSizeBytes));
         }
 
@@ -2715,7 +2761,7 @@ void QRhiMetal::enqueueSubresUpload(QMetalTexture *texD, void *mp, void *blitEnc
                                  sourceOffset: NSUInteger(*curOfs)
                                  sourceBytesPerRow: NSUInteger(bpl)
                                  sourceBytesPerImage: 0
-                                 sourceSize: MTLSizeMake(NSUInteger(w), NSUInteger(h), 1)
+                                 sourceSize: MTLSizeMake(NSUInteger(size.width()), NSUInteger(size.height()), 1)
           toTexture: texD->d->tex
           destinationSlice: NSUInteger(is3D ? 0 : layer)
           destinationLevel: NSUInteger(level)
@@ -5035,6 +5081,7 @@ void QMetalGraphicsPipeline::mapStates()
     d->winding = m_frontFace == CCW ? MTLWindingCounterClockwise : MTLWindingClockwise;
     d->cullMode = toMetalCullMode(m_cullMode);
     d->triangleFillMode = toMetalTriangleFillMode(m_polygonMode);
+    d->depthClipMode = m_depthClamp ? MTLDepthClipModeClamp : MTLDepthClipModeClip;
     d->depthBias = float(m_depthBias);
     d->slopeScaledDepthBias = m_slopeScaledDepthBias;
 }
@@ -6257,8 +6304,11 @@ void QMetalCommandBuffer::resetPerPassCachedState()
     currentIndexFormat = QRhiCommandBuffer::IndexUInt16;
     currentCullMode = -1;
     currentTriangleFillMode = -1;
+    currentDepthClipMode = -1;
     currentFrontFaceWinding = -1;
     currentDepthBiasValues = { 0.0f, 0.0f };
+    hasCustomScissorSet = false;
+    currentViewport = {};
 
     d->currentShaderResourceBindingState = {};
     d->currentDepthStencilState = nil;

@@ -1,6 +1,7 @@
 // Copyright (C) 2014 BogDan Vatra <bogdan@kde.org>
 // Copyright (C) 2016 The Qt Company Ltd.
 // SPDX-License-Identifier: LicenseRef-Qt-Commercial OR LGPL-3.0-only OR GPL-2.0-only OR GPL-3.0-only
+// Qt-Security score:significant reason:default
 
 #include "qandroidplatformopenglwindow.h"
 
@@ -50,8 +51,11 @@ void QAndroidPlatformOpenGLWindow::setGeometry(const QRect &rect)
 // surface is already locked when calling this
 EGLSurface QAndroidPlatformOpenGLWindow::eglSurface(EGLConfig config)
 {
-    if (QAndroidEventDispatcherStopper::stopped() ||
-        QGuiApplication::applicationState() == Qt::ApplicationSuspended) {
+    // Avoid early return on initial suspension unless a surface was already created.
+    // This avoids the multi‑window startup race.
+    if (m_androidSurfaceCreated &&
+        (QAndroidEventDispatcherStopper::stopped() ||
+        QGuiApplication::applicationState() == Qt::ApplicationSuspended)) {
         qCDebug(lcQpaWindow) << "Application not active, return existing surface.";
         return m_eglSurface;
     }
@@ -78,13 +82,13 @@ EGLSurface QAndroidPlatformOpenGLWindow::eglSurface(EGLConfig config)
 
 void QAndroidPlatformOpenGLWindow::applicationStateChanged(Qt::ApplicationState state)
 {
-    QAndroidPlatformWindow::applicationStateChanged(state);
     if (state <=  Qt::ApplicationHidden) {
         lockSurface();
         destroySurface();
         clearSurface();
         unlockSurface();
     }
+    QAndroidPlatformWindow::applicationStateChanged(state);
 }
 
 // m_surfaceMutex already locked, called only by eglSurface()

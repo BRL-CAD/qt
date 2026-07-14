@@ -46,6 +46,7 @@ public:
     static constexpr bool isReferenceCountingWaitFree();
 
     bool ref();
+    void refRelaxed();
     bool deref();
 
     static constexpr bool isTestAndSetNative();
@@ -150,6 +151,11 @@ public:
     bool testAndSetAcquire(T *expectedValue, T *newValue);
     bool testAndSetRelease(T *expectedValue, T *newValue);
     bool testAndSetOrdered(T *expectedValue, T *newValue);
+
+    bool testAndSetRelaxed(T *expectedValue, T *newValue, T *&currentValue);
+    bool testAndSetAcquire(T *expectedValue, T *newValue, T *&currentValue);
+    bool testAndSetRelease(T *expectedValue, T *newValue, T *&currentValue);
+    bool testAndSetOrdered(T *expectedValue, T *newValue, T *&currentValue);
 
     static constexpr bool isFetchAndStoreNative();
     static constexpr bool isFetchAndStoreWaitFree();

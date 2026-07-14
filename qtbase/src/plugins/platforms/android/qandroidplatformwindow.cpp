@@ -1,6 +1,7 @@
 // Copyright (C) 2014 BogDan Vatra <bogdan@kde.org>
 // Copyright (C) 2016 The Qt Company Ltd.
 // SPDX-License-Identifier: LicenseRef-Qt-Commercial OR LGPL-3.0-only OR GPL-2.0-only OR GPL-3.0-only
+// Qt-Security score:significant reason:default
 
 #include "qandroidplatformwindow.h"
 #include "androidbackendregister.h"
@@ -22,6 +23,7 @@ Q_DECLARE_JNI_CLASS(QtInputInterface, "org/qtproject/qt/android/QtInputInterface
 Q_DECLARE_JNI_CLASS(QtInputConnectionListener,
                     "org/qtproject/qt/android/QtInputConnection$QtInputConnectionListener")
 Q_DECLARE_JNI_CLASS(QtDisplayManager, "org/qtproject/qt/android/QtWindowInterface")
+Q_DECLARE_JNI_CLASS(QtWindowInsetsController, "org/qtproject/qt/android/QtWindowInsetsController")
 
 QAndroidPlatformWindow::QAndroidPlatformWindow(QWindow *window)
     : QPlatformWindow(window), m_nativeQtWindow(nullptr),
@@ -116,7 +118,6 @@ void QAndroidPlatformWindow::raise()
 {
     if (m_nativeParentQtWindow.isValid()) {
         m_nativeParentQtWindow.callMethod<void>("bringChildToFront", nativeViewId());
-        QWindowSystemInterface::handleFocusWindowChanged(window(), Qt::ActiveWindowFocusReason);
         return;
     }
     updateSystemUiVisibility(window()->windowStates(), window()->flags());
@@ -238,19 +239,29 @@ void QAndroidPlatformWindow::propagateSizeHints()
 
 void QAndroidPlatformWindow::requestActivateWindow()
 {
-    // raise() will handle differences between top level and child windows, and requesting focus
-    if (!blockedByModal())
-        raise();
+    if (blockedByModal())
+        return;
+    raise();
+    // For child windows, raise() only updates "Z-order", so focus must be requested explicitly.
+    if (m_nativeParentQtWindow.isValid())
+        QWindowSystemInterface::handleFocusWindowChanged(window(), Qt::ActiveWindowFocusReason);
 }
 
 void QAndroidPlatformWindow::updateSystemUiVisibility(Qt::WindowStates states, Qt::WindowFlags flags)
 {
     const bool isNonRegularWindow = flags & (Qt::Popup | Qt::Dialog | Qt::Sheet) & ~Qt::Window;
     if (!isNonRegularWindow) {
-        const bool isFullScreen = (states & Qt::WindowFullScreen);
-        const bool expandedToCutout = (flags & Qt::ExpandedClientAreaHint);
-        QtAndroid::backendRegister()->callInterface<QtJniTypes::QtWindowInterface, void>(
-            "setSystemUiVisibility", isFullScreen, expandedToCutout);
+        auto iface = qGuiApp->nativeInterface<QNativeInterface::QAndroidApplication>();
+        iface->runOnAndroidMainThread([=]() {
+            using namespace QtJniTypes;
+            auto activity = iface->context().object<Activity>();
+            if (states & Qt::WindowFullScreen)
+                QtWindowInsetsController::callStaticMethod("showFullScreen", activity);
+            else if (flags & Qt::ExpandedClientAreaHint)
+                QtWindowInsetsController::callStaticMethod("showExpanded", activity);
+            else
+                QtWindowInsetsController::callStaticMethod("showNormal", activity);
+        });
     }
 }
 

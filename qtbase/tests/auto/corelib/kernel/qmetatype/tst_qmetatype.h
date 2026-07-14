@@ -25,7 +25,6 @@ struct MessageHandlerCustom : public MessageHandler
 class tst_QMetaType: public QObject
 {
     Q_OBJECT
-    Q_PROPERTY(QList<QVariant> prop READ prop WRITE setProp)
 
 public:
     struct GadgetPropertyType {
@@ -34,14 +33,8 @@ public:
         QVariant testData;
     };
 
-    tst_QMetaType() { propList << 42 << "Hello"; }
-
-    QList<QVariant> prop() const { return propList; }
-    void setProp(const QList<QVariant> &list) { propList = list; }
-
 private:
     void registerGadget(const char * name, const QList<GadgetPropertyType> &gadgetProperties);
-    QList<QVariant> propList;
 
 private slots:
 #if QT_CONFIG(thread)
@@ -238,7 +231,7 @@ struct CustomMovable {
 
     friend bool operator==(const CustomMovable &, const CustomMovable &) { return true; }
     // needed for QSet<CustomMovable>. We actually check that it makes sense.
-    friend qsizetype qHash(const CustomMovable &, qsizetype seed = 0) { return seed; }
+    friend size_t qHash(const CustomMovable &, size_t seed = 0) noexcept { return seed; }
 };
 
 #if !defined(Q_CC_CLANG) && defined(Q_CC_GNU) && Q_CC_GNU < 501

@@ -1,6 +1,7 @@
 // Copyright (C) 2022 The Qt Company Ltd.
 // Copyright (C) 2013 John Layt <jlayt@kde.org>
 // SPDX-License-Identifier: LicenseRef-Qt-Commercial OR LGPL-3.0-only OR GPL-2.0-only OR GPL-3.0-only
+// Qt-Security score:significant reason:default
 
 
 #ifndef QTIMEZONEPRIVATE_P_H
@@ -162,9 +163,13 @@ public:
         QByteArray ianaId;
         qsizetype nameLength = 0;
         QTimeZone::TimeType timeType = QTimeZone::GenericTime;
+        operator bool() const { return nameLength > 0; }
     };
     static NamePrefixMatch findLongNamePrefix(QStringView text, const QLocale &locale,
                                               std::optional<qint64> atEpochMillis = std::nullopt);
+    static NamePrefixMatch findNarrowOffsetPrefix(QStringView text, const QLocale &locale);
+    // Match the unlocalized long form of QUtcTimeZonePrivate:
+    static NamePrefixMatch findLongUtcPrefix(QStringView text);
 
     // returns "UTC" QString and QByteArray
     [[nodiscard]] static inline QString utcQString()

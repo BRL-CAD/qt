@@ -90,6 +90,46 @@ void tst_qfloat16::compareCompiles()
 #endif
 }
 
+template <typename RHS> static constexpr bool checkArithmeticCompiles(qfloat16 lhs, RHS rhs)
+{
+    auto assertIsFloat16Ref = [](auto &v) {
+        static_assert(std::is_same_v<std::remove_reference_t<decltype(v)>, qfloat16>);
+    };
+    auto assertType = [](auto v) {
+        // C++23 conversion rules (q.v. P1467):
+        // - FP op integral -> double
+        // - FP op OtherFP -> the one with higher conversion rank
+        //   all other, supported FP types have a higher rank and are a superset
+        using Expected = std::conditional_t<std::is_integral_v<RHS>, double, RHS>;
+        static_assert(std::is_same_v<decltype(v), Expected>);
+    };
+
+    auto ps = +lhs;     // unary +
+    auto ng = -lhs;     // unary -
+    static_assert(std::is_same_v<decltype(ps), qfloat16> || true); // broken, uses operator NearestFloat()
+    static_assert(std::is_same_v<decltype(ng), qfloat16>);
+
+    assertType(lhs + rhs);
+    assertType(lhs - rhs);
+    assertType(lhs * rhs);
+    assertType(lhs / RHS(1));               // avoid division by zero
+
+    assertType(rhs + lhs);
+    assertType(rhs - lhs);
+    assertType(rhs * lhs);
+    assertType(rhs / qfloat16(1.0f));       // avoid division by zero
+
+    // operators op=(integral) are missing
+    if constexpr (!std::is_integral_v<RHS>) {
+        assertIsFloat16Ref(lhs += rhs);
+        assertIsFloat16Ref(lhs -= rhs);
+        assertIsFloat16Ref(lhs *= rhs);
+        assertIsFloat16Ref(lhs /= RHS(1));  // avoid division by zero
+    }
+
+    return true;
+}
+
 void tst_qfloat16::relationalOperatorsAreConstexpr()
 {
 #if QFLOAT16_IS_NATIVE
@@ -524,6 +564,11 @@ void tst_qfloat16::arithOps()
 {
     QFETCH(float, val1);
     QFETCH(float, val2);
+    checkArithmeticCompiles(qfloat16(val1), qfloat16(val2));
+    checkArithmeticCompiles(qfloat16(val1), val2);
+    checkArithmeticCompiles(qfloat16(val1), val2 + 0.0);
+    checkArithmeticCompiles(qfloat16(val1), val2 + 0.0L);
+    checkArithmeticCompiles(qfloat16(val1), int(val2));
 
     QVERIFY(qFuzzyCompare(float(qfloat16(val1) + qfloat16(val2)), val1 + val2));
     QVERIFY(qFuzzyCompare(float(qfloat16(val1) - qfloat16(val2)), val1 - val2));
@@ -704,8 +749,9 @@ void tst_qfloat16::finite()
     // comparison, and we need exact here.
     const qfloat16 zero(0), plus(+1), minus(-1);
     const qfloat16 magnitude = (value < zero) ? -value : value;
-    QVERIFY(value.copySign(plus) == magnitude);
-    QVERIFY(value.copySign(minus) == -magnitude);
+    using std::copysign;
+    QCOMPARE_EQ(copysign(value, plus),   magnitude);
+    QCOMPARE_EQ(copysign(value, minus), -magnitude);
 }
 
 void tst_qfloat16::properties()
@@ -824,7 +870,8 @@ void tst_qfloat16::limits() // See also: qNaN() and infinity()
     QVERIFY(Bounds::denorm_min() / two == zero);
     const qfloat16 under = (-Bounds::denorm_min()) / two;
     QVERIFY(under == -zero);
-    QCOMPARE(qfloat16(1).copySign(under), qfloat16(-1));
+    using std::copysign;
+    QCOMPARE_EQ(copysign(qfloat16(1), under), qfloat16(-1));
 }
 
 void tst_qfloat16::mantissaOverflow()

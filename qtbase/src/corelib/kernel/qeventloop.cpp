@@ -1,5 +1,6 @@
 // Copyright (C) 2016 The Qt Company Ltd.
 // SPDX-License-Identifier: LicenseRef-Qt-Commercial OR LGPL-3.0-only OR GPL-2.0-only OR GPL-3.0-only
+// Qt-Security score:significant reason:default
 
 #include "qeventloop.h"
 
@@ -11,6 +12,10 @@
 #include "qobject_p.h"
 #include "qeventloop_p.h"
 #include <private/qthread_p.h>
+
+#if __has_include(<cxxabi.h>)
+#  include <cxxabi.h>
+#endif
 
 QT_BEGIN_NAMESPACE
 
@@ -162,9 +167,16 @@ int QEventLoop::exec(ProcessEventsFlags flags)
         ~LoopReference()
         {
             if (exceptionCaught) {
-                qWarning("Qt has caught an exception thrown from an event handler. Throwing\n"
-                         "exceptions from an event handler is not supported in Qt.\n"
-                         "You must not let any exception whatsoever propagate through Qt code.");
+                const char *type = nullptr;
+#if __has_include(<cxxabi.h>)
+                // Note: exception name will be mangled
+                if (const std::type_info *ti = abi::__cxa_current_exception_type())
+                    type = ti->name();
+#endif
+                qWarning("Qt has caught an exception thrown from an event handler. Throwing \n"
+                         "exceptions from an event handler is not supported in Qt. \n"
+                         "You must not let any exception whatsoever propagate through Qt code.%s%s",
+                         type ? "\nException was of type: " : "", type ? type : "");
             }
             locker.relock();
             auto threadData = d->threadData.loadRelaxed();

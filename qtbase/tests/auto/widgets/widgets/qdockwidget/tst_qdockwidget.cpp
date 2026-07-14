@@ -46,8 +46,8 @@ private slots:
     void allowedAreas();
     void toggleViewAction();
     void visibilityChanged();
-    void visibilityChangedOnDestruction_data();
-    void visibilityChangedOnDestruction();
+    void eventsOnDestruction_data();
+    void eventsOnDestruction();
     void updateTabBarOnVisibilityChanged();
     void dockLocationChanged();
     void setTitleBarWidget();
@@ -655,6 +655,7 @@ void tst_QDockWidget::visibilityChanged()
     QDockWidget dw;
     QSignalSpy spy(&dw, SIGNAL(visibilityChanged(bool)));
 
+    mw.setWindowFlag(Qt::FramelessWindowHint);
     mw.addDockWidget(Qt::LeftDockWidgetArea, &dw);
     mw.show();
 
@@ -720,16 +721,17 @@ void tst_QDockWidget::visibilityChanged()
     QCOMPARE(spy.at(0).at(0).toBool(), true);
 }
 
-// QTBUG-136485 - QDockWidget didn't emit visibilityChanged when getting
-// destroyed until 6.9.0; it did in 6.9.0, causing regressions in applications.
-// So make sure we don't emit that signal when a QDockWidget gets destroyed.
-// When implicitly destroyed as a child of a QMainWindow, it gets hidden first,
-// so it emits the signal.
-void tst_QDockWidget::visibilityChangedOnDestruction_data()
+/* Before 6.9.0, when getting destroyed, QDockWidget didn't
+   - emit visibilityChanged (QTBUG-136485)
+   - consume QEvent::StyleChange (QTBUG-143119).
+
+   It did in 6.9.0, causing regressions in applications. */
+void tst_QDockWidget::eventsOnDestruction_data()
 {
     QTest::addColumn<bool>("explicitDestroy");
     QTest::addColumn<bool>("floating");
-    QTest::addColumn<int>("signalCount");
+    QTest::addColumn<int>("visibilityCount");
+    QTest::addColumn<int>("styleCount");
 
     QTest::addRow("Explicit, docked") << true << false << 0;
     QTest::addRow("Explicit, floating") << true << true << 0;
@@ -737,26 +739,66 @@ void tst_QDockWidget::visibilityChangedOnDestruction_data()
     QTest::addRow("Implicit, floating") << false << true << 0;
 }
 
-void tst_QDockWidget::visibilityChangedOnDestruction()
+class Filter : public QObject
+{
+    Q_OBJECT
+
+public:
+    Filter(QObject *filterObject)
+    {
+        filterObject->installEventFilter(this);
+    }
+
+    bool eventFilter(QObject *o, QEvent *e) override
+    {
+        if (e->type() == QEvent::StyleChange) {
+            auto *d = QObjectPrivate::get(o);
+            emit styleChanged(d->wasDeleted);
+        }
+        return false;
+    }
+
+signals:
+    void styleChanged(bool wasDeleted);
+};
+
+void tst_QDockWidget::eventsOnDestruction()
 {
     QFETCH(const bool, explicitDestroy);
     QFETCH(const bool, floating);
-    QFETCH(const int, signalCount);
+    QFETCH(const int, visibilityCount);
 
+    qApp->setStyleSheet("QWidget {}" );
     std::unique_ptr<QMainWindow> mw(new QMainWindow);
     QDockWidget *dw = new QDockWidget;
+    dw->setWidget(new QWidget);
     mw->addDockWidget(Qt::LeftDockWidgetArea, dw);
     if (floating)
         dw->setFloating(true);
     mw->show();
     QVERIFY(QTest::qWaitForWindowExposed(mw.get()));
 
-    QSignalSpy spy(dw, &QDockWidget::visibilityChanged);
+    Filter filter(dw);
+    QSignalSpy visibilitySpy(dw, &QDockWidget::visibilityChanged);
+    QSignalSpy styleSpy(&filter, &Filter::styleChanged);
     if (explicitDestroy)
         delete dw;
     else
         mw.reset();
-    QCOMPARE(spy.count(), signalCount);
+
+    if (visibilitySpy.count() != visibilityCount || styleSpy.count() > 0) {
+        const QString wasDeleted = styleSpy.count() == 0 || styleSpy.constFirst().constFirst().toBool()
+                                       ? "True" : "False";
+        const QString error = QString("Visibility changes: %1 (expected %2). Style changes: %3 (expected 0). UB: %4.")
+                                  .arg(visibilitySpy.count())
+                                  .arg(visibilityCount)
+                                  .arg(styleSpy.count())
+                                  .arg(wasDeleted);
+        qCritical() << error;
+    }
+    QCOMPARE(visibilitySpy.count(), visibilityCount);
+    QCOMPARE(styleSpy.count(), 0);
+
 }
 
 void tst_QDockWidget::updateTabBarOnVisibilityChanged()
@@ -876,7 +918,7 @@ void tst_QDockWidget::dockLocationChanged()
     QCOMPARE(dockLocation(&spy), Qt::TopDockWidgetArea);
     spy.clear();
 
-    QByteArray ba = mw.saveState();
+    const QByteArray &ba = mw.saveState();
     mw.restoreState(ba);
     QCOMPARE(spy.size(), 1);
     QCOMPARE(dockLocation(&spy), Qt::TopDockWidgetArea);
@@ -943,6 +985,8 @@ void tst_QDockWidget::restoreStateOfFloating()
     QMainWindow mw;
     QDockWidget *dock = createTestDock(mw);
     mw.addDockWidget(Qt::TopDockWidgetArea, dock);
+    mw.show();
+    QVERIFY(QTest::qWaitForWindowExposed(&mw));
     QVERIFY(!dock->isFloating());
     QByteArray ba = mw.saveState();
     dock->setFloating(true);
@@ -1711,8 +1755,10 @@ void tst_QDockWidget::hoverWithoutDrop()
     // unplug and resize both dock widgets
     unplugAndResize(mainWindow, d1, home1(mainWindow), size1(mainWindow));
     unplugAndResize(mainWindow, d2, home2(mainWindow), size2(mainWindow));
+    const QSize sizeD1 = d1->size();
+    const QSize sizeD2 = d2->size();
 
-    // Test plugging
+    // hover over each other
     qCDebug(lcTestDockWidget) << "*** move d1 dock over d2 dock ***";
     qCDebug(lcTestDockWidget) << "*******(test hovering)***********";
     qCDebug(lcTestDockWidget) << "Move d1 over d2, wait and return to origin";
@@ -1720,7 +1766,15 @@ void tst_QDockWidget::hoverWithoutDrop()
     const QPoint target = d2->mapToGlobal(d2->rect().center());
     moveDockWidget(d1, target, source, MoveDockWidgetRule::Abort);
     auto *groupWindow = mainWindow->findChild<QDockWidgetGroupWindow *>();
+
+    // No dropping => no groupWindow exists
     QCOMPARE(groupWindow, nullptr);
+
+    // Check whether sizes are unchanged after hover
+    QCOMPARE(d1->size(), sizeD1);
+    QCOMPARE(d2->size(), sizeD2);
+
+
 #else
     QSKIP("test requires -developer-build option");
 #endif // QT_BUILD_INTERNAL
@@ -2033,6 +2087,48 @@ void tst_QDockWidget::saveAndRestore()
         isFloating2 = d2->isFloating();
     }
 
+    // Test save / restore consistency (QTBUG-142797)
+    {
+        constexpr auto compare = [](const QList<QDockWidget *> actual, std::initializer_list<QDockWidget *> expected) {
+            const auto expectedSize = static_cast<int>(expected.size());
+            if (actual.size() != expectedSize) {
+                qCDebug(lcTestDockWidget) << "expected size:" << expectedSize << "actual size:" << actual.size();
+                return false;
+            }
+            for (auto *widget : expected) {
+                if (!actual.contains(widget)) {
+                    qCDebug(lcTestDockWidget) << "expected:" << expected << "actual:" << actual;
+                    return false;
+                }
+            }
+            return true;
+        };
+
+        QPointer<QDockWidget> d1;
+        QPointer<QDockWidget> d2;
+        QPointer<QWidget> cent;
+        QMainWindow* mainWindow;
+        QList<int> path1;
+        QList<int> path2;
+        qCreateFloatingTabs(mainWindow, cent, d1, d2, path1, path2);
+        auto *d3 = new QDockWidget;
+        d3->setObjectName("D3");
+        mainWindow->addDockWidget(Qt::LeftDockWidgetArea, d3);
+        d3->setFloating(true);
+        QTRY_VERIFY(d3->isFloating());
+        QPointer<QDockWidgetGroupWindow> groupWindow = mainWindow->findChild<QDockWidgetGroupWindow *>();
+        QVERIFY(groupWindow);
+        QVERIFY(compare(groupWindow->dockWidgets(), {d1, d2}));
+        d3->close();
+        QVERIFY(!d3->toggleViewAction()->isChecked());
+        const auto &ba = mainWindow->saveState();
+        mainWindow->restoreState(ba);
+        QTRY_VERIFY(!groupWindow);
+        groupWindow = mainWindow->findChild<QDockWidgetGroupWindow *>();
+        QVERIFY(compare(groupWindow->dockWidgets(), {d1, d2}));
+        QVERIFY(!d3->toggleViewAction()->isChecked()); // d3 must still be closed after restore
+    }
+
     // Create a mainwindow with a central widget and two dock widgets.
     // Assign different properties to each dock widgets.
     // Write properties to a byte array.
@@ -2064,6 +2160,35 @@ void tst_QDockWidget::saveAndRestore()
         QTRY_VERIFY(d2->isFloating());
         QCOMPARE(d1->isFloating(), isFloating1);
         QCOMPARE(d2->isFloating(), isFloating2);
+    }
+
+    // MainWindow is child of another toplevel window
+    {
+        QWidget topLevel;
+        auto *layout = new QVBoxLayout(&topLevel);
+
+        auto *tabs = new QTabWidget(&topLevel);
+        layout->addWidget(tabs);
+
+        // Tab 1: Save Settings button
+        auto *tab1 = new QWidget;
+        tabs->addTab(tab1, "Front");
+
+        // Tab 2: QMainWindow with a left dock widget
+        auto *tab2 = new QMainWindow;
+        auto *dock = new QDockWidget("Dock1", tab2);
+        dock->setObjectName("dock1");
+        tab2->addDockWidget(Qt::LeftDockWidgetArea, dock);
+        tab2->setCentralWidget(new QWidget);
+        tabs->addTab(tab2, "Main");
+
+        topLevel.resize(400, 400);
+        topLevel.show();
+        QVERIFY(QTest::qWaitForWindowExposed(&topLevel));
+        tab2->restoreState(tab2->saveState());
+        tabs->setCurrentIndex(1);
+        QTRY_VERIFY(dock->isVisible());
+        QVERIFY(!dock->isFloating());
     }
 
     // Create a new main window, central window and two dock widgets.

@@ -1,5 +1,6 @@
 // Copyright (C) 2016 The Qt Company Ltd.
 // SPDX-License-Identifier: LicenseRef-Qt-Commercial OR LGPL-3.0-only OR GPL-2.0-only OR GPL-3.0-only
+// Qt-Security score:significant reason:default
 
 #include <QtCore/qt_windows.h>
 #include <QtGui/qstylehints.h>
@@ -23,6 +24,8 @@
 #ifdef QT_NO_CURSOR
 #  include "qwindowscursor.h"
 #endif
+#include "qwindowswindowclassdescription.h"
+#include "qwindowswindowclassregistry.h"
 
 #include <QtGui/qguiapplication.h>
 #include <QtGui/qscreen.h>
@@ -58,6 +61,8 @@
 #endif
 
 QT_BEGIN_NAMESPACE
+
+using namespace Qt::StringLiterals;
 
 using QWindowCreationContextPtr = QSharedPointer<QWindowCreationContext>;
 
@@ -466,17 +471,15 @@ static bool applyBlurBehindWindow(HWND hwnd)
     return result;
 }
 
-static bool shouldShowTitlebarButton(Qt::WindowFlags flags, Qt::WindowFlags button)
-{
-    return !flags.testFlag(Qt::CustomizeWindowHint) || flags.testFlags(Qt::CustomizeWindowHint | button);
-}
-
 // from qwidget_win.cpp, pass flags separately in case they have been "autofixed".
 static bool shouldShowMaximizeButton(const QWindow *w, Qt::WindowFlags flags)
 {
-    return !flags.testFlag(Qt::MSWindowsFixedSizeDialogHint) &&
-            (shouldShowTitlebarButton(flags, Qt::WindowMaximizeButtonHint) ||
-            w->maximumSize() == QSize(QWINDOWSIZE_MAX, QWINDOWSIZE_MAX));
+    if ((flags & Qt::MSWindowsFixedSizeDialogHint) || !(flags & Qt::WindowMaximizeButtonHint))
+        return false;
+    // if the user explicitly asked for the maximize button, we try to add
+    // it even if the window has fixed size.
+    return (flags & Qt::CustomizeWindowHint) ||
+        w->maximumSize() == QSize(QWINDOWSIZE_MAX, QWINDOWSIZE_MAX);
 }
 
 bool QWindowsWindow::hasNoNativeFrame(HWND hwnd, Qt::WindowFlags flags)
@@ -807,7 +810,6 @@ void WindowCreationData::fromWindow(const QWindow *w, const Qt::WindowFlags flag
 
     if (topLevel) {
         if ((type == Qt::Window || dialog || tool)) {
-            const bool defaultTitlebar = !flags.testFlag(Qt::CustomizeWindowHint);
             if (!(flags & Qt::FramelessWindowHint)) {
                 style |= WS_POPUP;
                 if (flags & Qt::MSWindowsFixedSizeDialogHint) {
@@ -815,16 +817,16 @@ void WindowCreationData::fromWindow(const QWindow *w, const Qt::WindowFlags flag
                 } else {
                     style |= WS_THICKFRAME;
                 }
-                if (defaultTitlebar || flags.testFlags(Qt::CustomizeWindowHint | Qt::WindowTitleHint))
+                if (flags & Qt::WindowTitleHint)
                     style |= WS_CAPTION; // Contains WS_DLGFRAME
             }
-            if (defaultTitlebar || flags.testFlags(Qt::CustomizeWindowHint | Qt::WindowSystemMenuHint))
+            if (flags & Qt::WindowSystemMenuHint)
                 style |= WS_SYSMENU;
-            else if (dialog && (defaultTitlebar || flags.testFlags(Qt::CustomizeWindowHint | Qt::WindowCloseButtonHint)) && !(flags & Qt::FramelessWindowHint)) {
+            else if (dialog && (flags & Qt::WindowCloseButtonHint) && !(flags & Qt::FramelessWindowHint)) {
                 style |= WS_SYSMENU | WS_BORDER; // QTBUG-2027, dialogs without system menu.
                 exStyle |= WS_EX_DLGMODALFRAME;
             }
-            const bool showMinimizeButton = shouldShowTitlebarButton(flags, Qt::WindowMinimizeButtonHint);
+            const bool showMinimizeButton = flags & Qt::WindowMinimizeButtonHint;
             if (showMinimizeButton)
                 style |= WS_MINIMIZEBOX;
             const bool showMaximizeButton = shouldShowMaximizeButton(w, flags);
@@ -884,8 +886,13 @@ QWindowsWindowData
 
     const auto appinst = reinterpret_cast<HINSTANCE>(GetModuleHandle(nullptr));
 
-    const QString windowClassName = QWindowsContext::instance()->registerWindowClass(w);
-    const QString windowTitlebarName = QWindowsContext::instance()->registerWindowClass(QStringLiteral("_q_titlebar"), DefWindowProc, CS_VREDRAW|CS_HREDRAW, nullptr, false);
+    const QString windowClassName = QWindowsWindowClassRegistry::instance()->registerWindowClass(w);
+
+    QWindowsWindowClassDescription windowTitlebarDescription;
+    windowTitlebarDescription.name = "_q_titlebar"_L1;
+    windowTitlebarDescription.style = CS_VREDRAW | CS_HREDRAW;
+    windowTitlebarDescription.shouldAddPrefix = false;
+    const QString windowTitlebarName = QWindowsWindowClassRegistry::instance()->registerWindowClass(windowTitlebarDescription);
 
     const QScreen *screen{};
     const QRect rect = QPlatformWindow::initialGeometry(w, data.geometry,
@@ -1605,9 +1612,6 @@ QWindowsWindow::QWindowsWindow(QWindow *aWindow, const QWindowsWindowData &data)
         ShowWindow(m_data.hwndTitlebar, SW_SHOW);
     }
 
-    const Qt::WindowType type = aWindow->type();
-    if (type == Qt::Desktop)
-        return; // No further handling for Qt::Desktop
     if (aWindow->surfaceType() == QWindow::Direct3DSurface)
         setFlag(Direct3DSurface);
 #if QT_CONFIG(opengl)
@@ -1661,16 +1665,14 @@ void QWindowsWindow::initialize()
 
     // Trigger geometry change (unless it has a special state in which case setWindowState()
     // will send the message) and screen change signals of QWindow.
-    if (w->type() != Qt::Desktop) {
-        const Qt::WindowState state = w->windowState();
-        const QRect obtainedGeometry(creationContext->obtainedPos, creationContext->obtainedSize);
-        QPlatformScreen *obtainedScreen = screenForGeometry(obtainedGeometry);
-        if (obtainedScreen && screen() != obtainedScreen)
-            QWindowSystemInterface::handleWindowScreenChanged<QWindowSystemInterface::SynchronousDelivery>(w, obtainedScreen->screen());
-        if (state != Qt::WindowMaximized && state != Qt::WindowFullScreen
-            && creationContext->requestedGeometryIn != obtainedGeometry) {
-            QWindowSystemInterface::handleGeometryChange<QWindowSystemInterface::SynchronousDelivery>(w, obtainedGeometry);
-        }
+    const Qt::WindowState state = w->windowState();
+    const QRect obtainedGeometry(creationContext->obtainedPos, creationContext->obtainedSize);
+    QPlatformScreen *obtainedScreen = screenForGeometry(obtainedGeometry);
+    if (obtainedScreen && screen() != obtainedScreen)
+        QWindowSystemInterface::handleWindowScreenChanged<QWindowSystemInterface::SynchronousDelivery>(w, obtainedScreen->screen());
+    if (state != Qt::WindowMaximized && state != Qt::WindowFullScreen
+        && creationContext->requestedGeometryIn != obtainedGeometry) {
+        QWindowSystemInterface::handleGeometryChange<QWindowSystemInterface::SynchronousDelivery>(w, obtainedGeometry);
     }
     QWindowsWindow::setSavedDpi(GetDpiForWindow(handle()));
 }
@@ -1921,10 +1923,15 @@ void QWindowsWindow::updateTransientParent() const
     // Update transient parent.
     const HWND oldTransientParent = GetWindow(m_data.hwnd, GW_OWNER);
     HWND newTransientParent = nullptr;
-    if (const QWindow *tp = window()->transientParent())
-        if (const QWindowsWindow *tw = QWindowsWindow::windowsWindowOf(tp))
-            if (!tw->testFlag(WithinDestroy)) // Prevent destruction by parent window (QTBUG-35499, QTBUG-36666)
+    if (const QWindow *tp = window()->transientParent()) {
+        if (const QWindowsWindow *tw = QWindowsWindow::windowsWindowOf(tp)) {
+            if (!tw->testFlag(WithinDestroy)) { // Prevent destruction by parent window (QTBUG-35499, QTBUG-36666)
                 newTransientParent = tw->handle();
+            }
+        } else if (const QWindowsBaseWindow *tbw = QWindowsBaseWindow::baseWindowOf(tp)) {
+            newTransientParent = tbw->handle();
+        }
+    }
 
     // QTSOLBUG-71: When using the MFC/winmigrate solution, it is possible that a child
     // window is found, which can cause issues with modality. Loop up to top level.
@@ -2064,7 +2071,14 @@ void QWindowsWindow::setParent_sys(const QPlatformWindow *parent)
         // Force toplevel state as QWindow::isTopLevel cannot be relied upon here.
         if (wasTopLevel != isTopLevel) {
             setDropSiteEnabled(false);
-            setWindowFlags_sys(window()->flags(), unsigned(isTopLevel ? WindowCreationData::ForceTopLevel : WindowCreationData::ForceChild));
+            m_data = setWindowFlags_sys(window()->flags(), unsigned(isTopLevel ? WindowCreationData::ForceTopLevel : WindowCreationData::ForceChild));
+            // Update frame margins for the new top-level state.
+            // Child windows have no frame/titlebar, so margins must be zero.
+            // Top-level windows need frame margins recalculated.
+            if (isTopLevel)
+                updateFullFrameMargins();
+            else
+                m_data.fullFrameMargins = {};
             updateDropSite(isTopLevel);
         }
     }
@@ -2338,6 +2352,7 @@ void QWindowsWindow::handleResized(int wParam, LPARAM lParam)
         return;
     case SIZE_MAXIMIZED:
         handleGeometryChange();
+        updateRestoreGeometry();    // we might be in ResizeMoveActive mode but changed the screen
         if (!testFlag(WithinSetStyle) && !testFlag(WithinSetGeometry))
             handleWindowStateChange(Qt::WindowMaximized | (isFullScreen_sys() ? Qt::WindowFullScreen
                                                                               : Qt::WindowNoState));
@@ -2390,8 +2405,8 @@ void QWindowsWindow::checkForScreenChanged(ScreenChangeMode mode, const RECT *su
 void QWindowsWindow::handleGeometryChange()
 {
     const QRect previousGeometry = m_data.geometry;
-    m_data.geometry = geometry_sys();
     updateFullFrameMargins();
+    m_data.geometry = geometry_sys();
     QWindowSystemInterface::handleGeometryChange(window(), m_data.geometry);
     // QTBUG-32121: OpenGL/normal windows (with exception of ANGLE
     // which we no longer support in Qt 6) do not receive expose

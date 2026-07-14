@@ -304,7 +304,6 @@ function(qt_internal_add_plugin target)
         PUBLIC_LIBRARIES ${arg_PUBLIC_LIBRARIES}
         DEFINES
             ${arg_DEFINES}
-            ${deprecation_define}
         PUBLIC_DEFINES
             ${arg_PUBLIC_DEFINES}
         DBUS_ADAPTOR_SOURCES ${arg_DBUS_ADAPTOR_SOURCES}
@@ -345,10 +344,9 @@ function(qt_internal_add_plugin target)
         qt_internal_wrap_private_modules("${target}"
             OUT_VAR qt_libs_private
             LIBRARIES ${qt_libs_private})
-        list(APPEND qt_register_target_depentdencies_args PRIVATE ${qt_libs_private})
+        list(APPEND qt_register_target_dependencies_args PRIVATE ${qt_libs_private})
     endif()
-    qt_internal_register_target_dependencies("${target}"
-        ${qt_register_target_dependencies_args})
+    qt_internal_register_target_dependencies("${target}" ${qt_register_target_dependencies_args})
 
     if(target_type STREQUAL STATIC_LIBRARY)
         if(qt_module_target)
@@ -382,6 +380,7 @@ function(qt_internal_add_plugin target)
 
         # For test plugins we need to make sure plugins are not loaded from the Qt installation
         # when building standalone tests.
+        set(test_plugin_arg "")
         if(QT_INTERNAL_CONFIGURING_TESTS OR arg_TEST_PLUGIN)
             if(NOT arg_TEST_PLUGIN)
                 message(WARNING "The installable test plugin ${target} is built as part of a test"
@@ -389,20 +388,50 @@ function(qt_internal_add_plugin target)
                     "\nThis warning will soon become an error."
                 )
             endif()
-            set(skip_internal_test_plugin
-"if(QT_BUILD_STANDALONE_TESTS AND \"\${PROJECT_NAME}\" STREQUAL \"${PROJECT_NAME}\")
-    message(DEBUG \"Skipping loading ${target}Config.cmake during \"
-        \"standalone tests run of ${PROJECT_NAME}\")
-    return()
-endif()"
-            )
+            set(test_plugin_arg TEST_PLUGIN)
         endif()
+
+        # Some plugins like the sqldriver ones can be built as part of the main repo or as a
+        # separate standalone project. We need to make sure we exclude loading the Qt prebuilt
+        # plugins when loading such a project regardless which way it is built.
+        if(QT_STANDALONE_PROJECT_NAME)
+            set(project_names_arg "${QT_STANDALONE_PROJECT_NAME}")
+
+            if(QT_PARENT_PROJECT_NAME)
+                list(APPEND project_names_arg "${QT_PARENT_PROJECT_NAME}")
+            else()
+                message(WARNING
+                    "QT_STANDALONE_PROJECT_NAME is set to '${QT_STANDALONE_PROJECT_NAME}', but "
+                    "QT_PARENT_PROJECT_NAME is not set. This can cause issues when building the "
+                    "standalone project. Set QT_PARENT_PROJECT_NAME to the submodule's "
+                    "root CMakeLists.txt project name to avoid this warning."
+                )
+            endif()
+        else()
+            set(project_names_arg "${PROJECT_NAME}")
+        endif()
+        list(PREPEND project_names_arg "PROJECT_NAMES")
+        string(REPLACE ";" " " project_names_arg "${project_names_arg}")
 
         configure_package_config_file(
             "${QT_CMAKE_DIR}/QtPluginConfig.cmake.in"
             "${config_build_dir}/${INSTALL_CMAKE_NAMESPACE}${target}Config.cmake"
             INSTALL_DESTINATION "${config_install_dir}"
         )
+
+        qt_configure_file(
+            OUTPUT "${config_build_dir}/${INSTALL_CMAKE_NAMESPACE}${target}TargetsPrecheck.cmake"
+            CONTENT
+# TODO: Remove the CHECK_QT_NO_CREATE_TARGETS once a better approach is developed
+"
+_qt_internal_should_include_targets(
+    TARGETS ${target}
+    NAMESPACE ${INSTALL_CMAKE_NAMESPACE}::
+    ${project_names_arg}
+    OUT_VAR_SHOULD_SKIP __qt_${target}_skip_include_targets_file
+    ${test_plugin_arg}
+)
+")
         write_basic_package_version_file(
             "${config_build_dir}/${INSTALL_CMAKE_NAMESPACE}${target}ConfigVersionImpl.cmake"
             VERSION ${PROJECT_VERSION}
@@ -417,6 +446,7 @@ endif()"
             "${config_build_dir}/${INSTALL_CMAKE_NAMESPACE}${target}Config.cmake"
             "${config_build_dir}/${INSTALL_CMAKE_NAMESPACE}${target}ConfigVersion.cmake"
             "${config_build_dir}/${INSTALL_CMAKE_NAMESPACE}${target}ConfigVersionImpl.cmake"
+            "${config_build_dir}/${INSTALL_CMAKE_NAMESPACE}${target}TargetsPrecheck.cmake"
             DESTINATION "${config_install_dir}"
             COMPONENT Devel
         )

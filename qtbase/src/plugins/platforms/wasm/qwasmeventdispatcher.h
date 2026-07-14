@@ -1,5 +1,6 @@
 // Copyright (C) 2018 The Qt Company Ltd.
 // SPDX-License-Identifier: LicenseRef-Qt-Commercial OR GPL-3.0-only
+// Qt-Security score:significant reason:default
 
 #ifndef QWASMEVENTDISPATCHER_H
 #define QWASMEVENTDISPATCHER_H
@@ -15,7 +16,7 @@ class QWasmSuspendResumeControl;
 class QWasmEventDispatcher : public QEventDispatcherWasm
 {
 public:
-    QWasmEventDispatcher(std::shared_ptr<QWasmSuspendResumeControl> suspendResume);
+    QWasmEventDispatcher();
 
 protected:
     bool sendPostedEvents() override;

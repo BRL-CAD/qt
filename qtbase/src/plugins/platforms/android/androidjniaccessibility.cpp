@@ -1,5 +1,6 @@
 // Copyright (C) 2021 The Qt Company Ltd.
 // SPDX-License-Identifier: LicenseRef-Qt-Commercial OR LGPL-3.0-only OR GPL-2.0-only OR GPL-3.0-only
+// Qt-Security score:significant reason:default
 
 #include "androidjniaccessibility.h"
 #include "androidjnimain.h"
@@ -482,7 +483,6 @@ namespace QtAndroidAccessibility
         case QAccessible::Role::Link:
         {
             if (state.checkable)
-                // There is also a android.widget.Switch for which we have no match.
                 return QStringLiteral("android.widget.ToggleButton");
             return QStringLiteral("android.widget.Button");
         }
@@ -490,6 +490,8 @@ namespace QtAndroidAccessibility
             // As of android/accessibility/utils/Role.java::getRole a CheckBox
             // is NOT android.widget.CheckBox
             return QStringLiteral("android.widget.CompoundButton");
+        case QAccessible::Role::Switch:
+            return QStringLiteral("android.widget.Switch");
         case QAccessible::Role::Clock:
             return QStringLiteral("android.widget.TextClock");
         case QAccessible::Role::ComboBox:
@@ -645,6 +647,29 @@ namespace QtAndroidAccessibility
         return env->NewString((jchar*) desc.constData(), (jsize) desc.size());
     }
 
+    static QString languageTag_helper(int objectId)
+    {
+        QAccessibleInterface *iface = interfaceFromId(objectId);
+        if (!iface || !iface->isValid())
+            return QString();
+
+        QAccessibleAttributesInterface *attributesIface = iface->attributesInterface();
+        if (!attributesIface || !attributesIface->attributeKeys().contains(QAccessible::Attribute::Locale))
+            return QString();
+
+        return attributesIface->attributeValue(QAccessible::Attribute::Locale).toLocale().bcp47Name();
+    }
+
+    static jstring languageTag(JNIEnv *env, jobject /*thiz*/, jint objectId)
+    {
+        QString tag;
+        if (m_accessibilityContext) {
+            runInObjectContext(m_accessibilityContext, [objectId]() {
+                return languageTag_helper(objectId);
+            }, &tag);
+        }
+        return env->NewString((jchar*)tag.constData(), (jsize)tag.size());
+    }
 
     struct NodeInfo
     {
@@ -794,6 +819,7 @@ namespace QtAndroidAccessibility
         {"childIdListForAccessibleObject", "(I)[I", (jintArray)childIdListForAccessibleObject},
         {"parentId", "(I)I", (void*)parentId},
         {"descriptionForAccessibleObject", "(I)Ljava/lang/String;", (jstring)descriptionForAccessibleObject},
+        {"languageTag", "(I)Ljava/lang/String;", (jstring)languageTag},
         {"screenRect", "(I)Landroid/graphics/Rect;", (jobject)screenRect},
         {"hitTest", "(FF)I", (void*)hitTest},
         {"populateNode", "(ILandroid/view/accessibility/AccessibilityNodeInfo;)Z", (void*)populateNode},

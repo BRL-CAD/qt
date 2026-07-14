@@ -1,5 +1,6 @@
 // Copyright (C) 2019 The Qt Company Ltd.
 // SPDX-License-Identifier: LicenseRef-Qt-Commercial OR LGPL-3.0-only OR GPL-2.0-only OR GPL-3.0-only
+// Qt-Security score:significant reason:default
 
 #include "qwaylandsurface_p.h"
 #include "qwaylanddisplay_p.h"
@@ -55,8 +56,10 @@ void QWaylandSurface::handleScreenRemoved(QScreen *qScreen)
 
 void QWaylandSurface::surface_enter(wl_output *output)
 {
-    auto addedScreen = QWaylandScreen::fromWlOutput(output);
+    if (!output)
+        return;
 
+    auto addedScreen = QWaylandScreen::fromWlOutput(output);
     if (!addedScreen)
         return;
 
@@ -75,8 +78,10 @@ void QWaylandSurface::surface_enter(wl_output *output)
 
 void QWaylandSurface::surface_leave(wl_output *output)
 {
-    auto *removedScreen = QWaylandScreen::fromWlOutput(output);
+    if (!output)
+        return;
 
+    auto *removedScreen = QWaylandScreen::fromWlOutput(output);
     if (!removedScreen)
         return;
 

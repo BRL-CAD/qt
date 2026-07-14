@@ -1,5 +1,6 @@
 // Copyright (C) 2016 The Qt Company Ltd.
 // SPDX-License-Identifier: LicenseRef-Qt-Commercial OR LGPL-3.0-only OR GPL-2.0-only OR GPL-3.0-only
+// Qt-Security score:significant reason:default
 
 #ifndef QFREELIST_P_H
 #define QFREELIST_P_H
@@ -17,6 +18,8 @@
 
 #include <QtCore/private/qglobal_p.h>
 #include <QtCore/qatomic.h>
+
+#include <atomic>
 
 QT_BEGIN_NAMESPACE
 
@@ -209,7 +212,7 @@ inline int QFreeList<T, ConstantsType>::next()
         if (!v) {
             ElementType* const alloced = allocate((id & ConstantsType::IndexMask) - at,
                                                   ConstantsType::Sizes[block]);
-            if (_v[block].testAndSetRelease(nullptr, alloced, v)) {
+            if (_v[block]._q_value.compare_exchange_strong(v, alloced, std::memory_order_release, std::memory_order_acquire)) {
                 v = alloced;
             } else {
                 // race with another thread lost

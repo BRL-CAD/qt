@@ -1,5 +1,6 @@
 // Copyright (C) 2022 The Qt Company Ltd.
 // SPDX-License-Identifier: LicenseRef-Qt-Commercial OR LGPL-3.0-only OR GPL-2.0-only OR GPL-3.0-only
+// Qt-Security score:significant reason:default
 
 #ifndef QCALENDARMATH_P_H
 #define QCALENDARMATH_P_H
@@ -89,7 +90,7 @@ template <unsigned b, typename Int,
                            bool> = true>
 constexpr auto qDivMod(Int a)
 {
-    constexpr unsigned w = QtPrivate::qConstexprCountTrailingZeroBits(b);
+    constexpr unsigned w = qCountTrailingZeroBits(b);
     struct R { Int quotient; Int remainder; };
     if constexpr (std::is_signed_v<Int>) {
         if (a < 0)

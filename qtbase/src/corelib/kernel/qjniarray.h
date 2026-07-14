@@ -1,5 +1,6 @@
 // Copyright (C) 2023 The Qt Company Ltd.
 // SPDX-License-Identifier: LicenseRef-Qt-Commercial OR LGPL-3.0-only OR GPL-2.0-only OR GPL-3.0-only
+// Qt-Security score:significant reason:default
 
 #ifndef QJNIARRAY_H
 #define QJNIARRAY_H
@@ -872,7 +873,7 @@ auto QJniArrayBase::makeArray(List &&list, NewFn &&newArray, SetFn &&setRegion)
     const size_type length = size_type(std::size(list));
     JNIEnv *env = QJniEnvironment::getJniEnv();
     auto localArray = (env->*newArray)(length);
-    if (QJniEnvironment::checkAndClearExceptions(env)) {
+    if (env->ExceptionCheck()) {
         if (localArray)
             env->DeleteLocalRef(localArray);
         return QJniArray<ElementType>();
@@ -903,7 +904,7 @@ auto QJniArrayBase::makeObjectArray(List &&list)
         return ResultType();
 
     JNIEnv *env = QJniEnvironment::getJniEnv();
-    const size_type length = q26::saturate_cast<size_type>(std::size(list));
+    const size_type length = q26::saturating_cast<size_type>(std::size(list));
 
     // this assumes that all objects in the list have the same class
     jclass elementClass = nullptr;
@@ -916,7 +917,7 @@ auto QJniArrayBase::makeObjectArray(List &&list)
         elementClass = env->GetObjectClass(*std::begin(list));
     }
     auto localArray = env->NewObjectArray(length, elementClass, nullptr);
-    if (QJniEnvironment::checkAndClearExceptions(env)) {
+    if (env->ExceptionCheck()) {
         if (localArray)
             env->DeleteLocalRef(localArray);
         return ResultType();

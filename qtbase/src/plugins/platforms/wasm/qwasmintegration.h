@@ -1,5 +1,6 @@
 // Copyright (C) 2018 The Qt Company Ltd.
 // SPDX-License-Identifier: LicenseRef-Qt-Commercial OR GPL-3.0-only
+// Qt-Security score:significant reason:default
 
 #ifndef QWASMINTEGRATION_H
 #define QWASMINTEGRATION_H
@@ -96,9 +97,6 @@ private:
         emscripten::val emscriptenVal;
         QWasmScreen *wasmScreen;
     };
-
-    // m_suspendResume should be created first and destroyed early as other fields depend on it
-    std::shared_ptr<QWasmSuspendResumeControl> m_suspendResume;
 
     mutable QWasmFontDatabase *m_fontDb;
     mutable QWasmServices *m_desktopServices;

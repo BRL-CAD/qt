@@ -172,6 +172,43 @@ void QAbstractItemViewPrivate::checkMouseMove(const QPersistentModelIndex &index
     }
 }
 
+#if QT_CONFIG(accessibility)
+void QAbstractItemViewPrivate::updateItemAccessibility(const QModelIndex &index,
+                                                       const QList<int> &roles)
+{
+    Q_Q(QAbstractItemView);
+
+    if (!QAccessible::isActive())
+        return;
+
+    const int childIndex = accessibleChildIndex(index);
+    if (childIndex < 0)
+        return;
+
+    // see QAccessibleTableCell for how role data are mapped to the a11y layer
+
+    for (int role : roles) {
+        if (role == Qt::AccessibleTextRole
+            || (role == Qt::DisplayRole
+                && index.data(Qt::AccessibleTextRole).toString().isEmpty())) {
+            QAccessibleEvent event(q, QAccessible::NameChanged);
+            event.setChild(childIndex);
+            QAccessible::updateAccessibility(&event);
+        } else if (role == Qt::AccessibleDescriptionRole) {
+            QAccessibleEvent event(q, QAccessible::DescriptionChanged);
+            event.setChild(childIndex);
+            QAccessible::updateAccessibility(&event);
+        } else if (role == Qt::CheckStateRole) {
+            QAccessible::State state;
+            state.checked = true;
+            QAccessibleStateChangeEvent event(q, state);
+            event.setChild(childIndex);
+            QAccessible::updateAccessibility(&event);
+        }
+    }
+}
+#endif
+
 #if QT_CONFIG(gestures) && QT_CONFIG(scroller)
 
 // stores and restores the selection and current item when flicking
@@ -250,9 +287,9 @@ void QAbstractItemViewPrivate::disconnectDelegate(QAbstractItemDelegate *delegat
 void QAbstractItemViewPrivate::disconnectAll()
 {
     Q_Q(QAbstractItemView);
-    for (const QMetaObject::Connection &connection : modelConnections)
+    for (QMetaObject::Connection &connection : modelConnections)
         QObject::disconnect(connection);
-    for (const QMetaObject::Connection &connection : scrollbarConnections)
+    for (QMetaObject::Connection &connection : scrollbarConnections)
       QObject::disconnect(connection);
     disconnectDelegate(itemDelegate);
     for (QAbstractItemDelegate *delegate : std::as_const(rowDelegates))
@@ -719,7 +756,7 @@ void QAbstractItemView::setModel(QAbstractItemModel *model)
     if (model == d->model)
         return;
     if (d->model && d->model != QAbstractItemModelPrivate::staticEmptyModel()) {
-        for (const QMetaObject::Connection &connection : d->modelConnections)
+        for (QMetaObject::Connection &connection : d->modelConnections)
             disconnect(connection);
     }
     d->model = (model ? model : QAbstractItemModelPrivate::staticEmptyModel());
@@ -904,7 +941,8 @@ QVariant QAbstractItemView::inputMethodQuery(Qt::InputMethodQuery query) const
                 result = QRect(currentEditor->mapTo(this, editorRect.topLeft()), editorRect.size());
             }
         } else if (query == Qt::ImCursorRectangle) {
-            result = visualRect(current);
+            const QRect visRect = visualRect(current);
+            result = QRect(d->viewport->mapTo(this, visRect.topLeft()), visRect.size());
         }
     }
     if (!result.isValid())
@@ -1813,13 +1851,12 @@ void QAbstractItemView::mousePressEvent(QMouseEvent *event)
     QItemSelectionModel::SelectionFlags command = selectionCommand(index, event);
     d->noSelectionOnMousePress = command == QItemSelectionModel::NoUpdate || !index.isValid();
     QPoint offset = d->offset();
-    d->draggedPosition = pos;
-    d->draggedPositionOffset = offset;
+    d->draggedPosition = pos + offset;
 
 #if QT_CONFIG(draganddrop)
     // update the pressed position when drag was enable
     if (d->dragEnabled)
-        d->pressedPosition = d->draggedPosition + d->draggedPositionOffset;
+        d->pressedPosition = d->draggedPosition;
 #endif
 
     if (!(command & QItemSelectionModel::Current)) {
@@ -1876,8 +1913,7 @@ void QAbstractItemView::mouseMoveEvent(QMouseEvent *event)
     Q_D(QAbstractItemView);
     QPoint bottomRight = event->position().toPoint();
 
-    d->draggedPosition = bottomRight;
-    d->draggedPositionOffset = d->offset();
+    d->draggedPosition = bottomRight + d->offset();
 
     if (state() == ExpandingState || state() == CollapsingState)
         return;
@@ -2052,8 +2088,7 @@ void QAbstractItemView::dragEnterEvent(QDragEnterEvent *event)
 void QAbstractItemView::dragMoveEvent(QDragMoveEvent *event)
 {
     Q_D(QAbstractItemView);
-    d->draggedPosition = event->position().toPoint();
-    d->draggedPositionOffset = d->offset();
+    d->draggedPosition = event->position().toPoint() + d->offset();
     if (dragDropMode() == InternalMove
         && (event->source() != this || !(event->possibleActions() & Qt::MoveAction)))
         return;
@@ -2072,9 +2107,9 @@ void QAbstractItemView::dragMoveEvent(QDragMoveEvent *event)
             if (d->selectionBehavior == QAbstractItemView::SelectRows
                 && d->dropIndicatorPosition != OnViewport
                 && (d->dropIndicatorPosition != OnItem || event->source() == this)) {
-                if (index.column() > 0)
-                    rect = visualRect(index.siblingAtColumn(0));
-                rect.setWidth(viewport()->width() - 1 - rect.x());
+                const int maxCol = d->model->columnCount(index.parent()) - 1;
+                const auto idx = index.column() > 0 ? index.siblingAtColumn(0) : index;
+                rect = d->intersectedRect(viewport()->rect(), idx, idx.siblingAtColumn(maxCol));
             }
             switch (d->dropIndicatorPosition) {
             case AboveItem:
@@ -3108,7 +3143,8 @@ void QAbstractItemView::keyboardSearch(const QString &search)
     QModelIndex startMatch;
     QModelIndexList previous;
     do {
-        match = d->model->match(current, Qt::DisplayRole, d->keyboardInput);
+        match = d->model->match(current, Qt::DisplayRole, d->keyboardInput, 1,
+                                d->keyboardSearchFlags);
         if (match == previous)
             break;
         firstMatch = match.value(0);
@@ -3248,6 +3284,30 @@ void QAbstractItemView::setUpdateThreshold(int threshold)
     if (d->updateThreshold == threshold)
         return;
     d->updateThreshold = threshold;
+}
+
+/*!
+    \property QAbstractItemView::keyboardSearchFlags
+    \since 6.11
+    This property determines how the default implementation of
+    keyboardSearch() matches the given string against the model's data.
+
+    The default value is \c{Qt::MatchStartsWith|Qt::MatchWrap}.
+
+    \sa keyboardSearch()
+    \sa QAbstractItemModel::match()
+*/
+
+Qt::MatchFlags QAbstractItemView::keyboardSearchFlags() const
+{
+    Q_D(const QAbstractItemView);
+    return d->keyboardSearchFlags;
+}
+
+void QAbstractItemView::setKeyboardSearchFlags(Qt::MatchFlags searchFlags)
+{
+    Q_D(QAbstractItemView);
+    d->keyboardSearchFlags = searchFlags;
 }
 
 /*!
@@ -3470,6 +3530,10 @@ void QAbstractItemView::dataChanged(const QModelIndex &topLeft, const QModelInde
         accessibleEvent.setLastRow(bottomRight.row());
         accessibleEvent.setLastColumn(bottomRight.column());
         QAccessible::updateAccessibility(&accessibleEvent);
+
+        // send accessibility events as needed when current item is modified
+        if (topLeft.isValid() && topLeft == bottomRight && topLeft == currentIndex())
+            d->updateItemAccessibility(topLeft, roles);
     }
 #endif
     d->updateGeometry();
@@ -4095,8 +4159,7 @@ void QAbstractItemView::doAutoScroll()
     const int verticalValue = verticalScroll->value();
     const int horizontalValue = horizontalScroll->value();
 
-    const QPoint pos = d->draggedPosition;
-
+    const QPoint pos = d->draggedPosition - d->offset();
     const QRect area = QWidgetPrivate::get(d->viewport)->clipRect();
 
     // do the scrolling if we are in the scroll margins
@@ -4136,8 +4199,7 @@ void QAbstractItemView::doAutoScroll()
             // update our dragged position manually after the scroll. "pos" is the old
             // draggedPosition - d->offset(), and d->offset() is now updated after scrolling, so
             // pos + d->offset() gives us the new position.
-            d->draggedPosition = pos;
-            d->draggedPositionOffset = d->offset();
+            d->draggedPosition = pos + d->offset();
             break;
         }
         default:
@@ -4739,6 +4801,7 @@ QPixmap QAbstractItemViewPrivate::renderToPixmap(const QModelIndexList &indexes,
 
     pixmap.fill(Qt::transparent);
     QPainter painter(&pixmap);
+    painter.setLayoutDirection(q->layoutDirection());
     QStyleOptionViewItem option;
     q->initViewItemOption(&option);
     option.state |= QStyle::State_Selected;

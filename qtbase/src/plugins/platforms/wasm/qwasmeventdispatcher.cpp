@@ -1,5 +1,6 @@
 // Copyright (C) 2018 The Qt Company Ltd.
 // SPDX-License-Identifier: LicenseRef-Qt-Commercial OR GPL-3.0-only
+// Qt-Security score:significant reason:default
 
 #include "qwasmeventdispatcher.h"
 #include "qwasmintegration.h"
@@ -8,8 +9,8 @@
 
 QT_BEGIN_NAMESPACE
 
-QWasmEventDispatcher::QWasmEventDispatcher(std::shared_ptr<QWasmSuspendResumeControl> suspendResume)
-    :QEventDispatcherWasm(suspendResume)
+QWasmEventDispatcher::QWasmEventDispatcher()
+    :QEventDispatcherWasm()
 {
 
 }

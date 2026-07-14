@@ -1,5 +1,6 @@
 // Copyright (C) 2016 The Qt Company Ltd.
 // SPDX-License-Identifier: LicenseRef-Qt-Commercial OR LGPL-3.0-only OR GPL-2.0-only OR GPL-3.0-only
+// Qt-Security score:significant reason:default
 
 #include <AppKit/AppKit.h>
 #include <QuartzCore/QuartzCore.h>
@@ -1480,6 +1481,10 @@ void QCocoaWindow::windowDidChangeScreen()
         // same screen.
         currentScreen->requestUpdate();
     }
+    // If there are no exposed windows left on the previous screen
+    // we can stop its display link if it was running.
+    if (previousScreen)
+        previousScreen->maybeStopDisplayLink();
 }
 
 // ----------------------- NSWindowDelegate callbacks -----------------------
@@ -1688,15 +1693,14 @@ void QCocoaWindow::recreateWindowIfNeeded()
 
     if (shouldBeContentView && !m_nsWindow) {
         // Move view to new NSWindow if needed
-        if (auto *newWindow = createNSWindow(shouldBePanel)) {
-            qCDebug(lcQpaWindow) << "Ensuring that" << m_view << "is content view for" << newWindow;
-            [m_view setPostsFrameChangedNotifications:NO];
-            [newWindow setContentView:m_view];
-            [m_view setPostsFrameChangedNotifications:YES];
+        auto *newWindow = createNSWindow(shouldBePanel);
+        qCDebug(lcQpaWindow) << "Ensuring that" << m_view << "is content view for" << newWindow;
+        [m_view setPostsFrameChangedNotifications:NO];
+        [newWindow setContentView:m_view];
+        [m_view setPostsFrameChangedNotifications:YES];
 
-            m_nsWindow = newWindow;
-            Q_ASSERT(m_view.window == m_nsWindow);
-        }
+        m_nsWindow = newWindow;
+        Q_ASSERT(m_view.window == m_nsWindow);
     }
 
     if (parentCocoaWindow) {
@@ -1730,6 +1734,7 @@ bool QCocoaWindow::updatesWithDisplayLink() const
 void QCocoaWindow::deliverUpdateRequest()
 {
     qCDebug(lcQpaDrawing) << "Delivering update request to" << window();
+    QScopedValueRollback<bool> blocker(m_deliveringUpdateRequest, true);
 
     if (auto *qtMetalLayer = qt_objc_cast<QMetalLayer*>(contentLayer())) {
         // We attempt a read lock here, so that the animation/render thread is

@@ -302,6 +302,8 @@ private:
 };
 Q_DECLARE_SHARED(QCborValue)
 
+Q_CORE_EXPORT size_t qHash(const QCborValue &value, size_t seed = 0);
+
 class QCborValueConstRef
 {
 public:
@@ -402,6 +404,10 @@ protected:
     friend class QCborContainerPrivate;
 
     QCborValue concrete() const noexcept  { return concrete(*this); }
+
+    friend size_t qHash(const QCborValueConstRef &key, size_t seed = 0) noexcept
+    { return QHashPrivate::ex1to2arg(key.concrete(), seed); }
+
     static Q_CORE_EXPORT Q_DECL_PURE_FUNCTION bool
     comparesEqual_helper(QCborValueConstRef lhs, QCborValueConstRef rhs) noexcept;
     static Q_CORE_EXPORT Q_DECL_PURE_FUNCTION Qt::strong_ordering
@@ -435,13 +441,13 @@ protected:
     Q_DECLARE_STRONGLY_ORDERED(QCborValueConstRef, QCborValue)
 
     static Q_CORE_EXPORT QCborValue concrete(QCborValueConstRef that) noexcept;
-    static Q_CORE_EXPORT QCborValue::Type concreteType(QCborValueConstRef that) noexcept Q_DECL_PURE_FUNCTION;
+    Q_DECL_PURE_FUNCTION static Q_CORE_EXPORT QCborValue::Type concreteType(QCborValueConstRef that) noexcept;
     static Q_CORE_EXPORT bool
-    concreteBoolean(QCborValueConstRef that, bool defaultValue) noexcept Q_DECL_PURE_FUNCTION;
+    Q_DECL_PURE_FUNCTION concreteBoolean(QCborValueConstRef that, bool defaultValue) noexcept;
     static Q_CORE_EXPORT double
-    concreteDouble(QCborValueConstRef that, double defaultValue) noexcept Q_DECL_PURE_FUNCTION;
+    Q_DECL_PURE_FUNCTION concreteDouble(QCborValueConstRef that, double defaultValue) noexcept;
     static Q_CORE_EXPORT qint64
-    concreteIntegral(QCborValueConstRef that, qint64 defaultValue) noexcept Q_DECL_PURE_FUNCTION;
+    Q_DECL_PURE_FUNCTION concreteIntegral(QCborValueConstRef that, qint64 defaultValue) noexcept;
     static Q_CORE_EXPORT QByteArray
     concreteByteArray(QCborValueConstRef that, const QByteArray &defaultValue);
     static Q_CORE_EXPORT QString
@@ -582,7 +588,7 @@ private:
     static QCborValue concrete(QCborValueRef that) noexcept;
     QCborValue concrete() const noexcept  { return concrete(*this); }
 
-    static QCborValue::Type concreteType(QCborValueRef self) noexcept Q_DECL_PURE_FUNCTION;
+    Q_DECL_PURE_FUNCTION static QCborValue::Type concreteType(QCborValueRef self) noexcept;
     QCborValue::Type concreteType() const noexcept { return concreteType(*this); }
 
     // this will actually be invalid...
@@ -610,8 +616,6 @@ private:
 QT_WARNING_POP
 Q_DECLARE_OPERATORS_FOR_FLAGS(QCborValue::EncodingOptions)
 Q_DECLARE_OPERATORS_FOR_FLAGS(QCborValue::DiagnosticNotationOptions)
-
-Q_CORE_EXPORT size_t qHash(const QCborValue &value, size_t seed = 0);
 
 #if !defined(QT_NO_DEBUG_STREAM)
 Q_CORE_EXPORT QDebug operator<<(QDebug, const QCborValue &v);

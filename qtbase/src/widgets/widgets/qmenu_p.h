@@ -362,12 +362,19 @@ public:
     } delayState;
     enum SelectionReason {
         SelectedFromKeyboard,
-        SelectedFromElsewhere
+        SelectedFromAPI,
+        SelectedFromElsewhere,
+    };
+    enum class SelectionDirection {
+        Up,
+        Down,
     };
     QWidget *topCausedWidget() const;
     QAction *actionAt(QPoint p) const;
     void setFirstActionActive();
-    void setCurrentAction(QAction *, int popup = -1, SelectionReason reason = SelectedFromElsewhere, bool activateFirst = false);
+    void setCurrentAction(QAction *, int popup = -1, SelectionReason reason = SelectedFromElsewhere,
+                          SelectionDirection direction = SelectionDirection::Down,
+                          bool activateFirst = false);
     void popupAction(QAction *, int, bool);
     void setSyncAction();
 
@@ -437,7 +444,7 @@ public:
     void _q_actionHovered();
     void _q_platformMenuAboutToShow();
 
-    bool hasMouseMoved(const QPoint &globalPos);
+    bool hasMouseMoved(const QPointF &globalPos) const;
 
     void updateLayoutDirection();
 

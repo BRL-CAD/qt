@@ -1,5 +1,6 @@
 // Copyright (C) 2016 The Qt Company Ltd.
 // SPDX-License-Identifier: LicenseRef-Qt-Commercial OR LGPL-3.0-only OR GPL-2.0-only OR GPL-3.0-only
+// Qt-Security score:significant reason:default
 
 #ifndef QMETAOBJECTBUILDER_P_H
 #define QMETAOBJECTBUILDER_P_H
@@ -155,7 +156,7 @@ public:
     QByteArray returnType() const;
     void setReturnType(const QByteArray& value);
 
-    QList<QByteArray> parameterTypes() const;
+    QList<QByteArrayView> parameterTypes() const;
     QList<QByteArray> parameterNames() const;
     void setParameterNames(const QList<QByteArray>& value);
 
@@ -214,8 +215,11 @@ public:
     bool isEnumOrFlag() const;
     bool isConstant() const;
     bool isFinal() const;
+    bool isVirtual() const;
+    bool isOverride() const;
     bool isAlias() const;
     bool isBindable() const;
+    bool isRequired() const;
 
     void setReadable(bool value);
     void setWritable(bool value);
@@ -228,8 +232,11 @@ public:
     void setEnumOrFlag(bool value);
     void setConstant(bool value);
     void setFinal(bool value);
+    void setVirtual(bool value);
+    void setOverride(bool value);
     void setAlias(bool value);
     void setBindable(bool value);
+    void setRequired(bool value);
 
     int revision() const;
     void setRevision(int revision);

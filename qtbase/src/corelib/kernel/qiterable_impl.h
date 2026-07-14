@@ -1,5 +1,6 @@
 // Copyright (C) 2020 The Qt Company Ltd.
 // SPDX-License-Identifier: LicenseRef-Qt-Commercial OR LGPL-3.0-only OR GPL-2.0-only OR GPL-3.0-only
+// Qt-Security score:significant reason:default
 
 #ifndef QITERABLE_IMPL_H
 #define QITERABLE_IMPL_H
@@ -9,7 +10,7 @@
 
 QT_BEGIN_NAMESPACE
 
-namespace QIterablePrivate {
+namespace QtIterablePrivate {
 
 template<typename Callback>
 static QVariant retrieveElement(QMetaType type, Callback callback)
@@ -24,7 +25,7 @@ static QVariant retrieveElement(QMetaType type, Callback callback)
     return v;
 }
 
-} // namespace QIterablePrivate
+} // namespace QtIterablePrivate
 
 QT_END_NAMESPACE
 

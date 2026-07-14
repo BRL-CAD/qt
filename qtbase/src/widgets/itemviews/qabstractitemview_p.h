@@ -272,6 +272,18 @@ public:
         return isIndexValid(index) && isIndexSelectable(index);
     }
 
+#if QT_CONFIG(accessibility)
+    virtual int accessibleChildIndex(const QModelIndex &index) const
+    {
+        Q_UNUSED(index);
+        return -1;
+    }
+#endif
+
+#if QT_CONFIG(accessibility)
+    void updateItemAccessibility(const QModelIndex &index, const QList<int> &roles);
+#endif
+
     // reimplemented from QAbstractScrollAreaPrivate
     QPoint contentsOffset() const override {
         Q_Q(const QAbstractItemView);
@@ -352,7 +364,6 @@ public:
     Qt::KeyboardModifiers pressedModifiers;
     QPoint pressedPosition;
     QPoint draggedPosition;
-    QPoint draggedPositionOffset;
     bool pressedAlreadySelected;
     bool releaseFromDoubleClick;
 
@@ -383,6 +394,7 @@ public:
 
     QString keyboardInput;
     QElapsedTimer keyboardInputTime;
+    Qt::MatchFlags keyboardSearchFlags = Qt::MatchStartsWith | Qt::MatchWrap;
 
     bool autoScroll;
     QBasicTimer autoScrollTimer;

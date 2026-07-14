@@ -286,8 +286,11 @@ void QHttp2Stream::streamError(Http2::Http2Error errorCode,
 */
 bool QHttp2Stream::sendRST_STREAM(Http2::Http2Error errorCode)
 {
-    if (m_state == State::Closed || m_state == State::Idle)
+    if (m_state == State::Closed || m_state == State::Idle) {
+        qCDebug(qHttp2ConnectionLog, "[%p] could not send RST_STREAM on %s stream %u",
+                getConnection(), QDebug::toBytes(m_state).constData(), m_streamID);
         return false;
+    }
     // Never respond to a RST_STREAM with a RST_STREAM or looping might occur.
     if (m_RST_STREAM_received.has_value())
         return false;
@@ -1571,6 +1574,17 @@ void QHttp2Connection::handleDATA()
         }
     }
 
+    if (inboundFrame.payloadSize() > m_config.maxFrameSize()) {
+        qCDebug(qHttp2ConnectionLog,
+                "[%p] Received DATA frame with payload size %u, "
+                "but SETTINGS_MAX_FRAME_SIZE is %u, sending FRAME_SIZE_ERROR",
+                this, inboundFrame.payloadSize(), m_config.maxFrameSize());
+        if (stream)
+            return stream->streamError(Http2Error::FRAME_SIZE_ERROR,
+                                       QLatin1String("DATA payload size exceeds SETTINGS_MAX_FRAME_SIZE"));
+        return connectionError(FRAME_SIZE_ERROR, "DATA payload size exceeds SETTINGS_MAX_FRAME_SIZE");
+    }
+
     if (qint32(inboundFrame.payloadSize()) > sessionReceiveWindowSize) {
         qCDebug(qHttp2ConnectionLog,
                 "[%p] Received DATA frame with payload size %u, "
@@ -1620,6 +1634,15 @@ void QHttp2Connection::handleHEADERS()
     // recipient MUST respond with a connection error.
     if (streamID == connectionStreamID)
         return connectionError(PROTOCOL_ERROR, "HEADERS on 0x0 stream");
+
+    if (inboundFrame.payloadSize() > m_config.maxFrameSize()) {
+        qCDebug(qHttp2ConnectionLog,
+                "[%p] Received HEADERS frame with payload size %u, "
+                "but SETTINGS_MAX_FRAME_SIZE is %u, sending FRAME_SIZE_ERROR",
+                this, inboundFrame.payloadSize(), m_config.maxFrameSize());
+        return connectionError(Http2Error::FRAME_SIZE_ERROR,
+                               "HEADERS payload size exceeds SETTINGS_MAX_FRAME_SIZE");
+    }
 
     const bool isClient = m_connectionType == Type::Client;
     const bool isClientInitiatedStream = !!(streamID & 1);
@@ -1778,7 +1801,7 @@ void QHttp2Connection::handleSETTINGS()
     if (inboundFrame.flags().testFlag(FrameFlag::ACK)) {
         // RFC 9113, 6.5: Receipt of a SETTINGS frame with the ACK flag set and a length field
         // value other than 0 MUST be treated as a connection error
-        if (inboundFrame.payloadSize ())
+        if (inboundFrame.payloadSize())
             return connectionError(FRAME_SIZE_ERROR, "SETTINGS ACK with data");
         if (!waitingForSettingsACK)
             return connectionError(PROTOCOL_ERROR, "unexpected SETTINGS ACK");
@@ -1792,7 +1815,7 @@ void QHttp2Connection::handleSETTINGS()
         // RFC 9113, 6.5: A SETTINGS frame with a length other than a multiple of 6 octets MUST be
         // treated as a connection error (Section 5.4.1) of type FRAME_SIZE_ERROR.
         // checked in Frame::validateHeader()
-        Q_ASSERT (inboundFrame.payloadSize() % 6 == 0);
+        Q_ASSERT(inboundFrame.payloadSize() % 6 == 0);
 
         auto src = inboundFrame.dataBegin();
         for (const uchar *end = src + inboundFrame.dataSize(); src != end; src += 6) {
@@ -2055,11 +2078,16 @@ void QHttp2Connection::handleWINDOW_UPDATE()
         const auto blockedStreams = std::exchange(m_blockedStreams, {});
         for (quint32 blockedStreamID : blockedStreams) {
             const QPointer<QHttp2Stream> stream = m_streams.value(blockedStreamID);
-            if (!stream || !stream->isActive())
+            if (!stream || !stream->isActive() || !stream->isUploadingDATA())
                 continue;
-            if (stream->isUploadingDATA() && !stream->isUploadBlocked())
+            if (stream->isUploadBlocked()) {
+                m_blockedStreams.insert(blockedStreamID);
+
+
+            } else {
                 QMetaObject::invokeMethod(stream, &QHttp2Stream::maybeResumeUpload,
                                           Qt::QueuedConnection);
+            }
         }
     } else {
         QHttp2Stream *stream = m_streams.value(streamID);
@@ -2079,6 +2107,14 @@ void QHttp2Connection::handleWINDOW_UPDATE()
 void QHttp2Connection::handleCONTINUATION()
 {
     Q_ASSERT(inboundFrame.type() == FrameType::CONTINUATION);
+    if (inboundFrame.payloadSize() > m_config.maxFrameSize()) {
+        qCDebug(qHttp2ConnectionLog,
+                "[%p] Received CONTINUATION frame with payload size %u, "
+                "but SETTINGS_MAX_FRAME_SIZE is %u, sending FRAME_SIZE_ERROR",
+                this, inboundFrame.payloadSize(), m_config.maxFrameSize());
+        return connectionError(Http2Error::FRAME_SIZE_ERROR,
+                               "CONTINUATION payload size exceeds SETTINGS_MAX_FRAME_SIZE");
+    }
     auto streamID = inboundFrame.streamID();
     qCDebug(qHttp2ConnectionLog,
             "[%p] Received CONTINUATION frame on stream %d, end stream? %s", this, streamID,

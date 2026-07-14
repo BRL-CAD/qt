@@ -20,6 +20,9 @@
 
 #include <QtWidgets/private/qtwidgetsglobal_p.h>
 #include "QtWidgets/qwidget.h"
+#if QT_CONFIG(label)
+#include <QtWidgets/qlabel.h>
+#endif
 #include "private/qobject_p.h"
 #include "QtCore/qrect.h"
 #include "QtCore/qlocale.h"
@@ -438,6 +441,14 @@ public:
     // sub-classes that their internals are about to be released.
     virtual void aboutToDestroy() {}
 
+    // customization point for widget re-creation to deal with different RHI types
+    virtual void recreate()
+    {
+        Q_Q(QWidget);
+        q->destroy();
+        q->create();
+    }
+
     inline QWidget *effectiveFocusWidget() {
         QWidget *w = q_func();
         while (w->focusProxy())
@@ -656,6 +667,10 @@ public:
     QPaintEngine *extraPaintEngine;
     mutable const QMetaObject *polished;
     QGraphicsEffect *graphicsEffect;
+#if QT_CONFIG(label)
+    // labels for which this widget is the buddy widget
+    QVarLengthArray<QLabel *, 1> labels;
+#endif
     // All widgets are added into the allWidgets set. Once
     // they receive a window id they are also added to the mapper.
     // This should just ensure that all widgets are deleted by QApplication

@@ -1,12 +1,16 @@
 // Copyright (C) 2024 The Qt Company Ltd.
 // SPDX-License-Identifier: LicenseRef-Qt-Commercial OR LGPL-3.0-only OR GPL-2.0-only OR GPL-3.0-only
+// Qt-Security score:significant reason:default
+
 
 #include "qsvganimatedproperty_p.h"
 #include <QtCore/qpoint.h>
 #include <QtGui/qcolor.h>
 #include <QtGui/qtransform.h>
+
 #include <QtCore/qloggingcategory.h>
 #include <QtCore/qglobalstatic.h>
+#include <QtCore/qhash.h>
 
 QT_BEGIN_NAMESPACE
 
@@ -23,6 +27,7 @@ static void initHash()
     animatableProperties->insert(QStringLiteral("stroke"), QSvgAbstractAnimatedProperty::Color);
     animatableProperties->insert(QStringLiteral("opacity"), QSvgAbstractAnimatedProperty::Float);
     animatableProperties->insert(QStringLiteral("transform"), QSvgAbstractAnimatedProperty::Transform);
+    animatableProperties->insert(QStringLiteral("offset-distance"), QSvgAbstractAnimatedProperty::Float);
 }
 
 static qreal q_lerp(qreal a, qreal b, qreal t)

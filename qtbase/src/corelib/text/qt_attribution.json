@@ -18,10 +18,10 @@
         "Version": [ "Don't use the Unicode standard version;",
                      "UCD has its own 'Revision' numbers",
                      "see the 'UAX #44, UCD' page (https://www.unicode.org/reports/tr44/)" ]},
-    "Version": "34",
+    "Version": "36",
     "License": "Unicode License Agreement - Data Files and Software (2016)",
     "LicenseId": "Unicode-3.0",
-    "Copyright": "Copyright (C) 1991-2022 Unicode, Inc."
+    "Copyright": "Copyright (C) 1991-2025 Unicode, Inc."
 },
 {
     "Id": "unicode-cldr",
@@ -43,7 +43,7 @@
  world's languages, with the largest and most extensive standard repository of locale data
  available.",
     "Homepage": "https://cldr.unicode.org/",
-    "Version": "v48",
+    "Version": "v48.1",
     "License": "Unicode License v3",
     "LicenseId": "Unicode-3.0",
     "Copyright": "Copyright (C) 2004-2025 Unicode, Inc."

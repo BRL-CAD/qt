@@ -124,9 +124,6 @@ public:
 
     void insertViewItems(int pos, int count, const QTreeViewItem &viewItem);
     void removeViewItems(int pos, int count);
-#if 0
-    bool checkViewItems() const;
-#endif
 
     int firstVisibleItem(int *offset = nullptr) const;
     int lastVisibleItem(int firstVisual = -1, int offset = -1) const;
@@ -234,7 +231,9 @@ public:
         return (viewIndex(index) + (header ? 1 : 0)) * model->columnCount()+index.column();
     }
 
-    int accessibleTree2Index(const QModelIndex &index) const;
+#if QT_CONFIG(accessibility)
+    int accessibleChildIndex(const QModelIndex &index) const override;
+#endif
 
     void updateIndentationFromStyle();
 
