@@ -15,7 +15,7 @@
 #include <qbuffer.h>
 #include <qscopeguard.h>
 #include <qcoreapplication.h>
-
+#include <QtCore/private/qduplicatetracker_p.h>
 #include <private/qoffsetstringarray_p.h>
 #include <private/qtools_p.h>
 
@@ -24,6 +24,8 @@
 #include "qxmlstreamparser_p.h"
 #include <private/qstringconverter_p.h>
 #include <private/qstringiterator_p.h>
+
+#include <algorithm>
 
 QT_BEGIN_NAMESPACE
 
@@ -201,6 +203,53 @@ WRAP(indexOf, QLatin1StringView)
   resolver for a QXmlStreamReader.
 
   \ingroup xml-tools
+
+    Use to inform QXmlStreamReader how to expand entities not
+    \l{QXmlStreamReader::entityDeclarations()}{declared in the internal-set of
+    the DTD}.
+
+    \target sec-con-QXmlStreamEntityResolver
+    \section1 Security Considerations
+
+    \target sec-con-QXmlStreamEntityResolver-cycles
+    \section2 Entity Cycles
+
+    You must take care to avoid resolving entities in cycles, because
+    QXmlStreamReader only detects and rejects cycles in
+    \l{QXmlStreamReader::entityDeclarations()}{entities defined in the DTD},
+    not in entities expanded from an implementation of the
+    QXmlStreamEntityResolver interface.
+
+    This is by design: QXmlStreamReader puts the work on the implementation of
+    a concrete QXmlStreamEntityResolver. For static mappings, like
+    \l{https://www.w3.org/TR/xml-entity-names/}{XML Entity Definitions for
+    Characters}, this is trivially guaranteed, so running some tracking in the
+    background would just slow things down for everyone.
+
+    Things get interesting when you read entity definitions from external
+    input, including untrusted sources. In this case, \e{your implementation}
+    must ensure the expansions it uses as input are cycle-free. This is a
+    \l{https://en.wikipedia.org/wiki/Cycle_(graph_theory)#Cycle_detection}{simple
+    graph operation} that can be implemented in linear time and space and can
+    be performed up front at load time, so it doesn't affect
+    resolveUndeclaredEntity() performance.
+
+    \target sec-con-QXmlStreamEntityResolver-expansion-limit
+    \section2 Entity Expansion Limit
+
+    At the moment, entities resolved by this class do not count against
+    QXmlStreamReader::entityExpansionLimit(). This may change in future
+    versions of Qt.
+
+    For the time being, you need to enforce some upper expansion limit
+    yourself, if you read entity definitions from external input. After cycle
+    detection,
+    \l{https://en.wikipedia.org/wiki/Longest_path_problem#Acyclic_graphs}{longest-path
+    calculation} is a simple graph operation that can be implemented in linear
+    time and space and can be performed up front at load time, so it, too,
+    doesn't affect resolveUndeclaredEntity() performance.
+
+    \sa QXmlStreamReader::setEntityResolver()
  */
 
 /*!
@@ -217,16 +266,19 @@ This function is a stub for later functionality.
 */
 QString QXmlStreamEntityResolver::resolveEntity(const QString& /*publicId*/, const QString& /*systemId*/)
 {
+    Q_UNIMPLEMENTED();
     return QString();
 }
 
 
 /*!
-  Resolves the undeclared entity \a name and returns its replacement
-  text. If the entity is also unknown to the entity resolver, it
-  returns an empty string.
+    Reimplement this function to resolve the undeclared entity \a name and
+    return its replacement text. If the entity is unknown to the entity
+    resolver, return a \l{QString::isNull()}{null string}: \c{QString()}. This
+    will raise an error in QXmlStreamreader. An empty, but non-null string is
+    considered a valid expansion of the entity, and will not cause an error.
 
-  The default implementation always returns an empty string.
+    The default implementation always returns \c{QString()}.
 */
 
 QString QXmlStreamEntityResolver::resolveUndeclaredEntity(const QString &/*name*/)
@@ -424,6 +476,11 @@ QXmlStreamEntityResolver *QXmlStreamReader::entityResolver() const
   those objects returns an equivalent real QString object.
 */
 
+Q_DECL_COLD_FUNCTION
+static void warn_addData_with_device()
+{
+    qWarning("QXmlStreamReader: addData() with device()");
+}
 
 /*!
   Constructs a stream reader.
@@ -482,15 +539,6 @@ void QXmlStreamReaderPrivate::appendDataWithEncoding(const QByteArray &data,
     dataInfo.emplace_back(data, enc);
 }
 
-void QXmlStreamReaderPrivate::addData(const QByteArray &data, QStringDecoder::Encoding enc)
-{
-    if (device) {
-        qWarning("QXmlStreamReader: addData() with device()");
-        return;
-    }
-    appendDataWithEncoding(data, enc);
-}
-
 /*!
     Creates a new stream reader that reads from \a data.
 
@@ -502,20 +550,7 @@ void QXmlStreamReaderPrivate::addData(const QByteArray &data, QStringDecoder::En
 QXmlStreamReader::QXmlStreamReader(QAnyStringView data)
     : d_ptr(new QXmlStreamReaderPrivate(this))
 {
-    Q_D(QXmlStreamReader);
-    data.visit([d](auto data) {
-        if constexpr (std::is_same_v<decltype(data), QStringView>) {
-            d->appendDataWithEncoding(QByteArray(reinterpret_cast<const char *>(data.utf16()),
-                                                 data.size() * 2),
-                                      QStringDecoder::Utf16);
-        } else if constexpr (std::is_same_v<decltype(data), QLatin1StringView>) {
-            d->appendDataWithEncoding(QByteArray(data.data(), data.size()),
-                                      QStringDecoder::Latin1);
-        } else {
-            d->appendDataWithEncoding(QByteArray(data.data(), data.size()),
-                                      QStringDecoder::Utf8);
-        }
-    });
+    addData(data);
 }
 
 /*!
@@ -593,8 +628,12 @@ static bool isDecoderForEncoding(const QStringDecoder &dec, QStringDecoder::Enco
     if (!dec.isValid())
         return false;
 
-    const QAnyStringView nameView{dec.name()};
-    return !nameView.empty() && nameView == QStringDecoder::nameForEncoding(enc);
+    const auto decName = dec.name();
+    if (!decName || !*decName) // only match when non-empty
+        return false;
+
+    const auto encName = QStringConverter::nameForEncoding(enc);
+    return encName && strcmp(decName, encName) == 0;
 }
 
 /*!
@@ -609,15 +648,17 @@ static bool isDecoderForEncoding(const QStringDecoder &dec, QStringDecoder::Enco
 void QXmlStreamReader::addData(QAnyStringView data)
 {
     Q_D(QXmlStreamReader);
+    if (d->device)
+        return warn_addData_with_device();
     data.visit([d](auto data) {
         if constexpr (std::is_same_v<decltype(data), QStringView>) {
-            d->addData(QByteArray(reinterpret_cast<const char *>(data.utf16()),
-                                  data.size() * 2),
-                       QStringDecoder::Utf16);
+            d->appendDataWithEncoding(QByteArray(reinterpret_cast<const char *>(data.utf16()),
+                                                 data.size() * 2),
+                                      QStringDecoder::Utf16);
         } else if constexpr (std::is_same_v<decltype(data), QLatin1StringView>) {
-            d->addData(QByteArray(data.data(), data.size()), QStringDecoder::Latin1);
+            d->appendDataWithEncoding(QByteArray(data.data(), data.size()), QStringDecoder::Latin1);
         } else {
-            d->addData(QByteArray(data.data(), data.size()), QStringDecoder::Utf8);
+            d->appendDataWithEncoding(QByteArray(data.data(), data.size()), QStringDecoder::Utf8);
         }
     });
 }
@@ -631,7 +672,9 @@ void QXmlStreamReader::addData(QAnyStringView data)
 void QXmlStreamReader::addDataImpl(const QByteArray &data)
 {
     Q_D(QXmlStreamReader);
-    d->addData(data, QStringDecoder::System);
+    if (d->device)
+        return warn_addData_with_device();
+    d->appendDataWithEncoding(data, QStringDecoder::System);
 }
 
 /*!
@@ -965,11 +1008,10 @@ static constexpr QLatin1StringView contextString(QXmlStreamReaderPrivate::XmlCon
 QXmlStreamPrivateTagStack::QXmlStreamPrivateTagStack()
 {
     tagStack.reserve(16);
-    tagStackStringStorage.reserve(32);
     tagStackStringStorageSize = 0;
     NamespaceDeclaration &namespaceDeclaration = namespaceDeclarations.push();
-    namespaceDeclaration.prefix = addToStringStorage(u"xml");
     namespaceDeclaration.namespaceUri = addToStringStorage(u"http://www.w3.org/XML/1998/namespace");
+    namespaceDeclaration.prefix = addToStringStorage(u"xml");
     initialTagStackStringStorageSize = tagStackStringStorageSize;
     tagsDone = false;
 }
@@ -1080,13 +1122,20 @@ void QXmlStreamReaderPrivate::parseEntity(const QString &value)
 
 inline void QXmlStreamReaderPrivate::reallocateStack()
 {
-    stack_size <<= 1;
-    void *p = realloc(sym_stack, stack_size * sizeof(Value));
+    // The multiplication cannot overflow (we would have alloc'ed more than
+    // half of the address space using the realloc()s below, before that
+    // happens):
+    const auto newStackSize = stack_size * 2;
+
+    void *p = qt_reallocarray(sym_stack, size_t(newStackSize), sizeof(Value));
     Q_CHECK_PTR(p);
     sym_stack = static_cast<Value*>(p);
-    p = realloc(state_stack, stack_size * sizeof(int));
+    p = qt_reallocarray(state_stack, size_t(newStackSize), sizeof(int));
     Q_CHECK_PTR(p);
     state_stack = static_cast<int*>(p);
+
+    // only update this after _both_ allocations succeeded:
+    stack_size = newStackSize;
 }
 
 
@@ -1781,6 +1830,32 @@ XmlStringRef QXmlStreamReaderPrivate::namespaceForPrefix(QStringView prefix)
      return XmlStringRef();
 }
 
+struct AttributeName
+{
+    QStringView name;
+    QStringView namespaceUri;
+
+    static AttributeName fromXmlAttribute(const QXmlStreamAttribute &a, bool nsProcessing)
+    {
+        if (nsProcessing)
+            return {a.name(), a.namespaceUri()};
+        else
+            return {a.qualifiedName(), a.namespaceUri()};
+    }
+
+    friend bool operator==(const AttributeName &lhs, const AttributeName &rhs) noexcept
+    {
+        return lhs.name == rhs.name
+            && lhs.namespaceUri == rhs.namespaceUri;
+    }
+    friend size_t qHash(const AttributeName &key, size_t seed = 0) noexcept
+    {
+        return qHashMulti(seed,
+                          key.name,
+                          key.namespaceUri);
+    }
+};
+
 /*
   uses namespaceForPrefix and builds the attribute vector
  */
@@ -1790,7 +1865,7 @@ void QXmlStreamReaderPrivate::resolveTag()
     const qsizetype n = attributeStack.size();
 
     if (namespaceProcessing) {
-        for (DtdAttribute &dtdAttribute : dtdAttributes) {
+        for (const DtdAttribute &dtdAttribute : dtdAttributes) {
             if (!dtdAttribute.isNamespaceAttribute
                 || dtdAttribute.defaultValue.isNull()
                 || dtdAttribute.tagName != qualifiedName
@@ -1832,6 +1907,9 @@ void QXmlStreamReaderPrivate::resolveTag()
 
     attributes.resize(n);
 
+    Q_DECL_UNINITIALIZED
+    QDuplicateTracker<AttributeName, 13> names(n);
+
     for (qsizetype i = 0; i < n; ++i) {
         QXmlStreamAttribute &attribute = attributes[i];
         Attribute &attrib = attributeStack[i];
@@ -1849,18 +1927,13 @@ void QXmlStreamReaderPrivate::resolveTag()
             attribute.m_namespaceUri = XmlStringRef(attributeNamespaceUri);
         }
 
-        for (qsizetype j = 0; j < i; ++j) {
-            if (attributes[j].name() == attribute.name()
-                && attributes[j].namespaceUri() == attribute.namespaceUri()
-                && (namespaceProcessing || attributes[j].qualifiedName() == attribute.qualifiedName()))
-            {
-                raiseWellFormedError(QXmlStream::tr("Attribute '%1' redefined.").arg(attribute.qualifiedName()));
-                return;
-            }
+        if (names.hasSeen(AttributeName::fromXmlAttribute(attribute, namespaceProcessing))) {
+            raiseWellFormedError(QXmlStream::tr("Attribute '%1' redefined.").arg(attribute.qualifiedName()));
+            return;
         }
     }
 
-    for (DtdAttribute &dtdAttribute : dtdAttributes) {
+    for (const DtdAttribute &dtdAttribute : dtdAttributes) {
         if (dtdAttribute.isNamespaceAttribute
             || dtdAttribute.defaultValue.isNull()
             || dtdAttribute.tagName != qualifiedName
@@ -1883,6 +1956,18 @@ void QXmlStreamReaderPrivate::resolveTag()
             XmlStringRef attributeNamespaceUri = namespaceForPrefix(dtdAttribute.attributePrefix);
             attribute.m_namespaceUri = XmlStringRef(attributeNamespaceUri);
         }
+
+        // Check that the DTD doesn't complement the element's ns1:a with a
+        // ns2:a where the ns1 and ns2 prefixes resolve to the same
+        // namespace-URI. This can only happen when namespaceProcessing is on,
+        // otherwise the prefixes would have matched, and the DTD attribute skipped,
+        // in the loop over `i` above.
+
+        if (namespaceProcessing && names.hasSeen(AttributeName::fromXmlAttribute(attribute, true))) {
+            raiseWellFormedError(QXmlStream::tr("Attribute '%1' redefined.").arg(attribute.qualifiedName()));
+            return;
+        }
+
         attribute.m_isDefault = true;
         attributes.append(std::move(attribute));
     }
@@ -1933,7 +2018,7 @@ uint QXmlStreamReaderPrivate::resolveCharRef(int symbolIndex)
     uint s;
     // ### add toXShort to XmlString?
     if (sym(symbolIndex).c == 'x')
-        s = symString(symbolIndex, 1).view().toUInt(&ok, 16);
+        s = symString(symbolIndex).view().sliced(1).toUInt(&ok, 16);
     else
         s = symString(symbolIndex).view().toUInt(&ok, 10);
 
@@ -2288,12 +2373,18 @@ int QXmlStreamReader::entityExpansionLimit() const
 
   The default value for this property is 4096 characters.
 
+  The minimum is one (1), to support the built-in XML entities (\c{&lt;} etc).
+
   \sa entityExpansionLimit
 */
 void QXmlStreamReader::setEntityExpansionLimit(int limit)
 {
     Q_D(QXmlStreamReader);
-    d->entityExpansionLimit = limit;
+    if (limit < 1) {
+        qWarning("QXmlStreamReader::setEntityExpansionLimit(): "
+                 "limit %d is out of range [1:INT_MAX], clamping to 1.", limit);
+    }
+    d->entityExpansionLimit = (std::max)(limit, 1);
 }
 
 /*!  If the tokenType() is \l StartElement, this function returns the
@@ -2368,14 +2459,16 @@ QString QXmlStreamReader::readElementText(ReadElementTextBehaviour behaviour)
     Q_D(QXmlStreamReader);
     if (isStartElement()) {
         QString result;
-        forever {
+        qsizetype nestingLevel = 1;
+        do {
             switch (readNext()) {
             case Characters:
             case EntityReference:
                 result.insert(result.size(), d->text);
                 break;
             case EndElement:
-                return result;
+                --nestingLevel;
+                break;
             case ProcessingInstruction:
             case Comment:
                 break;
@@ -2384,7 +2477,7 @@ QString QXmlStreamReader::readElementText(ReadElementTextBehaviour behaviour)
                     skipCurrentElement();
                     break;
                 } else if (behaviour == IncludeChildElements) {
-                    result += readElementText(behaviour);
+                    ++nestingLevel;
                     break;
                 }
                 Q_FALLTHROUGH();
@@ -2395,7 +2488,8 @@ QString QXmlStreamReader::readElementText(ReadElementTextBehaviour behaviour)
                     return result;
                 }
             }
-        }
+        } while (nestingLevel);
+        return result;
     }
     return QString();
 }
@@ -2548,19 +2642,24 @@ QXmlStreamAttribute::QXmlStreamAttribute()
 
 /*!  Constructs an attribute in the namespace described with \a
   namespaceUri with \a name and value \a value.
+
+    The attribute will have isDefault() == \c{false}.
  */
 QXmlStreamAttribute::QXmlStreamAttribute(const QString &namespaceUri, const QString &name, const QString &value)
+    : m_isDefault(false)
 {
     m_namespaceUri = namespaceUri;
     m_name = m_qualifiedName = name;
     m_value = value;
-    m_namespaceUri = namespaceUri;
 }
 
 /*!
     Constructs an attribute with qualified name \a qualifiedName and value \a value.
+
+    The attribute will have isDefault() == \c{false}.
  */
 QXmlStreamAttribute::QXmlStreamAttribute(const QString &qualifiedName, const QString &value)
+    : m_isDefault(false)
 {
     qsizetype colon = qualifiedName.indexOf(u':');
     m_name = qualifiedName.mid(colon + 1);
@@ -4289,7 +4388,8 @@ void QXmlStreamWriter::writeCurrentToken(const QXmlStreamReader &reader)
     case QXmlStreamReader::StartElement: {
         // Namespaces must be added before writeStartElement is called so new prefixes are found
         QList<QXmlStreamPrivateTagStack::NamespaceDeclaration> extraNamespaces;
-        for (const auto &namespaceDeclaration : reader.namespaceDeclarations()) {
+        const QXmlStreamNamespaceDeclarations nsDeclarations = reader.namespaceDeclarations();
+        for (const auto &namespaceDeclaration : nsDeclarations) {
             auto &extraNamespace = d->addExtraNamespace(namespaceDeclaration.namespaceUri(),
                                                         namespaceDeclaration.prefix());
             extraNamespaces.append(extraNamespace);

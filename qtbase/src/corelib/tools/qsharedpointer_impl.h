@@ -53,6 +53,10 @@ QSharedPointer<X> qSharedPointerCast(const QSharedPointer<T> &ptr);
 template <class X, class T>
 QSharedPointer<X> qSharedPointerCast(QSharedPointer<T> &&ptr);
 template <class X, class T>
+QSharedPointer<X> qSharedPointerStaticCast(const QSharedPointer<T> &ptr);
+template <class X, class T>
+QSharedPointer<X> qSharedPointerStaticCast(QSharedPointer<T> &&ptr);
+template <class X, class T>
 QSharedPointer<X> qSharedPointerDynamicCast(const QSharedPointer<T> &ptr);
 template <class X, class T>
 QSharedPointer<X> qSharedPointerDynamicCast(QSharedPointer<T> &&ptr);
@@ -114,10 +118,8 @@ namespace QtSharedPointer {
         DestroyerFn destroyer;
 
         inline ExternalRefCountData(DestroyerFn d)
-            : destroyer(d)
+            : weakref{1}, strongref{1}, destroyer{d}
         {
-            strongref.storeRelaxed(1);
-            weakref.storeRelaxed(1);
         }
         inline ExternalRefCountData(Qt::Initialization) { }
         ~ExternalRefCountData() { Q_ASSERT(!weakref.loadRelaxed()); Q_ASSERT(strongref.loadRelaxed() <= 0); }
@@ -381,13 +383,13 @@ public:
     template <class X>
     QSharedPointer<X> staticCast() const &
     {
-        return qSharedPointerCast<X>(*this);
+        return qSharedPointerStaticCast<X>(*this);
     }
 
     template <class X>
     QSharedPointer<X> staticCast() &&
     {
-        return qSharedPointerCast<X>(std::move(*this));
+        return qSharedPointerStaticCast<X>(std::move(*this));
     }
 
     template <class X>
@@ -907,19 +909,34 @@ namespace QtSharedPointer {
 template <class X, class T>
 Q_INLINE_TEMPLATE QSharedPointer<X> qSharedPointerCast(const QSharedPointer<T> &src)
 {
-    X *ptr = static_cast<X *>(src.data()); // if you get an error in this line, the cast is invalid
-    return QtSharedPointer::copyAndSetPointer(ptr, src);
+    return qSharedPointerStaticCast<X>(src);
 }
 template <class X, class T>
 Q_INLINE_TEMPLATE QSharedPointer<X> qSharedPointerCast(QSharedPointer<T> &&src)
 {
-    X *ptr = static_cast<X *>(src.data()); // if you get an error in this line, the cast is invalid
-    return QtSharedPointer::movePointer(ptr, std::move(src));
+    return qSharedPointerStaticCast<X>(std::move(src));
 }
 template <class X, class T>
 Q_INLINE_TEMPLATE QSharedPointer<X> qSharedPointerCast(const QWeakPointer<T> &src)
 {
     return qSharedPointerCast<X>(src.toStrongRef());
+}
+template <class X, class T>
+Q_INLINE_TEMPLATE QSharedPointer<X> qSharedPointerStaticCast(const QSharedPointer<T> &src)
+{
+    X *ptr = static_cast<X *>(src.data()); // if you get an error in this line, the cast is invalid
+    return QtSharedPointer::copyAndSetPointer(ptr, src);
+}
+template <class X, class T>
+Q_INLINE_TEMPLATE QSharedPointer<X> qSharedPointerStaticCast(QSharedPointer<T> &&src)
+{
+    X *ptr = static_cast<X *>(src.data()); // if you get an error in this line, the cast is invalid
+    return QtSharedPointer::movePointer(ptr, std::move(src));
+}
+template <class X, class T>
+Q_INLINE_TEMPLATE QSharedPointer<X> qSharedPointerStaticCast(const QWeakPointer<T> &src)
+{
+    return qSharedPointerStaticCast<X>(src.toStrongRef());
 }
 
 template <class X, class T>

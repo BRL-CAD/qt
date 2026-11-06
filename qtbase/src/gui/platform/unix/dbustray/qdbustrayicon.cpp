@@ -224,7 +224,8 @@ QTemporaryFile *QDBusTrayIcon::tempIcon(const QIcon &icon)
         delete ret;
         return nullptr;
     }
-    icon.pixmap(QSize(22, 22)).save(ret);
+    const qreal dpr = qGuiApp->devicePixelRatio();
+    icon.pixmap(QSize(22, 22), dpr).save(ret);
     ret->close();
     return ret;
 }
@@ -343,18 +344,26 @@ void QDBusTrayIcon::showMessage(const QString &title, const QString &msg, const 
         const QDBusTrayImage img = {icon, qGuiApp->devicePixelRatio()};
         hints.insert("image_data"_L1, QVariant::fromValue(img));
     }
-    m_notifier->notify(QCoreApplication::applicationName(), 0,
+    const uint id = m_notifier->notify(QCoreApplication::applicationName(), 0,
                        m_attentionIconName, title, msg, notificationActions, hints, msecs);
+    if (id > 0)
+        m_ownMessageIDs.insert(id);
 }
 
 void QDBusTrayIcon::actionInvoked(uint id, const QString &action)
 {
+    if (!m_ownMessageIDs.contains(id))
+        return; // not one of ours
     qCDebug(qLcTray) << id << action;
     emit messageClicked();
 }
 
 void QDBusTrayIcon::notificationClosed(uint id, uint reason)
 {
+    const auto it = m_ownMessageIDs.constFind(id);
+    if (it == m_ownMessageIDs.cend())
+        return; // not one of ours
+    m_ownMessageIDs.erase(it);
     qCDebug(qLcTray) << id << reason;
 }
 

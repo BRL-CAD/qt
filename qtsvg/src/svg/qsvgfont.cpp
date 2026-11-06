@@ -23,12 +23,8 @@ QSvgFont::QSvgFont(qreal horizAdvX)
 {
 }
 
-
-QString QSvgFont::familyName() const
-{
-    return m_familyName;
-}
-
+QSvgFont::~QSvgFont()
+    = default;
 
 void QSvgFont::addGlyph(const QString &unicode, const QPainterPath &path, qreal horizAdvX)
 {
@@ -165,11 +161,6 @@ void QSvgFont::draw_helper(QPainter *p, const QPointF &point,
     }
 
     p->restore();
-}
-
-void QSvgFont::setFamilyName(const QString &name)
-{
-    m_familyName = name;
 }
 
 void QSvgFont::setUnitsPerEm(qreal upem)

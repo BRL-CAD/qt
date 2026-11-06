@@ -393,6 +393,19 @@ void QCompletionModel::filter(const QStringList& parts)
 
     if (d->model->canFetchMore(engine->curParent))
         d->model->fetchMore(engine->curParent);
+
+#if QT_CONFIG(filesystemmodel)
+    // No match can mean the directory being completed within was never listed by
+    // the QFileSystemModel (e.g. a path set via setText() and then edited). Start
+    // its listing so directoryLoaded() re-runs the completion. (QTBUG-148220)
+    if (engine->matchCount() == 0 && parts.size() > 1) {
+        if (auto *fsModel = qobject_cast<QFileSystemModel *>(d->model)) {
+            const QModelIndex dirIndex = fsModel->index(QFileInfo(c->prefix).path());
+            if (dirIndex.isValid() && fsModel->canFetchMore(dirIndex))
+                fsModel->fetchMore(dirIndex);
+        }
+    }
+#endif
 }
 
 //////////////////////////////////////////////////////////////////////////////
@@ -889,7 +902,6 @@ void QCompleterPrivate::_q_autoResizePopup()
 void QCompleterPrivate::showPopup(const QRect& rect)
 {
     const QRect screen = widget->screen()->availableGeometry();
-    Qt::LayoutDirection dir = widget->layoutDirection();
     QPoint pos;
     int rh, w;
     int h = (popup->sizeHintForRow(0) * qMin(maxVisibleItems, popup->model()->rowCount()) + 3) + 3;
@@ -900,7 +912,7 @@ void QCompleterPrivate::showPopup(const QRect& rect)
     if (rect.isValid()) {
         rh = rect.height();
         w = rect.width();
-        pos = widget->mapToGlobal(dir == Qt::RightToLeft ? rect.bottomRight() : rect.bottomLeft());
+        pos = widget->mapToGlobal(rect.bottomLeft());
     } else {
         rh = widget->height();
         pos = widget->mapToGlobal(QPoint(0, widget->height() - 2));
@@ -1396,11 +1408,7 @@ bool QCompleter::eventFilter(QObject *o, QEvent *e)
         }
         if (!d->widget || e->isAccepted() || !d->popup->isVisible()) {
             // widget lost focus, hide the popup
-            if (d->widget && (!d->widget->hasFocus()
-#ifdef QT_KEYPAD_NAVIGATION
-                || (QApplicationPrivate::keypadNavigationEnabled() && !d->widget->hasEditFocus())
-#endif
-                ))
+            if (d->widget && !d->widget->hasFocus())
                 d->popup->hide();
             if (e->isAccepted())
                 return true;
@@ -1414,11 +1422,6 @@ bool QCompleter::eventFilter(QObject *o, QEvent *e)
         }
 #endif
         switch (key) {
-#ifdef QT_KEYPAD_NAVIGATION
-        case Qt::Key_Select:
-            if (!QApplicationPrivate::keypadNavigationEnabled())
-                break;
-#endif
         case Qt::Key_Return:
         case Qt::Key_Enter:
         case Qt::Key_Tab:
@@ -1443,49 +1446,11 @@ bool QCompleter::eventFilter(QObject *o, QEvent *e)
         return true;
     }
 
-#ifdef QT_KEYPAD_NAVIGATION
-    case QEvent::KeyRelease: {
-        if (d->widget &&
-            QApplicationPrivate::keypadNavigationEnabled() && ke->key() == Qt::Key_Back) {
-            QKeyEvent *ke = static_cast<QKeyEvent *>(e);
-            // Send the event to the 'widget'. This is what we did for KeyPress, so we need
-            // to do the same for KeyRelease, in case the widget's KeyPress event set
-            // up something (such as a timer) that is relying on also receiving the
-            // key release. I see this as a bug in Qt, and should really set it up for all
-            // the affected keys. However, it is difficult to tell how this will affect
-            // existing code, and I can't test for every combination!
-            d->eatFocusOut = false;
-            static_cast<QObject *>(d->widget)->event(ke);
-            d->eatFocusOut = true;
-        }
-        break;
-    }
-#endif
-
-    case QEvent::MouseButtonPress: {
-#ifdef QT_KEYPAD_NAVIGATION
-        if (d->widget
-            && QApplicationPrivate::keypadNavigationEnabled()) {
-            // if we've clicked in the widget (or its descendant), let it handle the click
-            QWidget *source = qobject_cast<QWidget *>(o);
-            if (source) {
-                QPoint pos = source->mapToGlobal((static_cast<QMouseEvent *>(e))->pos());
-                QWidget *target = QApplication::widgetAt(pos);
-                if (target && (d->widget->isAncestorOf(target) ||
-                    target == d->widget)) {
-                    d->eatFocusOut = false;
-                    static_cast<QObject *>(target)->event(e);
-                    d->eatFocusOut = true;
-                    return true;
-                }
-            }
-        }
-#endif
+    case QEvent::MouseButtonPress:
         if (!d->popup->underMouse()) {
             if (!QGuiApplicationPrivate::maybeForwardEventToVirtualKeyboard(e))
                 d->popup->hide();
             return true;
-        }
         }
         return false;
 

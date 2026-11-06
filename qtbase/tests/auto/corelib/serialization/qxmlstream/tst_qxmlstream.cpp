@@ -645,15 +645,21 @@ private slots:
     void test_fastScanName_data() const;
     void test_fastScanName() const;
 
+    void entityExpansionLimitRange() const;
     void entityExpansionLimit() const;
+    void entityExpansionLimitExternalResolver() const;
+    void externalEntityResolverRecursion() const;
+    void manyAttributes() const;
 
     void tokenErrorHandling_data() const;
     void tokenErrorHandling() const;
     void checkStreamNotationDeclarations() const;
     void checkStreamEntityDeclarations() const;
+    void readElementTextDeepNesting() const;
 
 private:
     static QByteArray readFile(const QString &filename);
+    void entityExpansionLimitImpl(const QString &xml, QXmlStreamEntityResolver *resolver = nullptr) const;
 
     QTemporaryDir m_tempDir;
     TestSuiteHandler m_handler;
@@ -813,96 +819,154 @@ QByteArray tst_QXmlStream::readFile(const QString &filename)
     writer.setEncoding(QStringConverter::Utf8);
 
     while (!reader.atEnd()) {
-        reader.readNext();
+        const auto tok = reader.readNext();
         writer << reader.tokenString() << '(';
-        if (reader.isWhitespace())
-            writer << " whitespace";
-        if (reader.isCDATA())
-            writer << " CDATA";
-        if (reader.isStartDocument() && reader.isStandaloneDocument())
-            writer << " standalone";
-        if (!reader.text().isEmpty())
-            writer << " text=\"" << reader.text().toString() << '"';
-        if (!reader.processingInstructionTarget().isEmpty())
-            writer << " processingInstructionTarget=\"" << reader.processingInstructionTarget().toString() << '"';
-        if (!reader.processingInstructionData().isEmpty())
-            writer << " processingInstructionData=\"" << reader.processingInstructionData().toString() << '"';
-        if (!reader.dtdName().isEmpty())
-            writer << " dtdName=\"" << reader.dtdName().toString() << '"';
-        if (!reader.dtdPublicId().isEmpty())
-            writer << " dtdPublicId=\"" << reader.dtdPublicId().toString() << '"';
-        if (!reader.dtdSystemId().isEmpty())
-            writer << " dtdSystemId=\"" << reader.dtdSystemId().toString() << '"';
-        if (!reader.documentVersion().isEmpty())
-            writer << " documentVersion=\"" << reader.documentVersion().toString() << '"';
-        if (!reader.documentEncoding().isEmpty())
-            writer << " documentEncoding=\"" << reader.documentEncoding().toString() << '"';
-        if (!reader.name().isEmpty())
-            writer << " name=\"" << reader.name().toString() << '"';
-        if (!reader.namespaceUri().isEmpty())
-            writer << " namespaceUri=\"" << reader.namespaceUri().toString() << '"';
-        if (!reader.qualifiedName().isEmpty())
-            writer << " qualifiedName=\"" << reader.qualifiedName().toString() << '"';
-        if (!reader.prefix().isEmpty())
-            writer << " prefix=\"" << reader.prefix().toString() << '"';
-        const auto attributes = reader.attributes();
-        if (attributes.size()) {
+
+        // Accessors shared by several token types; asked after the switch so
+        // that the field order of the reference files is preserved:
+        bool hasName = false;            // name()
+        bool hasNamespace = false;       // namespaceUri(), qualifiedName(), prefix()
+        bool hasAttributes = false;      // attributes(), namespaceDeclarations()
+        bool hasDtdDeclarations = false; // notationDeclarations(), entityDeclarations()
+
+        switch (tok) {
+        case QXmlStreamReader::NoToken:
+            qFatal("readNext() returned NoToken");
+
+        case QXmlStreamReader::EndDocument:
+            break;
+
+        case QXmlStreamReader::StartDocument:
+            if (reader.isStandaloneDocument())
+                writer << " standalone";
+            if (const auto version = reader.documentVersion(); !version.isEmpty())
+                writer << " documentVersion=\"" << version << '"';
+            if (const auto encoding = reader.documentEncoding(); !encoding.isEmpty())
+                writer << " documentEncoding=\"" << encoding << '"';
+            break;
+
+        case QXmlStreamReader::Characters:
+            // isWhitespace() and isCDATA() are Characters-only by construction
+            if (reader.isWhitespace())
+                writer << " whitespace";
+            if (reader.isCDATA())
+                writer << " CDATA";
+            Q_FALLTHROUGH();
+        case QXmlStreamReader::Comment:
+            if (const auto text = reader.text(); !text.isEmpty())
+                writer << " text=\"" << text << '"';
+            break;
+
+        case QXmlStreamReader::DTD:
+            if (const auto text = reader.text(); !text.isEmpty())
+                writer << " text=\"" << text << '"';
+            if (const auto dtdName = reader.dtdName(); !dtdName.isEmpty())
+                writer << " dtdName=\"" << dtdName << '"';
+            if (const auto publicId = reader.dtdPublicId(); !publicId.isEmpty())
+                writer << " dtdPublicId=\"" << publicId << '"';
+            if (const auto systemId = reader.dtdSystemId(); !systemId.isEmpty())
+                writer << " dtdSystemId=\"" << systemId << '"';
+            hasDtdDeclarations = true;
+            break;
+
+        case QXmlStreamReader::EntityReference:
+            if (const auto text = reader.text(); !text.isEmpty())
+                writer << " text=\"" << text << '"';
+            hasName = true;
+            break;
+
+        // On an error the reader keeps whatever context it had got to, and the
+        // reference files record it: the processing-instruction fields for a
+        // rejected XML declaration, the element ones for a failed element.
+        // Only text() is never set for it.
+        case QXmlStreamReader::Invalid:
+            hasName = hasNamespace = hasAttributes = true;
+            Q_FALLTHROUGH();
+        case QXmlStreamReader::ProcessingInstruction:
+            if (const auto target = reader.processingInstructionTarget(); !target.isEmpty())
+                writer << " processingInstructionTarget=\"" << target << '"';
+            if (const auto data = reader.processingInstructionData(); !data.isEmpty())
+                writer << " processingInstructionData=\"" << data << '"';
+            break;
+
+        case QXmlStreamReader::StartElement:
+            hasAttributes = true;
+            Q_FALLTHROUGH();
+        case QXmlStreamReader::EndElement:
+            hasName = hasNamespace = true;
+            break;
+        }
+
+        if (hasName) {
+            if (const auto name = reader.name(); !name.isEmpty())
+                writer << " name=\"" << name << '"';
+        }
+
+        if (hasNamespace) {
+            if (const auto namespaceUri = reader.namespaceUri(); !namespaceUri.isEmpty())
+                writer << " namespaceUri=\"" << namespaceUri << '"';
+            if (const auto qualifiedName = reader.qualifiedName(); !qualifiedName.isEmpty())
+                writer << " qualifiedName=\"" << qualifiedName << '"';
+            if (const auto prefix = reader.prefix(); !prefix.isEmpty())
+                writer << " prefix=\"" << prefix << '"';
+        }
+
+        if (hasAttributes) {
+            const auto attributes = reader.attributes();
             for (const QXmlStreamAttribute &attribute : attributes) {
                 writer << Qt::endl << "    Attribute(";
-                if (!attribute.name().isEmpty())
-                    writer << " name=\"" << attribute.name().toString() << '"';
-                if (!attribute.namespaceUri().isEmpty())
-                    writer << " namespaceUri=\"" << attribute.namespaceUri().toString() << '"';
-                if (!attribute.qualifiedName().isEmpty())
-                    writer << " qualifiedName=\"" << attribute.qualifiedName().toString() << '"';
-                if (!attribute.prefix().isEmpty())
-                    writer << " prefix=\"" << attribute.prefix().toString() << '"';
-                if (!attribute.value().isEmpty())
-                    writer << " value=\"" << attribute.value().toString() << '"';
+                if (const auto name = attribute.name(); !name.isEmpty())
+                    writer << " name=\"" << name << '"';
+                if (const auto namespaceUri = attribute.namespaceUri(); !namespaceUri.isEmpty())
+                    writer << " namespaceUri=\"" << namespaceUri << '"';
+                if (const auto qualifiedName = attribute.qualifiedName(); !qualifiedName.isEmpty())
+                    writer << " qualifiedName=\"" << qualifiedName << '"';
+                if (const auto prefix = attribute.prefix(); !prefix.isEmpty())
+                    writer << " prefix=\"" << prefix << '"';
+                if (const auto value = attribute.value(); !value.isEmpty())
+                    writer << " value=\"" << value << '"';
                 writer << " )" << Qt::endl;
             }
-        }
-        const auto namespaceDeclarations = reader.namespaceDeclarations();
-        if (namespaceDeclarations.size()) {
+            const auto namespaceDeclarations = reader.namespaceDeclarations();
             for (const QXmlStreamNamespaceDeclaration &namespaceDeclaration : namespaceDeclarations) {
                 writer << Qt::endl << "    NamespaceDeclaration(";
-                if (!namespaceDeclaration.prefix().isEmpty())
-                    writer << " prefix=\"" << namespaceDeclaration.prefix().toString() << '"';
-                if (!namespaceDeclaration.namespaceUri().isEmpty())
-                    writer << " namespaceUri=\"" << namespaceDeclaration.namespaceUri().toString() << '"';
+                if (const auto prefix = namespaceDeclaration.prefix(); !prefix.isEmpty())
+                    writer << " prefix=\"" << prefix << '"';
+                if (const auto namespaceUri = namespaceDeclaration.namespaceUri(); !namespaceUri.isEmpty())
+                    writer << " namespaceUri=\"" << namespaceUri << '"';
                 writer << " )" << Qt::endl;
             }
         }
-        const auto notationDeclarations = reader.notationDeclarations();
-        if (notationDeclarations.size()) {
+
+        if (hasDtdDeclarations) {
+            const auto notationDeclarations = reader.notationDeclarations();
             for (const QXmlStreamNotationDeclaration &notationDeclaration : notationDeclarations) {
                 writer << Qt::endl << "    NotationDeclaration(";
-                if (!notationDeclaration.name().isEmpty())
-                    writer << " name=\"" << notationDeclaration.name().toString() << '"';
-                if (!notationDeclaration.systemId().isEmpty())
-                    writer << " systemId=\"" << notationDeclaration.systemId().toString() << '"';
-                if (!notationDeclaration.publicId().isEmpty())
-                    writer << " publicId=\"" << notationDeclaration.publicId().toString() << '"';
+                if (const auto name = notationDeclaration.name(); !name.isEmpty())
+                    writer << " name=\"" << name << '"';
+                if (const auto systemId = notationDeclaration.systemId(); !systemId.isEmpty())
+                    writer << " systemId=\"" << systemId << '"';
+                if (const auto publicId = notationDeclaration.publicId(); !publicId.isEmpty())
+                    writer << " publicId=\"" << publicId << '"';
                 writer << " )" << Qt::endl;
             }
-        }
-        const auto entityDeclarations = reader.entityDeclarations();
-        if (entityDeclarations.size()) {
+            const auto entityDeclarations = reader.entityDeclarations();
             for (const QXmlStreamEntityDeclaration &entityDeclaration : entityDeclarations) {
                 writer << Qt::endl << "    EntityDeclaration(";
-                if (!entityDeclaration.name().isEmpty())
-                    writer << " name=\"" << entityDeclaration.name().toString() << '"';
-                if (!entityDeclaration.notationName().isEmpty())
-                    writer << " notationName=\"" << entityDeclaration.notationName().toString() << '"';
-                if (!entityDeclaration.systemId().isEmpty())
-                    writer << " systemId=\"" << entityDeclaration.systemId().toString() << '"';
-                if (!entityDeclaration.publicId().isEmpty())
-                    writer << " publicId=\"" << entityDeclaration.publicId().toString() << '"';
-                if (!entityDeclaration.value().isEmpty())
-                    writer << " value=\"" << entityDeclaration.value().toString() << '"';
+                if (const auto name = entityDeclaration.name(); !name.isEmpty())
+                    writer << " name=\"" << name << '"';
+                if (const auto notationName = entityDeclaration.notationName(); !notationName.isEmpty())
+                    writer << " notationName=\"" << notationName << '"';
+                if (const auto systemId = entityDeclaration.systemId(); !systemId.isEmpty())
+                    writer << " systemId=\"" << systemId << '"';
+                if (const auto publicId = entityDeclaration.publicId(); !publicId.isEmpty())
+                    writer << " publicId=\"" << publicId << '"';
+                if (const auto value = entityDeclaration.value(); !value.isEmpty())
+                    writer << " value=\"" << value << '"';
                 writer << " )" << Qt::endl;
             }
         }
+
         writer << " )" << Qt::endl;
     }
     if (reader.hasError())
@@ -937,7 +1001,9 @@ void tst_QXmlStream::testReader_data() const
     const auto fileNames = dir.entryList(QStringList() << "*.xml");
     for (const QString &filename : fileNames) {
         QString reference =  QFileInfo(filename).baseName() + ".ref";
-        QTest::newRow(dir.filePath(filename).toLatin1().data()) << dir.filePath(filename) << dir.filePath(reference);
+        QTest::addRow("data/%s", filename.toLatin1().constData())
+                << dir.filePath(filename)
+                << dir.filePath(reference);
     }
 }
 
@@ -2799,34 +2865,164 @@ void tst_QXmlStream::entityExpansionLimit() const
                                  "<!ENTITY d \"&c;&c;&c;&c;&c;&c;&c;&c;&c;&c;\" >"
                                  "]>"
                                  "<foo>&d;&d;&d;</foo>");
+    entityExpansionLimitImpl(xml);
+}
+
+void tst_QXmlStream::entityExpansionLimitExternalResolver() const
+{
+    const auto xml = u"<?xml version='1.0'?>"
+                      "<foo>&d;&d;&d;</foo>"_s;
+    struct Resolver : QXmlStreamEntityResolver {
+        QString resolveUndeclaredEntity(const QString &name) override {
+            if (name.size() == 1) {
+                switch (name[0].unicode()) {
+                case u'a': return u"0123456789"_s;
+                case u'b': return u"&a;"_s.repeated(10);
+                case u'c': return u"&b;"_s.repeated(10);
+                case u'd': return u"&c;"_s.repeated(10);
+                }
+            }
+            return QString();
+        }
+    };
+
+    Resolver r;
+    entityExpansionLimitImpl(xml, &r);
+}
+
+void tst_QXmlStream::externalEntityResolverRecursion() const
+{
+    const auto xml = u"<?xml version='1.0'?>"
+                      "<foo>&a;</foo>"_s;
+    struct Resolver : QXmlStreamEntityResolver {
+        QString resolveUndeclaredEntity(const QString &name) override {
+            if (name == "a"_L1) {
+                if (++count == 10) // limit recursion in case it's unbounded
+                    return ""_L1;  // QString() would raise an error
+                return u"&a;"_s;
+            }
+            return QString();
+        }
+        int count = 0;
+    };
+
+    Resolver r;
+    QXmlStreamReader reader(xml);
+    reader.setEntityResolver(&r);
+    do {
+        reader.readNext();
+    } while (!reader.atEnd());
+    // QTBUG-147324: Won't Fix.
+    // Recursion is not detected at the QXmlStreamReader level on purpose.
+    QCOMPARE(reader.error(), QXmlStreamReader::NoError);
+    QCOMPARE(r.count, 10);
+}
+
+void tst_QXmlStream::entityExpansionLimitImpl(const QString &xml,
+                                              QXmlStreamEntityResolver *resolver) const
+{
     {
         QXmlStreamReader reader(xml);
+        if (resolver)
+            reader.setEntityResolver(resolver);
         QCOMPARE(reader.entityExpansionLimit(), 4096);
         do {
             reader.readNext();
         } while (!reader.atEnd());
+        if (resolver)
+            QEXPECT_FAIL("", "QTBUG-147323", Continue);
         QCOMPARE(reader.error(), QXmlStreamReader::NotWellFormedError);
     }
 
-    // &d; expands to 10k characters, minus the 3 removed (&d;) means it should fail
-    // with a limit of 9996 chars and pass with 9997
+    // &d; expands to 10k characters, so it should fail with a limit of 9999
+    // chars and pass with 10000
     {
         QXmlStreamReader reader(xml);
-        reader.setEntityExpansionLimit(9996);
+        if (resolver)
+            reader.setEntityResolver(resolver);
+        reader.setEntityExpansionLimit(9999);
         do {
             reader.readNext();
         } while (!reader.atEnd());
 
+        if (resolver)
+            QEXPECT_FAIL("", "QTBUG-147323", Continue);
         QCOMPARE(reader.error(), QXmlStreamReader::NotWellFormedError);
     }
     {
         QXmlStreamReader reader(xml);
-        reader.setEntityExpansionLimit(9997);
+        if (resolver)
+            reader.setEntityResolver(resolver);
+        reader.setEntityExpansionLimit(10000);
         do {
             reader.readNext();
         } while (!reader.atEnd());
         QCOMPARE(reader.error(), QXmlStreamReader::NoError);
     }
+}
+
+constexpr const char L1NameStartCharsExCOLON[] = {
+    // https://www.w3.org/TR/REC-xml/#NT-NameStartChar - COLON - [#x100-#xEFFFF]:
+    // [A-Z]
+    'A', 'B', 'C', 'D', 'E', 'F', 'G', 'H', 'I', 'J', 'K', 'L', 'M',
+    'N', 'O', 'P', 'Q', 'R', 'S', 'T', 'U', 'V', 'W', 'X', 'Y', 'Z',
+    // "_"
+    '_',
+    // [a-z]
+    'a', 'b', 'c', 'd', 'e', 'f', 'g', 'h', 'i', 'j', 'k', 'l', 'm',
+    'n', 'o', 'p', 'q', 'r', 's', 't', 'u', 'v', 'w', 'x', 'y', 'z',
+    // [#xC0-#xD6]
+    '\xC0', '\xC1', '\xC2', '\xC3', '\xC4', '\xC5', '\xC6', '\xC7',
+    '\xC8', '\xC9', '\xCA', '\xCB', '\xCC', '\xCD', '\xCE', '\xCF',
+    '\xD0', '\xD1', '\xD2', '\xD3', '\xD4', '\xD5', '\xD6',
+    // [#xD8-#xF6]
+    '\xD8', '\xD9', '\xDA', '\xDB', '\xDC', '\xDD', '\xDE', '\xDF',
+    '\xE0', '\xE1', '\xE2', '\xE3', '\xE4', '\xE5', '\xE6', '\xE7',
+    '\xE8', '\xE9', '\xEA', '\xEB', '\xEC', '\xED', '\xEE', '\xEF',
+    '\xF0', '\xF1', '\xF2', '\xF3', '\xF4', '\xF5', '\xF6',
+    // [#xF8-#x2FF] (truncated to L1 range)
+    '\xF8', '\xF9', '\xFA', '\xFB', '\xFC', '\xFD', '\xFE', '\xFF',
+};
+
+void tst_QXmlStream::manyAttributes() const
+{
+
+    constexpr qsizetype numDigits = sizeof L1NameStartCharsExCOLON;
+    static_assert(numDigits == 115); // FYI
+    constexpr auto numAttributes = numDigits * numDigits * numDigits;
+
+    constexpr auto opening = "<?xml version='1.0'?>\n"
+                             "<e"_L1;
+    constexpr auto closing = "></e>"_L1;
+    char attr[] = { ' ', 'a', 'b', 'c', '=', '"', '"' };
+
+    QString xml;
+    xml.reserve(opening.size() + closing.size() + numAttributes * sizeof attr);
+
+    xml += opening;
+    for (char i : L1NameStartCharsExCOLON) {
+        attr[1] = i;
+        for (char j : L1NameStartCharsExCOLON) {
+            attr[2] = j;
+            for (char k : L1NameStartCharsExCOLON) {
+                attr[3] = k;
+                xml += QLatin1StringView(attr, sizeof attr);
+            }
+        }
+    }
+    xml += closing;
+
+    QXmlStreamReader r(xml);
+    while (!r.atEnd()) {
+        r.readNext();
+        if (!r.isStartElement())
+            continue;
+        QCOMPARE(r.name(), "e"_L1);
+        const auto attrs = r.attributes();
+        QCOMPARE(attrs.size(), numAttributes);
+        return; // success
+    }
+    QFAIL("Did not find expected StartElement");
 }
 
 void tst_QXmlStream::roundTrip() const
@@ -2881,6 +3077,29 @@ void tst_QXmlStream::test_fastScanName() const
 
     QCOMPARE(tokenType, QXmlStreamReader::Invalid);
     QCOMPARE(reader.error(), errorType);
+}
+
+void tst_QXmlStream::entityExpansionLimitRange() const
+{
+    static const auto warningRX
+            = QRegularExpression(R"(QXmlStreamReader::setEntityExpansionLimit\(\): )"
+                                 R"(limit -?[0-9]+ is out of range \[1:INT_MAX\], clamping to 1.)");
+
+    // rejected:
+    for (int limit : {INT_MIN, -42, -1, 0}) {
+        QXmlStreamReader r;
+        QTest::ignoreMessage(QtWarningMsg, warningRX);
+        r.setEntityExpansionLimit(limit);
+        QCOMPARE(r.entityExpansionLimit(), 1);
+    }
+
+    // accepted:
+    for (int limit : {1, 2, INT_MAX}) {
+        QXmlStreamReader r;
+        QTest::failOnWarning(warningRX);
+        r.setEntityExpansionLimit(limit);
+        QCOMPARE(r.entityExpansionLimit(), limit);
+    }
 }
 
 void tst_QXmlStream::tokenErrorHandling_data() const
@@ -2968,4 +3187,28 @@ void tst_QXmlStream::checkStreamEntityDeclarations() const
         QT_TEST_EQUALITY_OPS(entity, entityDeclarations.at(1), true);
     }
 }
+
+void tst_QXmlStream::readElementTextDeepNesting() const
+{
+    // readElementText(IncludeChildElements) must not recurse per nested element: deep nesting
+    // would otherwise exhaust the stack.
+    constexpr qsizetype depth = 300'000;
+
+    QByteArray xml;
+    xml.reserve(depth * 7 + 8);
+    for (qsizetype i = 0; i < depth; ++i)
+        xml += "<a>";
+    xml += 'x';
+    for (qsizetype i = 0; i < depth; ++i)
+        xml += "</a>";
+
+    QString result;
+    QXmlStreamReader reader(xml);
+    if (reader.readNextStartElement())
+        result = reader.readElementText(QXmlStreamReader::IncludeChildElements);
+    QVERIFY(!reader.hasError());
+
+    QCOMPARE(result, "x"_L1);
+}
+
 #include "tst_qxmlstream.moc"

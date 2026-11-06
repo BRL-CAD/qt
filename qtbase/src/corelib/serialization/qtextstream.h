@@ -76,8 +76,15 @@ public:
     explicit QTextStream(QString *string, OpenMode openMode = ReadWrite);
     explicit QTextStream(QByteArray *array, OpenMode openMode = ReadWrite);
     explicit QTextStream(const QByteArray &array, OpenMode openMode = ReadOnly);
+    QT_WARNING_PUSH
+    #if defined(__has_warning)
+    #  if __has_warning("-Wunnecessary-virtual-specifier")
+         QT_WARNING_DISABLE_CLANG("-Wunnecessary-virtual-specifier")
+    #  endif
+    #endif
     QT6_ONLY(virtual)
     ~QTextStream();
+    QT_WARNING_POP
 
     void setEncoding(QStringConverter::Encoding encoding);
     QStringConverter::Encoding encoding() const;
@@ -149,7 +156,10 @@ public:
     QTextStream &operator>>(double &f);
     QTextStream &operator>>(QString &s);
     QTextStream &operator>>(QByteArray &array);
+#if QT_REMOVAL_QT7_DEPRECATED_SINCE(6, 12)
+    QT_DEPRECATED_VERSION_X_6_12("Use the QByteArray overload: this function cannot be used safely.")
     QTextStream &operator>>(char *c);
+#endif
 
     QTextStream &operator<<(QChar ch);
     QTextStream &operator<<(char ch);

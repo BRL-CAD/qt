@@ -1,5 +1,6 @@
 // Copyright (C) 2021 The Qt Company Ltd.
 // SPDX-License-Identifier: LicenseRef-Qt-Commercial OR LGPL-3.0-only OR GPL-2.0-only OR GPL-3.0-only
+// Qt-Security score:significant reason:default
 #include "qtransform.h"
 
 #include "qdatastream.h"
@@ -117,6 +118,7 @@ void QTransform::do_map(qreal x, qreal y, qreal &nx, qreal &ny) const
     \table 100%
     \row
     \li \inlineimage qtransform-simpletransformation.png
+                     {Text rotated 45 degrees}
     \li
     \snippet transform/main.cpp 0
     \endtable
@@ -129,6 +131,7 @@ void QTransform::do_map(qreal x, qreal y, qreal &nx, qreal &ny) const
     \table 100%
     \row
     \li \inlineimage qtransform-combinedtransformation.png
+                     {Text scaled, rotated, and translated}
     \li
     \snippet transform/main.cpp 1
     \endtable
@@ -181,6 +184,7 @@ void QTransform::do_map(qreal x, qreal y, qreal &nx, qreal &ny) const
     \table 100%
     \row
     \li \inlineimage qtransform-combinedtransformation2.png
+                     {Text with combined matrix transformation}
     \li
     \snippet transform/main.cpp 2
     \endtable

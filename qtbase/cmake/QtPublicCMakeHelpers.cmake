@@ -1,6 +1,8 @@
 # Copyright (C) 2022 The Qt Company Ltd.
 # SPDX-License-Identifier: BSD-3-Clause
 
+__qt_internal_cmake_include_guard(GLOBAL GUARD_KEY "QtPublicCMakeHelpers")
+
 # copy_if_different works incorrect in Windows if file size if bigger than 2GB.
 # See https://gitlab.kitware.com/cmake/cmake/-/issues/23052 and QTBUG-99491 for details.
 function(_qt_internal_copy_file_if_different_command out_var src_file dst_file)
@@ -915,6 +917,25 @@ function(_qt_internal_path_is_prefix path_var input out_var)
     set(${out_var} "${${out_var}}" PARENT_SCOPE)
 endfunction()
 
+# Return the current build dir's drive letter on Windows hosts.
+function(_qt_internal_get_current_build_dir_drive_letter_on_windows out_var)
+    # For newer CMake versions extract the drive letter directly from the binary dir.
+    if(CMAKE_VERSION VERSION_GREATER_EQUAL "3.20" AND FALSE)
+        cmake_path(GET CMAKE_BINARY_DIR ROOT_NAME drive_letter)
+    else()
+        # For older CMakes, we need to rely on cmd.exe + echo.
+        # %CD% expands to the current directory full path.
+        # ~0,2 gets a substring of 2 chars from the beginning.
+        # (%CD:~0,2% -> "C:").
+        execute_process(
+            COMMAND cmd /c "echo %CD:~0,2%"
+            WORKING_DIRECTORY "${CMAKE_BINARY_DIR}"
+            OUTPUT_VARIABLE drive_letter
+            OUTPUT_STRIP_TRAILING_WHITESPACE)
+    endif()
+    set(${out_var} "${drive_letter}" PARENT_SCOPE)
+endfunction()
+
 # Configures the file using either the input template or the CONTENT.
 # Behaves as either file(CONFIGURE or configure_file( command, but do not depend
 # on CMake version.
@@ -1044,7 +1065,6 @@ endfunction()
 #       OUT_VAR_SHOULD_SKIP <var>
 #       [PROJECT_NAME <str>]
 #       [TEST_PLUGIN]
-#       [CHECK_QT_NO_CREATE_TARGETS]
 #   )
 #
 # Arguments
@@ -1071,12 +1091,15 @@ endfunction()
 #   If the module is a TEST_PLUGIN, we do additional checks based on
 #   `QT_BUILD_STANDALONE_TESTS`
 #
-# `CHECK_QT_NO_CREATE_TARGETS`
-#   Whether to check `QT_NO_CREATE_TARGETS` as a compatibility step
+# `SKIP_IF_PROJECT_NAME_NOT_IN_QT_REPO_DEPENDENCIES`
+#   If the target's project name is not in the current QT_REPO_DEPENDENCIES, skip including it.
+#   Mainly used for qt and qml plugins. Avoids issues when reconfiguring parent repos.
 function(_qt_internal_should_include_targets)
     set(option_args
         TEST_PLUGIN
+        # Deprecated
         CHECK_QT_NO_CREATE_TARGETS
+        SKIP_IF_PROJECT_NAME_NOT_IN_QT_REPO_DEPENDENCIES
     )
     set(single_args
         NAMESPACE
@@ -1116,7 +1139,7 @@ function(_qt_internal_should_include_targets)
 
     # Check for deprecated inputs, i.e. the Config.cmake were already created
     # with a version of qtbase that removed the specific compatibilities
-    foreach(check_arg IN ITEMS )
+    foreach(check_arg IN ITEMS CHECK_QT_NO_CREATE_TARGETS)
         if(arg_${check_arg})
             get_property(skip_warning GLOBAL
                 PROPERTY _qt_skip_warning__qt_internal_should_include_targets
@@ -1134,11 +1157,16 @@ function(_qt_internal_should_include_targets)
     endforeach()
 
     set(project_names "")
+    set(lower_case_project_names "")
     if(arg_PROJECT_NAMES)
         list(APPEND project_names ${arg_PROJECT_NAMES})
     endif()
     if(arg_PROJECT_NAME)
         list(APPEND project_names ${arg_PROJECT_NAME})
+    endif()
+
+    if(project_names)
+        list(TRANSFORM project_names TOLOWER OUTPUT_VARIABLE lower_case_project_names)
     endif()
 
     if(project_names)
@@ -1157,19 +1185,35 @@ function(_qt_internal_should_include_targets)
             return()
         endif()
 
+        # We're building a Qt repository because QT_REPO_DEPENDENCIES is set.
+        # Skip including the target if it has not been provided by one of this repo's
+        # dependencies.
+        if(arg_SKIP_IF_PROJECT_NAME_NOT_IN_QT_REPO_DEPENDENCIES
+                AND DEFINED QT_REPO_DEPENDENCIES
+                AND NOT QT_INTERNAL_BUILD_STANDALONE_PARTS
+                # safety opt out
+                AND NOT QT_NO_SKIP_IF_PROJECT_NAME_NOT_IN_QT_REPO_DEPENDENCIES
+            )
+            set(target_project_name_in_repo_deps FALSE)
+            foreach(lower_case_project_name IN LISTS lower_case_project_names)
+                if(lower_case_project_name IN_LIST QT_REPO_DEPENDENCIES)
+                    set(target_project_name_in_repo_deps TRUE)
+                    break()
+                endif()
+            endforeach()
+
+            if(NOT target_project_name_in_repo_deps)
+                set(${arg_OUT_VAR_SHOULD_SKIP} ON PARENT_SCOPE)
+                return()
+            endif()
+        endif()
+
         # Check if we are building the standalone tests
         if(arg_TEST_PLUGIN AND QT_BUILD_STANDALONE_TESTS AND
             PROJECT_NAME IN_LIST project_names)
             set(${arg_OUT_VAR_SHOULD_SKIP} ON PARENT_SCOPE)
             return()
         endif()
-    endif()
-
-    # Compatibility using the old global `QT_NO_CREATE_TARGETS`
-    # TODO: Remove these once developers have reconfigured their project.
-    if(arg_CHECK_QT_NO_CREATE_TARGETS AND QT_NO_CREATE_TARGETS)
-        set(${arg_OUT_VAR_SHOULD_SKIP} ON PARENT_SCOPE)
-        return()
     endif()
 
     # We might still be generating the Targets.cmake file, so we do the same

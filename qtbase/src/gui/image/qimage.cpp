@@ -502,6 +502,7 @@ bool QImageData::checkForAlphaPixels() const
     \li {2,1}32-bit
     \row
     \li \inlineimage qimage-32bit_scaled.png
+                     {3x3 pixel grid with ARGB color values}
     \li
     \snippet code/src_gui_image_qimage.cpp 0
     \endtable
@@ -523,6 +524,7 @@ bool QImageData::checkForAlphaPixels() const
     \li {2,1} 8-bit
     \row
     \li \inlineimage qimage-8bit_scaled.png
+                     {3x3 pixel grid with indexed colors and color table}
     \li
     \snippet code/src_gui_image_qimage.cpp 1
     \endtable
@@ -4452,7 +4454,6 @@ int QImage::metric(PaintDeviceMetric metric) const
                         trigy += m12;
         // END OF MACRO
 
-static
 bool qt_xForm_helper(const QTransform &trueMat, int xoffset, int type, int depth,
                      uchar *dptr, qsizetype dbpl, int p_inc, int dHeight,
                      const uchar *sptr, qsizetype sbpl, int sWidth, int sHeight)

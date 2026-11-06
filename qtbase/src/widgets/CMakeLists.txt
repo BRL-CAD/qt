@@ -52,7 +52,6 @@ qt_internal_add_module(Widgets
     DEFINES
         QT_NO_CONTEXTLESS_CONNECT
         QT_NO_USING_NAMESPACE
-        QT_NO_FOREACH
         QT_NO_URL_CAST_FROM_STRING
         QT_USE_NODISCARD_FILE_OPEN
     INCLUDE_DIRECTORIES
@@ -376,6 +375,11 @@ qt_internal_extend_target(Widgets CONDITION MACOS
     LIBRARIES
         ${FWAppKit}
         z
+)
+
+qt_internal_extend_target(Widgets CONDITION OHOS
+    SOURCES
+        kernel/qohosgesturerecognizer.cpp kernel/qohosgesturerecognizer_p.h
 )
 
 qt_internal_extend_target(Widgets CONDITION WIN32

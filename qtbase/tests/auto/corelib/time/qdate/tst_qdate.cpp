@@ -86,6 +86,8 @@ private Q_SLOTS:
 # if QT_CONFIG(datetimeparser)
     void fromStringFormat_data();
     void fromStringFormat();
+    void fromStringFormatCal_data();
+    void fromStringFormatCal();
 # endif
     void toStringFormat_data();
     void toStringFormat();
@@ -137,8 +139,7 @@ void tst_QDate::isNull()
 {
     QFETCH(qint64, jd);
 
-    QDate d = QDate::fromJulianDay(jd);
-    QTEST(d.isNull(), "null");
+    QTEST(QDate::fromJulianDay(jd).isNull(), "null");
 }
 
 void tst_QDate::isValid_data()
@@ -326,13 +327,11 @@ void tst_QDate::dayOfWeek_data()
 
 void tst_QDate::dayOfWeek()
 {
-    QFETCH(int, year);
-    QFETCH(int, month);
-    QFETCH(int, day);
-    QFETCH(int, dayOfWeek);
+    QFETCH(const int, year);
+    QFETCH(const int, month);
+    QFETCH(const int, day);
 
-    QDate dt(year, month, day);
-    QCOMPARE(dt.dayOfWeek(), dayOfWeek);
+    QTEST(QDate(year, month, day).dayOfWeek(), "dayOfWeek");
 }
 
 void tst_QDate::dayOfYear_data()
@@ -360,13 +359,11 @@ void tst_QDate::dayOfYear_data()
 
 void tst_QDate::dayOfYear()
 {
-    QFETCH(int, year);
-    QFETCH(int, month);
-    QFETCH(int, day);
-    QFETCH(int, dayOfYear);
+    QFETCH(const int, year);
+    QFETCH(const int, month);
+    QFETCH(const int, day);
 
-    QDate dt(year, month, day);
-    QCOMPARE(dt.dayOfYear(), dayOfYear);
+    QTEST(QDate(year, month, day).dayOfYear(), "dayOfYear");
 }
 
 void tst_QDate::daysInMonth_data()
@@ -395,13 +392,11 @@ void tst_QDate::daysInMonth_data()
 
 void tst_QDate::daysInMonth()
 {
-    QFETCH(int, year);
-    QFETCH(int, month);
-    QFETCH(int, day);
-    QFETCH(int, daysInMonth);
+    QFETCH(const int, year);
+    QFETCH(const int, month);
+    QFETCH(const int, day);
 
-    QDate dt(year, month, day);
-    QCOMPARE(dt.daysInMonth(), daysInMonth);
+    QTEST(QDate(year, month, day).daysInMonth(), "daysInMonth");
 }
 
 void tst_QDate::daysInYear_data()
@@ -418,10 +413,9 @@ void tst_QDate::daysInYear_data()
 
 void tst_QDate::daysInYear()
 {
-    QFETCH(QDate, date);
-    QFETCH(int, expectedDaysInYear);
+    QFETCH(const QDate, date);
 
-    QCOMPARE(date.daysInYear(), expectedDaysInYear);
+    QTEST(date.daysInYear(), "expectedDaysInYear");
 }
 
 void tst_QDate::getDate()
@@ -482,15 +476,14 @@ void tst_QDate::weekNumber_data()
 
 void tst_QDate::weekNumber()
 {
+    QFETCH(const int, year);
+    QFETCH(const int, month);
+    QFETCH(const int, day);
+
+    const QDate dt(year, month, day);
     int yearNumber;
-    QFETCH( int, year );
-    QFETCH( int, month );
-    QFETCH( int, day );
-    QFETCH( int, expectedWeekNum );
-    QFETCH( int, expectedYearNum );
-    QDate dt1( year, month, day );
-    QCOMPARE( dt1.weekNumber( &yearNumber ), expectedWeekNum );
-    QCOMPARE( yearNumber, expectedYearNum );
+    QTEST(dt.weekNumber(&yearNumber), "expectedWeekNum");
+    QTEST(yearNumber, "expectedYearNum");
 }
 
 void tst_QDate::weekNumber_invalid_data()
@@ -499,17 +492,22 @@ void tst_QDate::weekNumber_invalid_data()
     QTest::addColumn<int>("month");
     QTest::addColumn<int>("day");
 
-    //next we fill it with data
-    QTest::newRow( "data0" )  << 0 << 0 << 0;
-    QTest::newRow( "data1" )  << 2001 << 1 << 32;
-    QTest::newRow( "data2" )  << 1999 << 2 << 29;
+    QTest::newRow("0000-00-00") << 0 << 0 << 0;
+    QTest::newRow("2001-01-32") << 2001 << 1 << 32;
+    QTest::newRow("1999-02-29") << 1999 << 2 << 29;
 }
 
 void tst_QDate::weekNumber_invalid()
 {
-    QDate dt;
-    int yearNumber;
-    QCOMPARE( dt.weekNumber( &yearNumber ), 0 );
+    QFETCH(const int, year);
+    QFETCH(const int, month);
+    QFETCH(const int, day);
+
+    const QDate dt(year, month, day);
+    constexpr int initialYear = (std::numeric_limits<int>::min)();
+    int yearNumber = initialYear;
+    QCOMPARE(dt.weekNumber(&yearNumber), 0);
+    QCOMPARE(yearNumber, initialYear); // weekNumber() didn't set it.
 }
 
 /* The MS backend tends to lack data for historical transitions.  So some of the
@@ -841,27 +839,25 @@ void tst_QDate::julianDaysLimits()
 
 void tst_QDate::addDays()
 {
-    QFETCH( int, year );
-    QFETCH( int, month );
-    QFETCH( int, day );
-    QFETCH( int, amountToAdd );
-    QFETCH( int, expectedYear );
-    QFETCH( int, expectedMonth );
-    QFETCH( int, expectedDay );
+    QFETCH(const int, year);
+    QFETCH(const int, month);
+    QFETCH(const int, day);
+    QFETCH(const int, amountToAdd);
 
-    QDate dt( year, month, day );
-    QDate dt2 = dt.addDays( amountToAdd );
+    const QDate dt(year, month, day);
+    const QDate dt2 = dt.addDays(amountToAdd);
 
-    QCOMPARE( dt2.year(), expectedYear );
-    QCOMPARE( dt2.month(), expectedMonth );
-    QCOMPARE( dt2.day(), expectedDay );
+    QTEST(dt2.year(), "expectedYear");
+    QTEST(dt2.month(), "expectedMonth");
+    QTEST(dt2.day(), "expectedDay");
+
 // INTEGRITY incident-85878 (timezone and clock_cast are not supported)
 #if __cpp_lib_chrono >= 201907L && !defined(Q_OS_INTEGRITY)
-    QDate dt3 = dt.addDuration( std::chrono::days( amountToAdd ) );
+    const QDate dt3 = dt.addDuration(std::chrono::days(amountToAdd));
 
-    QCOMPARE( dt3.year(), expectedYear );
-    QCOMPARE( dt3.month(), expectedMonth );
-    QCOMPARE( dt3.day(), expectedDay );
+    QTEST(dt3.year(), "expectedYear");
+    QTEST(dt3.month(), "expectedMonth");
+    QTEST(dt3.day(), "expectedDay");
 #endif
 }
 
@@ -901,13 +897,10 @@ void tst_QDate::incrementable()
     static_assert(std::weakly_incrementable<QDate>);
 #endif
 
-    QFETCH(int, year);
-    QFETCH(int, month);
-    QFETCH(int, day);
-    QFETCH(int, amountToAdd);
-    QFETCH(int, expectedYear);
-    QFETCH(int, expectedMonth);
-    QFETCH(int, expectedDay);
+    QFETCH(const int, year);
+    QFETCH(const int, month);
+    QFETCH(const int, day);
+    QFETCH(const int, amountToAdd);
 
     const QDate dt( year, month, day);
 
@@ -935,9 +928,9 @@ void tst_QDate::incrementable()
         }
     }
 
-    QCOMPARE(pre.year(), expectedYear);
-    QCOMPARE(pre.month(), expectedMonth);
-    QCOMPARE(pre.day(), expectedDay);
+    QTEST(pre.year(), "expectedYear");
+    QTEST(pre.month(), "expectedMonth");
+    QTEST(pre.day(), "expectedDay");
 
     QDate post = dt;
 
@@ -963,27 +956,23 @@ void tst_QDate::incrementable()
         }
     }
 
-    QCOMPARE(post.year(), expectedYear);
-    QCOMPARE(post.month(), expectedMonth);
-    QCOMPARE(post.day(), expectedDay);
+    QTEST(post.year(), "expectedYear");
+    QTEST(post.month(), "expectedMonth");
+    QTEST(post.day(), "expectedDay");
 }
 
 void tst_QDate::addMonths()
 {
-    QFETCH( int, year );
-    QFETCH( int, month );
-    QFETCH( int, day );
-    QFETCH( int, amountToAdd );
-    QFETCH( int, expectedYear );
-    QFETCH( int, expectedMonth );
-    QFETCH( int, expectedDay );
+    QFETCH(const int, year);
+    QFETCH(const int, month);
+    QFETCH(const int, day);
+    QFETCH(const int, amountToAdd);
 
-    QDate dt( year, month, day );
-    dt = dt.addMonths( amountToAdd );
+    const auto dt = QDate(year, month, day).addMonths(amountToAdd);
 
-    QCOMPARE( dt.year(), expectedYear );
-    QCOMPARE( dt.month(), expectedMonth );
-    QCOMPARE( dt.day(), expectedDay );
+    QTEST(dt.year(), "expectedYear");
+    QTEST(dt.month(), "expectedMonth");
+    QTEST(dt.day(), "expectedDay");
 }
 
 void tst_QDate::addMonths_data()
@@ -1025,20 +1014,16 @@ void tst_QDate::addMonths_data()
 
 void tst_QDate::addYears()
 {
-    QFETCH( int, year );
-    QFETCH( int, month );
-    QFETCH( int, day );
-    QFETCH( int, amountToAdd );
-    QFETCH( int, expectedYear );
-    QFETCH( int, expectedMonth );
-    QFETCH( int, expectedDay );
+    QFETCH(const int, year);
+    QFETCH(const int, month);
+    QFETCH(const int, day);
+    QFETCH(const int, amountToAdd);
 
-    QDate dt( year, month, day );
-    dt = dt.addYears( amountToAdd );
+    const auto dt = QDate(year, month, day).addYears(amountToAdd);
 
-    QCOMPARE( dt.year(), expectedYear );
-    QCOMPARE( dt.month(), expectedMonth );
-    QCOMPARE( dt.day(), expectedDay );
+    QTEST(dt.year(), "expectedYear");
+    QTEST(dt.month(), "expectedMonth");
+    QTEST(dt.day(), "expectedDay");
 }
 
 void tst_QDate::addYears_data()
@@ -1392,11 +1377,10 @@ void tst_QDate::fromStringDateFormat_data()
 
 void tst_QDate::fromStringDateFormat()
 {
-    QFETCH(QString, dateStr);
-    QFETCH(Qt::DateFormat, dateFormat);
-    QFETCH(QDate, expectedDate);
+    QFETCH(const QString, dateStr);
+    QFETCH(const Qt::DateFormat, dateFormat);
 
-    QCOMPARE(QDate::fromString(dateStr, dateFormat), expectedDate);
+    QTEST(QDate::fromString(dateStr, dateFormat), "expectedDate");
 }
 
 # if QT_CONFIG(datetimeparser)
@@ -1420,14 +1404,14 @@ void tst_QDate::fromStringFormat_data()
     QTest::newRow("yearless:19") << u"10.01.1"_s << u"M.dd.d"_s << 1900 << QDate(1900, 10, 1);
     QTest::newRow("yearless:20") << u"10.01.1"_s << u"M.dd.d"_s << 2000 << QDate(2000, 10, 1);
     QTest::newRow("neg-month") << u"-1.01.1"_s << u"M.dd.d"_s << 1900 << invalidDate();
-    QTest::newRow("greedy-break") << u"11010"_s << u"dMMyy"_s << 1900 << invalidDate();
+    QTest::newRow("restrained-greed") << u"11010"_s << u"dMMyy"_s << 1900 << QDate(1910, 10, 1);
     QTest::newRow("neg-day") << u"-2"_s << u"d"_s << 1900 << invalidDate();
     QTest::newRow("Md:132") << u"132"_s << u"Md"_s << 1900 << invalidDate();
     QTest::newRow("February") << u"February"_s << u"MMMM"_s << 1900 << QDate(1900, 2, 1);
 
     QTest::newRow("mon-aug-8th")
             << u"Mon August 8 2005"_s << u"ddd MMMM d yyyy"_s << 1900 << QDate(2005, 8, 8);
-    QTest::newRow("year-match-20000") << u"2000:00"_s << u"yyyy:yy"_s << 1900 << QDate(2000, 1, 1);
+    QTest::newRow("year-match-2000") << u"2000:00"_s << u"yyyy:yy"_s << 1900 << QDate(2000, 1, 1);
     QTest::newRow("year-match-1999") << u"1999:99"_s << u"yyyy:yy"_s << 1900 << QDate(1999, 1, 1);
     QTest::newRow("year-match-2099") << u"2099:99"_s << u"yyyy:yy"_s << 1900 << QDate(2099, 1, 1);
     QTest::newRow("year-match-2001") << u"2001:01"_s << u"yyyy:yy"_s << 1900 << QDate(2001, 1, 1);
@@ -1483,7 +1467,11 @@ void tst_QDate::fromStringFormat_data()
     QTest::newRow("quoted-MM")
             << u"21-MM05-2006"_s << u"dd-'MM'MM-yyyy"_s << 1900 << QDate(2006, 5, 21);
     QTest::newRow("quotes-empty")
-            << u"21-'05-2006"_s << u"dd-MM-''yy"_s << 1900 << QDate(2006, 5, 21);
+            << u"21-'05-2006"_s << u"dd-''MM-yyyy"_s << 1900 << QDate(2006, 5, 21);
+    QTest::newRow("quote-verbose")
+            << u"On day 22 of the Gregorian month named April in the Common Era year 2026"_s
+            << u"'On day' dd 'of the' 'Gregorian month named' MMMM 'in the' 'Common Era year' yyyy"_s
+            << 1900 << QDate(2026, 4, 22);
 
     // Test unicode handling.
     QTest::newRow("Unicode in format string")
@@ -1567,6 +1555,13 @@ void tst_QDate::fromStringFormat_data()
             << u"05-00206-21"_s << u"MM-yyyy-dd"_s << 1900 << QDate();
     QTest::newRow("5digit year, back")
             << u"05-21-00206"_s << u"MM-dd-yyyy"_s << 1900 << QDate();
+    // ... unless they have an overt sign:
+    QTest::newRow("signed 5digit year, front")
+            << u"+00206-05-21"_s << u"yyyy-MM-dd"_s << 1900 << QDate(206, 5, 21);
+    QTest::newRow("signed 5digit year, mid")
+            << u"05-+00206-21"_s << u"MM-yyyy-dd"_s << 1900 << QDate(206, 5, 21);
+    QTest::newRow("signed 5digit year, back")
+            << u"05-21-+00206"_s << u"MM-dd-yyyy"_s << 1900 << QDate(206, 5, 21);
     QTest::newRow("non-leap-feb-29") // QTBUG-132115: should fail but not assert
             << u"290215"_s << u"ddMMyy"_s << 1900 << QDate();
 
@@ -1584,15 +1579,51 @@ void tst_QDate::fromStringFormat_data()
 
 void tst_QDate::fromStringFormat()
 {
-    QFETCH(QString, string);
-    QFETCH(QString, format);
-    QFETCH(int, baseYear);
-    QFETCH(QDate, expected);
+    QFETCH(const QString, string);
+    QFETCH(const QString, format);
+    QFETCH(const int, baseYear);
 
-    QDate dt = QDate::fromString(string, format, baseYear);
-    QEXPECT_FAIL("quotes-empty", "QTBUG-110669: doubled single-quotes in format mishandled",
-                 Continue);
-    QCOMPARE(dt, expected);
+    QTEST(QDate::fromString(string, format, baseYear), "expected");
+}
+
+void tst_QDate::fromStringFormatCal_data()
+{
+    QTest::addColumn<QString>("string");
+    QTest::addColumn<QString>("format");
+    QTest::addColumn<int>("baseYear");
+    QTest::addColumn<QCalendar>("calendar");
+    QTest::addColumn<QDate>("expected");
+
+    using Sys = QCalendar::System;
+    constexpr Sys systems[] = {
+        Sys::Gregorian, Sys::Julian, Sys::Milankovic,
+#if QT_CONFIG(jalalicalendar)
+        Sys::Jalali,
+#endif
+#if QT_CONFIG(islamiccivilcalendar)
+        Sys::IslamicCivil,
+#endif
+    };
+
+    for (const Sys system : systems) {
+        const QCalendar cal(system);
+        const QDate date(2024, 4, 12, cal);
+        const QByteArray calName = cal.name().toUtf8();
+        const QString format = u"ddd, d MMM yy"_s; // QTBUG-146744
+        QTest::addRow("ddd, d MMM yy/%s", calName.constData())
+            << cal.dateTimeToString(format, QDateTime(), date, QTime(), QLocale::c())
+            << format << 2000 << cal << date;
+    }
+}
+
+void tst_QDate::fromStringFormatCal()
+{
+    QFETCH(const QString, string);
+    QFETCH(const QString, format);
+    QFETCH(const int, baseYear);
+    QFETCH(const QCalendar, calendar);
+
+    QTEST(QDate::fromString(string, format, baseYear, calendar), "expected");
 }
 #endif // datetimeparser
 
@@ -1611,11 +1642,10 @@ void tst_QDate::toStringFormat_data()
 
 void tst_QDate::toStringFormat()
 {
-    QFETCH( QDate, t );
-    QFETCH( QString, format );
-    QFETCH( QString, str );
+    QFETCH(const QDate, t);
+    QFETCH(const QString, format);
 
-    QCOMPARE( t.toString( format ), str );
+    QTEST(t.toString(format), "str");
 }
 
 void tst_QDate::toStringDateFormat_data()
@@ -1636,11 +1666,10 @@ void tst_QDate::toStringDateFormat_data()
 
 void tst_QDate::toStringDateFormat()
 {
-    QFETCH(QDate, date);
-    QFETCH(Qt::DateFormat, format);
-    QFETCH(QString, expectedStr);
+    QFETCH(const QDate, date);
+    QFETCH(const Qt::DateFormat, format);
 
-    QCOMPARE(date.toString(format), expectedStr);
+    QTEST(date.toString(format), "expectedStr");
 }
 #endif // datestring
 

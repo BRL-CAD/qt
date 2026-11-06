@@ -550,13 +550,21 @@ QCryptographicHashPrivate::EVP::EVP(QCryptographicHash::Algorithm method)
          * We need to load the legacy provider in order to have the MD4
          * algorithm available.
          */
-        legacyProvider = OSSL_PROVIDER_ptr(OSSL_PROVIDER_load(nullptr, "legacy"));
+        legacyProvider = OSSL_PROVIDER_ptr(OSSL_PROVIDER_try_load(nullptr, "legacy", /*retain_fallbacks=*/1));
 
         if (!legacyProvider)
             return;
     }
 
-    defaultProvider = OSSL_PROVIDER_ptr(OSSL_PROVIDER_load(nullptr, "default"));
+    /*
+     * Load with retain_fallbacks=1 so that loading these providers - and the
+     * unload performed by OSSL_PROVIDER_deleter - does not disable OpenSSL's
+     * fallback auto-loading of the default provider in the global library
+     * context. Plain OSSL_PROVIDER_load() disables that fallback, which then
+     * leaves later OpenSSL users (e.g. the TLS backend) without a default
+     * provider once we unload, breaking RAND seeding. See QTBUG-136223.
+     */
+    defaultProvider = OSSL_PROVIDER_ptr(OSSL_PROVIDER_try_load(nullptr, "default", /*retain_fallbacks=*/1));
     if (!defaultProvider)
         return;
 
@@ -758,7 +766,7 @@ void QCryptographicHashPrivate::State::reset(QCryptographicHash::Algorithm metho
     Adds the first \a length chars of \a data to the cryptographic
     hash.
 
-    \obsolete
+    \deprecated [6.4]
     Use the QByteArrayView overload instead.
 */
 void QCryptographicHash::addData(const char *data, qsizetype length)
@@ -917,6 +925,7 @@ bool QCryptographicHashPrivate::addData(QIODevice *device)
     if (!device->isOpen())
         return false;
 
+    Q_DECL_UNINITIALIZED
     char buffer[1024];
     qint64 length;
 
@@ -1177,6 +1186,7 @@ QByteArrayView QCryptographicHash::hashInto(QSpan<std::byte> buffer,
     if (buffer.size() < hashLengthInternal(method))
         return {}; // buffer too small
 
+    Q_DECL_UNINITIALIZED
     QCryptographicHashPrivate hash(method);
     for (QByteArrayView part : data)
         hash.addData(part);
@@ -1243,8 +1253,10 @@ bool QCryptographicHashPrivate::supportsAlgorithm(QCryptographicHash::Algorithm 
     case QCryptographicHash::RealSha3_512:
     case QCryptographicHash::Blake2b_512:
     case QCryptographicHash::Blake2s_256: {
-    auto legacyProvider = OSSL_PROVIDER_ptr(OSSL_PROVIDER_load(nullptr, "legacy"));
-    auto defaultProvider = OSSL_PROVIDER_ptr(OSSL_PROVIDER_load(nullptr, "default"));
+    // retain_fallbacks=1: don't disable the global default-provider fallback
+    // auto-load (see QTBUG-136223 and the EVP constructor above).
+    auto legacyProvider = OSSL_PROVIDER_ptr(OSSL_PROVIDER_try_load(nullptr, "legacy", /*retain_fallbacks=*/1));
+    auto defaultProvider = OSSL_PROVIDER_ptr(OSSL_PROVIDER_try_load(nullptr, "default", /*retain_fallbacks=*/1));
 
     const char *restriction = "-fips";
     EVP_MD_ptr algorithm = EVP_MD_ptr(EVP_MD_fetch(nullptr, methodToName(method), restriction));
@@ -1378,6 +1390,8 @@ static HashBlock xored(const HashBlock &block, quint8 val) noexcept
     Q_ASSERT(block.size() >= minHashBlockSize());
     Q_ASSERT(block.size() <= maxHashBlockSize());
     Q_ASSERT(block.size() % gcdHashBlockSize() == 0);
+
+    Q_DECL_UNINITIALIZED
     HashBlock result;
     result.resizeForOverwrite(block.size());
     for (qsizetype i = 0; i < block.size(); ++i)
@@ -1717,6 +1731,7 @@ QByteArrayView QMessageAuthenticationCode::hashInto(QSpan<std::byte> buffer,
                                                     QByteArrayView key,
                                                     QCryptographicHash::Algorithm method) noexcept
 {
+    Q_DECL_UNINITIALIZED
     QMessageAuthenticationCodePrivate mac(method);
     mac.setKey(key);
     for (QByteArrayView part : messageParts)

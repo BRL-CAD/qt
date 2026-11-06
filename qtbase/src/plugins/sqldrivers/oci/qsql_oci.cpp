@@ -27,6 +27,8 @@
 #include <qvariant.h>
 #include <qvarlengtharray.h>
 
+#include <QtCore/q20memory.h>
+
 // This is needed for oracle oci when compiling with mingw-w64 headers
 #if defined(__MINGW64_VERSION_MAJOR) && defined(_WIN64)
 #define _int64 __int64
@@ -1069,10 +1071,10 @@ int QOCICols::readPiecewise(QVariantList &values, int index)
     ub4            idxp;
     ub1            piecep;
     sword          status;
-    text           col [QOCI_DYNAMIC_CHUNK_SIZE+1];
     int            r = 0;
     bool           nullField;
 
+    const auto col = q20::make_unique_for_overwrite<text[]>(QOCI_DYNAMIC_CHUNK_SIZE + 1);
     do {
         r = OCIStmtGetPieceInfo(d->stmtp, d->err, reinterpret_cast<void **>(&dfn), &typep,
                                  &in_outp, &iterp, &idxp, &piecep);
@@ -1083,7 +1085,7 @@ int QOCICols::readPiecewise(QVariantList &values, int index)
         ub4 chunkSize = QOCI_DYNAMIC_CHUNK_SIZE;
         nullField = false;
         r  = OCIStmtSetPieceInfo(dfn, OCI_HTYPE_DEFINE,
-                                 d->err, col,
+                                 d->err, col.get(),
                                  &chunkSize, piecep, NULL, NULL);
         if (r != OCI_SUCCESS)
             qOraWarning("OCIResultPrivate::readPiecewise: unable to set piece info:", d->err);
@@ -1106,15 +1108,13 @@ int QOCICols::readPiecewise(QVariantList &values, int index)
             fieldInf[fieldNum].ind = -1;
         } else {
             if (isStringField) {
-                QString str = values.at(fieldNum + index).toString();
-                str += QString(reinterpret_cast<const QChar *>(col), chunkSize / 2);
+                QString str = values.at(fieldNum + index).toString()
+                            + QStringView(reinterpret_cast<const QChar *>(col.get()), chunkSize / 2);
                 values[fieldNum + index] = str;
                 fieldInf[fieldNum].ind = 0;
             } else {
-                QByteArray ba = values.at(fieldNum + index).toByteArray();
-                int sz = ba.size();
-                ba.resize(sz + chunkSize);
-                memcpy(ba.data() + sz, reinterpret_cast<char *>(col), chunkSize);
+                QByteArray ba = values.at(fieldNum + index).toByteArray()
+                              + QByteArrayView(col.get(), chunkSize);
                 values[fieldNum + index] = ba;
                 fieldInf[fieldNum].ind = 0;
             }
@@ -1400,8 +1400,8 @@ bool QOCICols::execBatch(QOCIResultPrivate *d, QVariantList &boundValues, bool a
             }
         }
 
-        col.data = new char[col.maxLen * col.recordCount];
-        memset(col.data, 0, col.maxLen * col.recordCount);
+        col.data = new char[size_t(col.maxLen) * col.recordCount];
+        memset(col.data, 0, size_t(col.maxLen) * col.recordCount);
 
         // we may now populate column with data
         for (uint row = 0; row < col.recordCount; ++row) {
@@ -1412,7 +1412,7 @@ bool QOCICols::execBatch(QOCIResultPrivate *d, QVariantList &boundValues, bool a
                 columns[i].lengths[row] = 0;
             } else {
                 columns[i].indicators[row] = 0;
-                char *dataPtr = columns[i].data + (columns[i].maxLen * row);
+                char *const dataPtr = columns[i].data + size_t(columns[i].maxLen) * row;
                 switch (fieldTypes[i].id()) {
                     case QMetaType::QTime:
                     case QMetaType::QDate:
@@ -1573,28 +1573,29 @@ bool QOCICols::execBatch(QOCIResultPrivate *d, QVariantList &boundValues, bool a
                 continue;
             }
 
+            char *const colData = data + r * size_t(columns[i].maxLen);
             switch(columns[i].bindAs) {
 
                 case SQLT_TIMESTAMP_TZ:
                     (*list)[r] = QOCIDateTime::fromOCIDateTime(d->env, d->err,
-                                    *reinterpret_cast<OCIDateTime **>(data + r * columns[i].maxLen));
+                                    *reinterpret_cast<OCIDateTime **>(colData));
                     break;
                 case SQLT_INT:
-                    (*list)[r] =  *reinterpret_cast<int*>(data + r * columns[i].maxLen);
+                    (*list)[r] = *reinterpret_cast<int*>(colData);
                     break;
 
                 case SQLT_UIN:
-                    (*list)[r] =  *reinterpret_cast<uint*>(data + r * columns[i].maxLen);
+                    (*list)[r] = *reinterpret_cast<uint*>(colData);
                     break;
 
                 case SQLT_VNU:
                 {
                     switch (boundValues.at(i).typeId()) {
                     case QMetaType::LongLong:
-                        (*list)[r] =  qMakeLongLong(data + r * columns[i].maxLen, d->err);
+                        (*list)[r] = qMakeLongLong(colData, d->err);
                         break;
                     case QMetaType::ULongLong:
-                        (*list)[r] =  qMakeULongLong(data + r * columns[i].maxLen, d->err);
+                        (*list)[r] = qMakeULongLong(colData, d->err);
                         break;
                     default:
                         break;
@@ -1603,16 +1604,15 @@ bool QOCICols::execBatch(QOCIResultPrivate *d, QVariantList &boundValues, bool a
                 }
 
                 case SQLT_FLT:
-                    (*list)[r] =  *reinterpret_cast<double*>(data + r * columns[i].maxLen);
+                    (*list)[r] = *reinterpret_cast<double*>(colData);
                     break;
 
                 case SQLT_STR:
-                    (*list)[r] =  QString(reinterpret_cast<const QChar *>(data
-                                                                + r * columns[i].maxLen));
+                    (*list)[r] = QString(reinterpret_cast<const QChar *>(colData));
                     break;
 
                 default:
-                    (*list)[r] =  QByteArray(data + r * columns[i].maxLen, columns[i].maxLen);
+                    (*list)[r] = QByteArray(colData, columns[i].maxLen);
                 break;
             }
         }

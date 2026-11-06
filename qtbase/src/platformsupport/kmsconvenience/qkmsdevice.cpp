@@ -34,6 +34,10 @@ int QKmsDevice::crtcForConnector(drmModeResPtr resources, drmModeConnectorPtr co
 {
     int candidate = -1;
 
+    // m_crtc_allocator is a 32 bit mask, so CRTCs past the first 32 cannot be
+    // tracked and are not considered.
+    const int crtcCount = qMin(resources->count_crtcs, 32);
+
     for (int i = 0; i < connector->count_encoders; i++) {
         drmModeEncoderPtr encoder = drmModeGetEncoder(m_dri_fd, connector->encoders[i]);
         if (!encoder) {
@@ -46,9 +50,9 @@ int QKmsDevice::crtcForConnector(drmModeResPtr resources, drmModeConnectorPtr co
         quint32 possibleCrtcs = encoder->possible_crtcs;
         drmModeFreeEncoder(encoder);
 
-        for (int j = 0; j < resources->count_crtcs; j++) {
-            bool isPossible = possibleCrtcs & (1 << j);
-            bool isAvailable = !(m_crtc_allocator & (1 << j));
+        for (int j = 0; j < crtcCount; j++) {
+            bool isPossible = possibleCrtcs & (1u << j);
+            bool isAvailable = !(m_crtc_allocator & (1u << j));
             // Preserve the existing CRTC -> encoder -> connector routing if
             // any. It makes the initialization faster, and may be better
             // since we have a very dumb picking algorithm.
@@ -105,13 +109,12 @@ static bool parseModeline(const QByteArray &text, drmModeModeInfoPtr mode)
     char vsync[16];
     float fclock;
 
+    // Zero everything, not just the fields set below: the mode is handed to the
+    // kernel as a property blob, name included.
+    memset(mode, 0, sizeof(*mode));
     mode->type = DRM_MODE_TYPE_USERDEF;
-    mode->hskew = 0;
-    mode->vscan = 0;
-    mode->vrefresh = 0;
-    mode->flags = 0;
 
-    if (sscanf(text.constData(), "%f %hd %hd %hd %hd %hd %hd %hd %hd %15s %15s",
+    if (sscanf(text.constData(), "%f %hu %hu %hu %hu %hu %hu %hu %hu %15s %15s",
                &fclock,
                &mode->hdisplay,
                &mode->hsync_start,
@@ -462,7 +465,7 @@ bool QKmsDevice::createScreenInfoForConnector(drmModeResPtr resources,
 
     QString planeListStr;
     for (QKmsPlane &plane : m_planes) {
-        if (plane.possibleCrtcs & (1 << output.crtc_index)) {
+        if (plane.possibleCrtcs & (1u << output.crtc_index)) {
             output.available_planes.append(plane);
             planeListStr.append(QString::number(plane.id));
             planeListStr.append(u' ');
@@ -539,7 +542,7 @@ bool QKmsDevice::createScreenInfoForConnector(drmModeResPtr resources,
     }
 #endif
 
-    m_crtc_allocator |= (1 << output.crtc_index);
+    m_crtc_allocator |= (1u << output.crtc_index);
 
     vinfo.output = output;
     return true;
@@ -667,7 +670,7 @@ void QKmsDevice::checkConnectedScreens()
                        QList<QPlatformScreen *>() << m_headlessScreen);
     }
 
-    for (uint32_t connectorId : newDisconnects) {
+    for (uint32_t connectorId : std::as_const(newDisconnects)) {
         OrderedScreen orderedScreen = m_registeredScreens.take(connectorId);
         QPlatformScreen *screen = orderedScreen.screen;
 
@@ -682,7 +685,7 @@ void QKmsDevice::checkConnectedScreens()
 
         // Clear crtc allocator bit for screen
         const int crtcIdx = orderedScreen.vinfo.output.crtc_index;
-        m_crtc_allocator &= ~(1 << crtcIdx);
+        m_crtc_allocator &= ~(1u << crtcIdx);
 
         const int ret = drmModeSetCrtc(m_dri_fd, crtcId, 0, 0, 0, nullptr, 0, nullptr);
 
@@ -704,7 +707,7 @@ void QKmsDevice::checkConnectedScreens()
         unregisterScreen(screen);
     }
 
-    for (uint32_t connectorId : newConnects) {
+    for (uint32_t connectorId : std::as_const(newConnects)) {
         drmModeConnectorPtr connector = drmModeGetConnector(m_dri_fd, connectorId);
         if (!connector) {
             qErrnoWarning(errno, "drmModeGetConnector failed");
@@ -759,7 +762,7 @@ void QKmsDevice::updateScreens()
 
             // 1) crtc_allocator for the crtc
             const int crtcIdx = os.vinfo.output.crtc_index;
-            m_crtc_allocator &= ~(1 << crtcIdx);
+            m_crtc_allocator &= ~(1u << crtcIdx);
 
             // 2) the plane itself
             if (os.vinfo.output.eglfs_plane)
@@ -935,15 +938,15 @@ void QKmsDevice::registerScreens(QList<uint32_t> newConnects)
 
     // The final list of screens is available, so do the second phase setup.
     // Hook up clone sources and targets.
-    for (const OrderedScreen &orderedScreen : screens) {
+    for (const OrderedScreen &orderedScreen : std::as_const(screens)) {
         QList<QPlatformScreen *> screensCloningThisScreen;
-        for (const OrderedScreen &s : screens) {
+        for (const OrderedScreen &s : std::as_const(screens)) {
             if (s.vinfo.output.clone_source == orderedScreen.vinfo.output.name)
                 screensCloningThisScreen.append(s.screen);
         }
         QPlatformScreen *screenThisScreenClones = nullptr;
         if (!orderedScreen.vinfo.output.clone_source.isEmpty()) {
-            for (const OrderedScreen &s : screens) {
+            for (const OrderedScreen &s : std::as_const(screens)) {
                 if (s.vinfo.output.name == orderedScreen.vinfo.output.clone_source) {
                     screenThisScreenClones = s.screen;
                     break;
@@ -965,7 +968,7 @@ void QKmsDevice::registerScreens(QList<uint32_t> newConnects)
     int primarySiblingIdx = -1;
     QRegion deskRegion;
 
-    for (const OrderedScreen &orderedScreen : screens) {
+    for (const OrderedScreen &orderedScreen : std::as_const(screens)) {
         QPlatformScreen *s = orderedScreen.screen;
         QPoint virtualPos(0, 0);
         // set up a horizontal or vertical virtual desktop
@@ -1372,6 +1375,8 @@ QKmsScreenConfig::QKmsScreenConfig()
     , m_pbuffers(false)
     , m_virtualDesktopLayout(VirtualDesktopLayoutHorizontal)
 {
+    if (qEnvironmentVariableIntValue("QT_QPA_KMS_DISABLE_HWCURSOR"))
+        m_hwCursor = false;
 }
 
 void QKmsScreenConfig::refreshConfig()

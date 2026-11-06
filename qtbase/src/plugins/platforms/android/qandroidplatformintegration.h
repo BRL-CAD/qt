@@ -24,7 +24,6 @@
 QT_BEGIN_NAMESPACE
 
 class QAndroidPlatformServices;
-class QAndroidSystemLocale;
 class QPlatformAccessibility;
 
 struct AndroidStyle;
@@ -84,6 +83,10 @@ public:
 
 #ifndef QT_NO_CLIPBOARD
     QPlatformClipboard *clipboard() const override;
+#endif
+
+#if QT_CONFIG(draganddrop)
+    QPlatformDrag *drag() const override;
 #endif
 
     QPlatformInputContext *inputContext() const override;
@@ -147,7 +150,10 @@ private:
     QPlatformClipboard *m_androidPlatformClipboard;
 #endif
 
-    QAndroidSystemLocale *m_androidSystemLocale;
+#if QT_CONFIG(draganddrop)
+    QPlatformDrag *m_androidPlatformDrag = nullptr;
+#endif
+
 #if QT_CONFIG(accessibility)
     mutable QPlatformAccessibility *m_accessibility;
 #endif

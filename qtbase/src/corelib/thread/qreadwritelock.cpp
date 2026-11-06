@@ -28,15 +28,18 @@ QT_BEGIN_NAMESPACE
  *  - In any other case, d_ptr points to an actual QReadWriteLockPrivate.
  */
 
-using namespace QReadWriteLockStates;
-namespace {
+static auto dummyLockedForRead()
+{
+    return reinterpret_cast<QReadWriteLockPrivate *>(QReadWriteLockPrivate::StateLockedForRead);
+}
+static auto dummyLockedForWrite()
+{
+    return reinterpret_cast<QReadWriteLockPrivate *>(QReadWriteLockPrivate::StateLockedForWrite);
+}
 
-using steady_clock = std::chrono::steady_clock;
-
-const auto dummyLockedForRead = reinterpret_cast<QReadWriteLockPrivate *>(quintptr(StateLockedForRead));
-const auto dummyLockedForWrite = reinterpret_cast<QReadWriteLockPrivate *>(quintptr(StateLockedForWrite));
-inline bool isUncontendedLocked(const QReadWriteLockPrivate *d)
-{ return quintptr(d) & StateMask; }
+static inline bool isUncontendedLocked(const QReadWriteLockPrivate *d)
+{
+    return quintptr(d) & QReadWriteLockPrivate::StateMask;
 }
 
 /*! \class QReadWriteLock
@@ -106,7 +109,7 @@ inline bool isUncontendedLocked(const QReadWriteLockPrivate *d)
 
     \sa lockForRead(), lockForWrite(), RecursionMode
 */
-QReadWriteLockPrivate *QReadWriteLock::initRecursive()
+void *QReadWriteLock::initRecursiveHelper()
 {
     auto d = new QReadWriteLockPrivate(true);
     Q_ASSERT_X(!(quintptr(d) & StateMask), "QReadWriteLock::QReadWriteLock", "bad d_ptr alignment");
@@ -120,8 +123,9 @@ QReadWriteLockPrivate *QReadWriteLock::initRecursive()
     \warning Destroying a read-write lock that is in use may result
     in undefined behavior.
 */
-void QReadWriteLock::destroyRecursive(QReadWriteLockPrivate *d)
+void QReadWriteLock::destroyRecursiveHelper(void *dd) noexcept
 {
+    auto d = static_cast<QReadWriteLockPrivate *>(dd);
     if (isUncontendedLocked(d)) {
         qWarning("QReadWriteLock: destroying locked QReadWriteLock");
         return;
@@ -195,7 +199,7 @@ QBasicReadWriteLock::contendedTryLockForRead(QDeadlineTimer timeout, void *dd)
     while (true) {
         qYieldCpu();
         if (d == nullptr) {
-            if (fastTryLock(d_ptr, dummyLockedForRead, d))
+            if (fastTryLock(d_ptr, dummyLockedForRead(), d))
                 return true;
             continue;
         }
@@ -210,7 +214,7 @@ QBasicReadWriteLock::contendedTryLockForRead(QDeadlineTimer timeout, void *dd)
             return true;
         }
 
-        if (d == dummyLockedForWrite) {
+        if (d == dummyLockedForWrite()) {
             if (timeout.hasExpired())
                 return false;
 
@@ -234,14 +238,14 @@ QBasicReadWriteLock::contendedTryLockForRead(QDeadlineTimer timeout, void *dd)
             return d->recursiveLockForRead(timeout);
 
         auto lock = qt_unique_lock(d->mutex);
-        if (d != d_ptr.loadRelaxed()) {
+        if (QReadWriteLockPrivate *dd = d_ptr.loadAcquire(); d != dd) {
             // d_ptr has changed: this QReadWriteLock was unlocked before we had
             // time to lock d->mutex.
             // We are holding a lock to a mutex within a QReadWriteLockPrivate
             // that is already released (or even is already re-used). That's ok
             // because the QFreeList never frees them.
             // Just unlock d->mutex (at the end of the scope) and retry.
-            d = d_ptr.loadAcquire();
+            d = dd;
             continue;
         }
         return d->lockForRead(lock, timeout);
@@ -308,7 +312,7 @@ QBasicReadWriteLock::contendedTryLockForWrite(QDeadlineTimer timeout, void *dd)
     while (true) {
         qYieldCpu();
         if (d == nullptr) {
-            if (fastTryLock(d_ptr, dummyLockedForWrite, d))
+            if (fastTryLock(d_ptr, dummyLockedForWrite(), d))
                 return true;
             continue;
         }
@@ -319,7 +323,7 @@ QBasicReadWriteLock::contendedTryLockForWrite(QDeadlineTimer timeout, void *dd)
 
             // locked for either read or write, assign a d_ptr and wait.
             auto val = QReadWriteLockPrivate::allocate();
-            if (d == dummyLockedForWrite)
+            if (d == dummyLockedForWrite())
                 val->writerCount = 1;
             else
                 val->readerCount = (quintptr(d) >> 4) + 1;
@@ -340,11 +344,11 @@ QBasicReadWriteLock::contendedTryLockForWrite(QDeadlineTimer timeout, void *dd)
             return d->recursiveLockForWrite(timeout);
 
         auto lock = qt_unique_lock(d->mutex);
-        if (d != d_ptr.loadRelaxed()) {
+        if (QReadWriteLockPrivate *dd = d_ptr.loadAcquire(); d != dd) {
             // The mutex was unlocked before we had time to lock the mutex.
             // We are holding to a mutex within a QReadWriteLockPrivate that is already released
             // (or even is already re-used) but that's ok because the QFreeList never frees them.
-            d = d_ptr.loadAcquire();
+            d = dd;
             continue;
         }
         return d->lockForWrite(lock, timeout);
@@ -353,27 +357,17 @@ QBasicReadWriteLock::contendedTryLockForWrite(QDeadlineTimer timeout, void *dd)
 
 /*!
     \internal
-    \since 6.11
+    \since 6.12
 
-    Returns true if this QReadWriteLock is locked for reading. Can only be
-    called from unlock(), meaning the current thread must have it locked. This
-    is necessary for user code built with Thread Sanitizer, because it can't
-    tell from inline what type of lock a contended QReadWriteLock is locked
-    for.
-
+    Returns a flag mask describing this QReadWriteLock. This function is
+    necessary for user code built with Thread Sanitizer, because it can't tell
+    from inline what type of lock a contended QReadWriteLock is locked for.
     This function is always present in QtCore, whether it was compiled for TSan
     or not.
-
-    \sa unlock()
 */
-bool QBasicReadWriteLock::isContendedLockForRead(const void *dd)
+quintptr QBasicReadWriteLock::describeLockInternal(void *dd) noexcept
 {
-    auto d = static_cast<const QReadWriteLockPrivate *>(dd);
-    Q_ASSERT(d);
-    Q_ASSERT_X(!isUncontendedLocked(d), "QReadWriteLock::unlock", "Not in a contended or recursive lock");
-
-    // if there's a writer, then we're locked for writing
-    return d->writerCount == 0;
+    return QReadWriteLockPrivate::describeState(dd);
 }
 
 /*!
@@ -440,6 +434,7 @@ void QBasicReadWriteLock::contendedUnlock(void *dd)
 
 bool QReadWriteLockPrivate::lockForRead(std::unique_lock<std::mutex> &lock, QDeadlineTimer timeout)
 {
+    using std::chrono::steady_clock;
     Q_ASSERT(!mutex.try_lock()); // mutex must be locked when entering this function
 
     while (waitingWriters || writerCount) {
@@ -461,6 +456,7 @@ bool QReadWriteLockPrivate::lockForRead(std::unique_lock<std::mutex> &lock, QDea
 
 bool QReadWriteLockPrivate::lockForWrite(std::unique_lock<std::mutex> &lock, QDeadlineTimer timeout)
 {
+    using std::chrono::steady_clock;
     Q_ASSERT(!mutex.try_lock()); // mutex must be locked when entering this function
 
     while (readerCount || writerCount) {

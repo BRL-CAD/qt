@@ -26,6 +26,8 @@
 #include <QThread>
 #include <QMutex>
 #include <QWaitCondition>
+#include <QSemaphore>
+#include <QScopeGuard>
 #include <QScopedPointer>
 #if QT_CONFIG(process)
 # include <QProcess>
@@ -36,6 +38,7 @@
 #endif
 
 #include <functional>
+#include <thread>
 
 #include <math.h>
 
@@ -125,6 +128,11 @@ private slots:
     void connectManyArguments();
     void connectForwardDeclare();
     void connectNoDefaultConstructorArg();
+    void connectRegistersGadgetType();
+    void connectRegistersQEnumType();
+    void connectRegistersQObjectPointerType();
+    void connectRegistersQObjectConstPointerType();
+    void connectRegistersOtherType();
     void returnValue_data();
     void returnValue();
     void returnValue2_data();
@@ -161,6 +169,11 @@ private slots:
     void disconnectQueuedConnection_pendingEventsAreDelivered();
     void timerWithNegativeInterval();
     void emptyQueuedMetaCallEvent();
+
+    // Must stay last: on failure it detaches a deadlocked thread that keeps a
+    // signal/slot pool mutex held for the rest of the process, which could hang
+    // any later test whose QObject hashes to the same mutex slot.
+    void disconnectWarningDoesNotDeadlock();
 };
 
 struct QObjectCreatedOnShutdown
@@ -308,6 +321,10 @@ Q_SIGNALS:
 
 int ReceiverObject::sequence = 0;
 
+QT_WARNING_PUSH
+// checked stack use and deemed it acceptable
+QT_WARNING_DISABLE_LARGE_STACK_FRAME
+
 static void playWithObjects()
 {
     // Do operations that will lock the internal signalSlotLock mutex on many QObjects.
@@ -322,6 +339,8 @@ static void playWithObjects()
                          &lotsOfObjects[i], &SenderObject::aPublicSlot);
     }
 }
+
+QT_WARNING_POP
 
 void tst_QObject::disconnect()
 {
@@ -1878,7 +1897,15 @@ void tst_QObject::thread()
         // thread in which the object was created
         QCOMPARE(object->thread(), (QThread *)&thr);
         // children inherit their parent's thread
+        QCOMPARE(child->parent(), object);
         QCOMPARE(child->thread(), object->thread());
+
+        // thread affinity for a parent in a different thread should
+        // cause orphaning the object and printing a warning
+        QTest::ignoreMessage(QtWarningMsg, QRegularExpression("QObject: Cannot create children for a parent that is in a different thread.*"));
+        QObject localObject(object);
+        QCOMPARE(localObject.parent(), nullptr);
+        QCOMPARE(localObject.thread(), QThread::currentThread());
 
         thr.cond.wakeOne();
         thr.mutex.unlock();
@@ -1894,6 +1921,14 @@ void tst_QObject::thread()
     // automatically reset to no thread
     QCOMPARE(object->thread(), (QThread *)0);
     QCOMPARE(child->thread(), object->thread());
+
+    {
+        // and we *can* create a child for a threadless parent, which will
+        // also be threadless
+        QObject localObject(object);
+        QCOMPARE(localObject.parent(), object);
+        QCOMPARE(localObject.thread(), nullptr);
+    }
 
     delete object;
 }
@@ -3206,6 +3241,9 @@ void tst_QObject::recursiveSignalEmission()
 {
 #if !QT_CONFIG(process)
     QSKIP("No qprocess support");
+#elif defined(Q_OS_HARMONY)
+    // TODO: OHOS: Skip tests depending on external executables
+    QSKIP("Currently, OHOS platform cannot run test depending on external executables");
 #else
     QProcess proc;
     // signalbug helper app should always be next to this test binary
@@ -5820,6 +5858,96 @@ void tst_QObject::connectNoDefaultConstructorArg()
     NoDefaultContructorArguments ob;
     // it should compile
     QVERIFY(connect(&ob, &NoDefaultContructorArguments::mySignal, &ob, &NoDefaultContructorArguments::mySlot, Qt::QueuedConnection));
+}
+
+struct GadgetForMetaTypeRegistration
+{
+    Q_GADGET
+};
+class OtherClassForMetaTypeRegistration : public QObject
+{
+    Q_OBJECT
+};
+class ClassForMetaTypeRegistration : public QObject
+{
+    Q_OBJECT
+public:
+    struct OtherType {};    // plain type
+    enum MyEnum {};
+    Q_ENUM(MyEnum)
+signals:
+    void signalOtherType(OtherType);
+    void signalGadgetType(GadgetForMetaTypeRegistration);
+    void signalQEnumType(MyEnum);
+    void signalQObjectPointerType(ClassForMetaTypeRegistration *);
+    void signalQObjectConstPointerType(const OtherClassForMetaTypeRegistration *);
+public slots:
+    void slot() { receivedSignalIdx = senderSignalIndex(); QTestEventLoop::instance().exitLoop(); }
+
+public:
+    int receivedSignalIdx = -1;
+
+    template <typename T> static q20::type_identity<T>
+    extractParameterFromSignal(void (ClassForMetaTypeRegistration::*)(T));
+    template <auto Signal> using ParameterFromSignal =
+        typename decltype(extractParameterFromSignal(Signal))::type;
+};
+
+template <auto Signal> static void connectRegistersType()
+{
+    static bool alreadyRunOnce = false;
+    if (alreadyRunOnce)
+        QSKIP("Test can only be run once (type gets registered)");
+
+    // extract the signal parameter type
+    using ParameterType = ClassForMetaTypeRegistration::ParameterFromSignal<Signal>;
+
+    // verify it's not registered
+    constexpr QMetaType mt = QMetaType::fromType<ParameterType>();
+    QVERIFY(!mt.isRegistered());
+    QVERIFY(!QMetaType::fromName(mt.name()).isValid());
+
+    // connect; this should register
+    ClassForMetaTypeRegistration obj;
+    QMetaObject::Connection conn =
+            QObject::connect(&obj, Signal, &obj, &ClassForMetaTypeRegistration::slot,
+                             Qt::QueuedConnection);
+    alreadyRunOnce = true;
+    QVERIFY(conn);
+    QVERIFY(QMetaType::fromName(mt.name()).isValid());
+
+    emit (obj.*Signal)(ParameterType{});
+    QTestEventLoop::instance().enterLoop(1);
+    QVERIFY(!QTestEventLoop::instance().timeout());
+
+    // sanity check that the signal was emitted properly and the slot was run
+    QMetaMethod mm = QMetaMethod::fromSignal(Signal);
+    QCOMPARE(obj.receivedSignalIdx, mm.methodIndex());
+}
+
+void tst_QObject::connectRegistersGadgetType()
+{
+    connectRegistersType<&ClassForMetaTypeRegistration::signalGadgetType>();
+}
+
+void tst_QObject::connectRegistersQEnumType()
+{
+    connectRegistersType<&ClassForMetaTypeRegistration::signalQEnumType>();
+}
+
+void tst_QObject::connectRegistersQObjectPointerType()
+{
+    connectRegistersType<&ClassForMetaTypeRegistration::signalQObjectPointerType>();
+}
+
+void tst_QObject::connectRegistersQObjectConstPointerType()
+{
+    connectRegistersType<&ClassForMetaTypeRegistration::signalQObjectConstPointerType>();
+}
+
+void tst_QObject::connectRegistersOtherType()
+{
+    connectRegistersType<&ClassForMetaTypeRegistration::signalOtherType>();
 }
 
 struct MoveOnly
@@ -9121,6 +9249,56 @@ void tst_QObject::emptyQueuedMetaCallEvent()
 #else
     QSKIP("Needs QT_BUILD_INTERNAL");
 #endif
+}
+
+void tst_QObject::disconnectWarningDoesNotDeadlock()
+{
+    // QTBUG-145216: a wildcard disconnect of an object connected to destroyed()
+    // warns; if qWarning() emits that while holding the signal/slot lock, a
+    // message handler that re-enters connect() can deadlock on the same lock.
+    // Run it on a worker thread and fail (rather than hang) if it does not
+    // finish in time.
+
+    // s_target is a function-local static, so the message handler below stays
+    // captureless and converts to a plain QtMessageHandler function pointer.
+    static QObject *s_target = nullptr;
+    const auto reentrantHandler = +[](QtMsgType, const QMessageLogContext &,
+                                      const QString &msg) {
+        if (s_target && msg.contains("wildcard call disconnects"_L1)) {
+            // Re-enter the connect machinery on the object currently being
+            // disconnected: this needs the same signal/slot mutex disconnect()
+            // is holding in the buggy code, deadlocking the thread.
+            QObject::connect(s_target, &QObject::destroyed, []{});
+        }
+    };
+
+    using namespace std::chrono_literals;
+
+    QtMessageHandler oldHandler = qInstallMessageHandler(reentrantHandler);
+    const auto handlerGuard = qScopeGuard([oldHandler] { qInstallMessageHandler(oldHandler); });
+
+    QSemaphore finished;
+    std::thread worker([&finished] {
+        QObject sender;
+        s_target = &sender;
+        // Connect destroyed() so the wildcard disconnect takes the warning path.
+        QObject::connect(&sender, &QObject::destroyed, []{});
+        sender.disconnect();
+        s_target = nullptr;
+        finished.release();
+    });
+
+    const bool completed = finished.tryAcquire(1, 30s);
+    if (completed) {
+        worker.join();
+    } else {
+        // The worker is wedged inside the deadlock; abandon it so this test can
+        // report a failure instead of hanging the process.
+        worker.detach();
+    }
+
+    QVERIFY2(completed, "QObject::disconnect() deadlocked while emitting the "
+                        "destroyed() wildcard-disconnect warning (QTBUG-145216)");
 }
 
 QTEST_MAIN(tst_QObject)

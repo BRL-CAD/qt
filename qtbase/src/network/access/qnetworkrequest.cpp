@@ -305,8 +305,16 @@ QT_IMPL_METATYPE_EXTERN_TAGGED(QNetworkRequest::RedirectPolicy, QNetworkRequest_
 
     \value ConnectionCacheExpiryTimeoutSecondsAttribute
         Requests only, type: QMetaType::Int
-        To set when the TCP connections to a server (HTTP1 and HTTP2) should
-        be closed after the last pending request had been processed.
+        Controls when the TCP connections to a server (HTTP1 and HTTP2)
+        should be closed after the last pending request had been processed.
+        If not set, the default timeout of 120 seconds is used.
+        Setting this to a negative value (e.g. -1) disables connection
+        caching for this request: the connection will not be stored in
+        or retrieved from the cache, and will be closed immediately
+        after the request completes.
+        Setting this to 0 means the connection is shared while in use
+        but freed as soon as there is nothing in queue.
+        A positive value specifies a custom expiry timeout in seconds.
         (This value was introduced in 6.3.)
 
     \value Http2CleartextAllowedAttribute
@@ -1035,6 +1043,15 @@ qint64 QNetworkRequest::decompressedSafetyCheckThreshold() const
     is unreasonably large (40:1 for GZip and Deflate, or 100:1 for Brotli and
     ZStandard), the reply will be treated as an error. Setting the threshold
     to \c{-1} disables this check.
+
+    \note This check only detects responses with unusually high compression
+    ratios. It does not impose an absolute limit on the total decompressed
+    output size. A response that maintains a moderate compression ratio (for
+    example, 39:1 for GZip) can decompress to an arbitrarily large size
+    without triggering the check. Applications communicating with untrusted
+    servers should monitor QNetworkReply::bytesAvailable() or
+    QNetworkReply::downloadProgress() and abort transfers that exceed an
+    acceptable size.
 
     \sa decompressedSafetyCheckThreshold()
 */

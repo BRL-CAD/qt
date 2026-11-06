@@ -258,6 +258,7 @@ write_basic_package_version_file(
 qt_internal_write_qt_package_version_file(
     "${INSTALL_CMAKE_NAMESPACE}"
     "${__GlobalConfig_build_dir}/${INSTALL_CMAKE_NAMESPACE}ConfigVersion.cmake"
+    ALLOW_OVERRIDE_FILES
 )
 
 # Compute the reverse relative path from QtConfig.cmake to the install prefix
@@ -305,18 +306,32 @@ qt_copy_or_install(FILES
                    ${__private_files}
     DESTINATION "${__GlobalConfig_install_dir}"
 )
+if(QT_WILL_INSTALL)
+    foreach(_private_file ${__private_files})
+        file(COPY "${_private_file}" DESTINATION "${__GlobalConfig_build_dir}")
+    endforeach()
+endif()
 
 # Install our custom platform modules.
 qt_copy_or_install(DIRECTORY cmake/platforms
     DESTINATION "${__GlobalConfig_install_dir}"
 )
+if(QT_WILL_INSTALL)
+    file(COPY "cmake/platforms" DESTINATION "${__GlobalConfig_build_dir}")
+endif()
 
 # Install public config.tests files.
-qt_copy_or_install(DIRECTORY
+set(__qt_internal_public_config_tests
     "config.tests/static_link_order"
     "config.tests/binary_for_strip"
+)
+qt_copy_or_install(DIRECTORY ${__qt_internal_public_config_tests}
     DESTINATION "${__GlobalConfig_install_dir}/config.tests"
 )
+if(QT_WILL_INSTALL)
+    file(COPY ${__qt_internal_public_config_tests}
+        DESTINATION "${__GlobalConfig_build_dir}")
+endif()
 
 # Install qt-internal-strip and qt-internal-ninja files.
 set(__qt_internal_strip_wrapper_programs
@@ -454,6 +469,13 @@ if(APPLE)
             DESTINATION "${__GlobalConfig_build_dir}/ios"
         )
     endif()
+elseif(ANDROID)
+    qt_copy_or_install(FILES "cmake/android/qt-android-init.gradle"
+        DESTINATION "${__GlobalConfig_install_dir}/android"
+    )
+    file(COPY "cmake/android/qt-android-init.gradle"
+        DESTINATION "${__GlobalConfig_build_dir}/android"
+    )
 elseif(WASM)
     configure_file("${CMAKE_CURRENT_SOURCE_DIR}/util/wasm/wasmtestrunner/qt-wasmtestrunner.py"
         "${QT_BUILD_DIR}/${INSTALL_LIBEXECDIR}/qt-wasmtestrunner.py" @ONLY)

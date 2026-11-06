@@ -55,8 +55,6 @@ qt_internal_add_plugin(QCocoaIntegrationPlugin
         qcocoafiledialoghelper.h qcocoafiledialoghelper.mm
         qcocoafontdialoghelper.h qcocoafontdialoghelper.mm
         qcocoamessagedialog.h qcocoamessagedialog.mm
-    DEFINES
-        QT_NO_FOREACH
     PRECOMPILED_HEADER
         $<$<COMPILE_LANGUAGE:OBJCXX>:qcocoa_plugin_pch.h>
     LIBRARIES
@@ -70,6 +68,7 @@ qt_internal_add_plugin(QCocoaIntegrationPlugin
         ${FWMetal}
         ${FWQuartzCore}
         ${FWUniformTypeIdentifiers}
+        ${FWScreenCaptureKit}
         Qt::Core
         Qt::CorePrivate
         Qt::Gui
@@ -107,11 +106,6 @@ qt_internal_add_resource(QCocoaIntegrationPlugin "qcocoaresources"
     FILES
         ${qcocoaresources_resource_files}
 )
-
-if(CMAKE_OSX_DEPLOYMENT_TARGET VERSION_GREATER_EQUAL 15.0)
-    message(FATAL_ERROR "QCocoaScreen uses APIs removed in 15.0. Please specify a
-        CMAKE_OSX_DEPLOYMENT_TARGET of 14.0 or lower")
-endif()
 
 ## Scopes:
 #####################################################################

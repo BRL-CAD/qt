@@ -2408,22 +2408,6 @@ void QMenuPrivate::popup(const QPoint &p, QAction *atAction, PositionFunction po
         adjustToDesktop = true;
     }
 
-#ifdef QT_KEYPAD_NAVIGATION
-    if (!atAction && QApplicationPrivate::keypadNavigationEnabled()) {
-        // Try to have one item activated
-        if (defaultAction && defaultAction->isEnabled()) {
-            atAction = defaultAction;
-            // TODO: This works for first level menus, not yet sub menus
-        } else {
-            for (QAction *action : std::as_const(actions))
-                if (action->isEnabled()) {
-                    atAction = action;
-                    break;
-                }
-        }
-        currentAction = atAction;
-    }
-#endif
     if (ncols > 1) {
         pos.setY(screen.top() + desktopFrame);
     } else if (atAction) {
@@ -2974,6 +2958,9 @@ void QMenu::mouseReleaseEvent(QMouseEvent *e)
 
     QAction *action = d->actionAt(e->position().toPoint());
     if (action && action == d->currentAction) {
+        // The widget style may need to repaint the action without the sunken state.
+        update(d->actionRect(action));
+
         if (!action->menu()) {
 #if defined(Q_OS_WIN)
             //On Windows only context menus can be activated with the right button
@@ -3132,7 +3119,7 @@ void QMenu::keyPressEvent(QKeyEvent *e)
         else if (key == Qt::Key_Right)
             key = Qt::Key_Left;
     }
-#ifndef Q_OS_MAC
+#ifndef Q_OS_APPLE
     if (key == Qt::Key_Tab) //means down
         key = Qt::Key_Down;
     if (key == Qt::Key_Backtab) //means up
@@ -3326,9 +3313,6 @@ void QMenu::keyPressEvent(QKeyEvent *e)
             break;
         // for motif, fall through
         Q_FALLTHROUGH();
-#ifdef QT_KEYPAD_NAVIGATION
-    case Qt::Key_Select:
-#endif
     case Qt::Key_Return:
     case Qt::Key_Enter: {
         if (!d->currentAction) {
@@ -3362,9 +3346,6 @@ void QMenu::keyPressEvent(QKeyEvent *e)
         false
 #ifndef QT_NO_SHORTCUT
         || e->matches(QKeySequence::Cancel)
-#endif
-#ifdef QT_KEYPAD_NAVIGATION
-        || e->key() == Qt::Key_Back
 #endif
     )) {
         key_consumed = true;

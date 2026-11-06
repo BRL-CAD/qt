@@ -134,6 +134,7 @@ private slots:
     void placeholderVisibility();
     void scrollBarSignals();
     void dontCrashWithCss();
+    void consistentLogicalCursorMoves();
 
 private:
     void createSelection();
@@ -244,14 +245,14 @@ void tst_QPlainTextEdit::createSelection()
 {
     QTest::keyClicks(ed, "Hello World");
     /* go to start */
-#ifndef Q_OS_MAC
+#ifndef Q_OS_MACOS
     QTest::keyClick(ed, Qt::Key_Home, Qt::ControlModifier);
 #else
     QTest::keyClick(ed, Qt::Key_Home);
 #endif
     QCOMPARE(ed->textCursor().position(), 0);
     /* select until end of text */
-#ifndef Q_OS_MAC
+#ifndef Q_OS_MACOS
     QTest::keyClick(ed, Qt::Key_End, Qt::ControlModifier | Qt::ShiftModifier);
 #else
     QTest::keyClick(ed, Qt::Key_End, Qt::ShiftModifier);
@@ -263,9 +264,6 @@ void tst_QPlainTextEdit::clearMustNotChangeClipboard()
 {
     if (!PlatformClipboard::isAvailable())
         QSKIP("Clipboard not working with cron-started unit tests");
-
-    if (QGuiApplication::platformName().startsWith(QLatin1String("wayland"), Qt::CaseInsensitive))
-        QSKIP("Wayland: This fails. Figure out why.");
 
     ed->textCursor().insertText("Hello World");
     QString txt("This is different text");
@@ -445,9 +443,6 @@ void tst_QPlainTextEdit::undoAvailableAfterPaste()
     if (!PlatformClipboard::isAvailable())
         QSKIP("Clipboard not working with cron-started unit tests");
 
-    if (QGuiApplication::platformName().startsWith(QLatin1String("wayland"), Qt::CaseInsensitive))
-        QSKIP("Wayland: This fails. Figure out why.");
-
     QSignalSpy spy(ed->document(), SIGNAL(undoAvailable(bool)));
 
     const QString txt("Test");
@@ -621,17 +616,17 @@ void tst_QPlainTextEdit::preserveCharFormatInAppend()
 
     cursor.movePosition(QTextCursor::Start);
     cursor.movePosition(QTextCursor::NextCharacter);
-    QCOMPARE(cursor.charFormat().fontWeight(), (int)QFont::Normal);
+    QCOMPARE(cursor.charFormat().fontWeight(), QFont::Normal);
     QCOMPARE(cursor.block().text(), QString("First para"));
 
     cursor.movePosition(QTextCursor::NextBlock);
     cursor.movePosition(QTextCursor::NextCharacter);
-    QCOMPARE(cursor.charFormat().fontWeight(), (int)QFont::Bold);
+    QCOMPARE(cursor.charFormat().fontWeight(), QFont::Bold);
     QCOMPARE(cursor.block().text(), QString("Second para"));
 
     cursor.movePosition(QTextCursor::NextBlock);
     cursor.movePosition(QTextCursor::NextCharacter);
-    QCOMPARE(cursor.charFormat().fontWeight(), (int)QFont::Normal);
+    QCOMPARE(cursor.charFormat().fontWeight(), QFont::Normal);
     QCOMPARE(cursor.block().text(), QString("third para"));
 }
 
@@ -640,9 +635,6 @@ void tst_QPlainTextEdit::copyAndSelectAllInReadonly()
 {
     if (!PlatformClipboard::isAvailable())
         QSKIP("Clipboard not working with cron-started unit tests");
-
-    if (QGuiApplication::platformName().startsWith(QLatin1String("wayland"), Qt::CaseInsensitive))
-        QSKIP("Wayland: This fails. Figure out why.");
 
     ed->setReadOnly(true);
     ed->setPlainText("Hello World");
@@ -1009,7 +1001,7 @@ void tst_QPlainTextEdit::copyAvailable()
     QFETCH(QList<bool>, copyAvailable);
     QFETCH(QString, function);
 
-#ifdef Q_OS_MAC
+#ifdef Q_OS_MACOS
     QSKIP("QTBUG-22283: copyAvailable has never passed on Mac");
 #endif
     ed->clear();
@@ -1199,9 +1191,6 @@ void tst_QPlainTextEdit::canPaste()
 {
     if (!PlatformClipboard::isAvailable())
         QSKIP("Clipboard not working with cron-started unit tests");
-
-    if (QGuiApplication::platformName().startsWith(QLatin1String("wayland"), Qt::CaseInsensitive))
-        QSKIP("Wayland: This fails. Figure out why.");
 
     QApplication::clipboard()->setText(QString());
     QVERIFY(!ed->canPaste());
@@ -1933,9 +1922,8 @@ void tst_QPlainTextEdit::placeholderVisibility()
 void tst_QPlainTextEdit::scrollBarSignals()
 {
     QPlainTextEdit plainTextEdit;
-    QString longText;
-    for (uint i = 0; i < 500; ++i)
-        longText += "This is going to be a very long text for scroll signal testing.\n";
+    const auto text = QLatin1StringView("This is going to be a very long text for scroll signal testing.\n");
+    QString longText = QString(text).repeated(500);
     plainTextEdit.setPlainText(longText);
     QScrollBar *vbar = plainTextEdit.verticalScrollBar();
     plainTextEdit.show();
@@ -1962,6 +1950,42 @@ void tst_QPlainTextEdit::dontCrashWithCss()
     qApp->setStyleSheet(QString());
 }
 
+void tst_QPlainTextEdit::consistentLogicalCursorMoves()
+{
+    QPlainTextEdit plainTextEdit;
+    QTextDocument *document = plainTextEdit.document();
+    document->setDefaultCursorMoveStyle(Qt::LogicalMoveStyle);
+
+    QTextOption option = document->defaultTextOption();
+    option.setTextDirection(Qt::RightToLeft);
+    document->setDefaultTextOption(option);
+
+    // Red herring: QPlainTextDocumentLayout doesn't respect this format
+    // property, this test ensures that it doesn't break cursor movements.
+    QTextBlockFormat format;
+    format.setLayoutDirection(Qt::LeftToRight);
+
+    QTextCursor cursor = plainTextEdit.textCursor();
+    cursor.setBlockFormat(format);
+    cursor.insertText("ABC DEF");
+
+    QCOMPARE(document->firstBlock().textDirection(), Qt::LeftToRight);
+    QCOMPARE(document->firstBlock().layout()->textOption().textDirection(), Qt::RightToLeft);
+
+    cursor.setPosition(2);
+
+    cursor.movePosition(QTextCursor::Right);
+    QCOMPARE(cursor.position(), 1);
+
+    cursor.movePosition(QTextCursor::Left);
+    QCOMPARE(cursor.position(), 2);
+
+    cursor.movePosition(QTextCursor::WordRight);
+    QCOMPARE(cursor.position(), 0);
+
+    cursor.movePosition(QTextCursor::WordLeft);
+    QCOMPARE(cursor.position(), 4);
+}
 
 QTEST_MAIN(tst_QPlainTextEdit)
 #include "tst_qplaintextedit.moc"

@@ -23,7 +23,7 @@ namespace QtJniTypes
 
 namespace Detail
 {
-static inline jstring fromQString(const QString &string, JNIEnv *env)
+static inline jstring fromQString(QStringView string, JNIEnv *env)
 {
     if (!q20::in_range<jsize>(string.size()))
         qWarning("String is too large for a Java string and will be truncated");
@@ -33,7 +33,8 @@ static inline jstring fromQString(const QString &string, JNIEnv *env)
 
 static inline QString toQString(jstring string, JNIEnv *env)
 {
-    Q_ASSERT(string);
+    if (!string)
+        return QString();
     const jsize length = env->GetStringLength(string);
     QString res(length, Qt::Uninitialized);
     env->GetStringRegion(string, 0, length, reinterpret_cast<jchar *>(res.data_ptr().data()));

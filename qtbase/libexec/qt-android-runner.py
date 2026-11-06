@@ -2,14 +2,15 @@
 # Copyright (C) 2024 The Qt Company Ltd.
 # SPDX-License-Identifier: LicenseRef-Qt-Commercial OR GPL-3.0-only WITH Qt-GPL-exception-1.0
 
+import atexit
 import os
+import shlex
 import subprocess
 import sys
-import base64
 import time
 import signal
 import argparse
-import re
+import tempfile
 import xml.etree.ElementTree as ET
 
 def status(msg):
@@ -24,7 +25,7 @@ def die(msg):
 
 # Define and parse arguments
 parser = argparse.ArgumentParser(description="Qt for Android app runner.",
-                                 epilog=f'''
+                                 epilog='''
 This is a helper script to run Qt for Android apps directly from the terminal.
 It supports starting apps with parameters and forwards environment variables to
 the device. It prints live logcat messages as the app is running. The script exits
@@ -72,13 +73,17 @@ try:
     if not devices:
         die("No devices are connected.")
 
-    if args.serial and not args.serial in devices:
+    if args.serial and args.serial not in devices:
         die("No connected devices with the specified serial number.")
 except Exception as e:
     die(f"Failed to check for running devices, received error: {e}")
 
+# Keep both forms: adb_argv for subprocess.run(list) calls below, and a
+# shlex-joined string so the existing f-string shell=True usages still work.
+adb_argv = [adb]
 if args.serial:
-    adb = f"{adb} -s {args.serial}"
+    adb_argv += ["-s", args.serial]
+adb = shlex.join(adb_argv)
 
 if args.build_path is None:
     die("App build path is not provided")
@@ -105,61 +110,84 @@ def find_launcher_activity(root):
                 return activity.get(android_name_attr)
     return None
 
-def get_manifest_app_details(manifest_file):
+
+def get_manifest_activity(manifest_file):
     try:
         if not os.path.isfile(manifest_file):
-            return None, None
+            return None
 
         tree = ET.parse(manifest_file)
         root = tree.getroot()
-        package_name = root.get("package")
-        activity_name = find_launcher_activity(root)
-
-        if activity_name and activity_name.startswith('.') and package_name:
-            activity_name = package_name + activity_name
-
-        return package_name, activity_name
+        return find_launcher_activity(root)
     except Exception as e:
         error(f"Failed to parse AndroidManifest.xml, received error: {e}")
-        return None, None
+        return None
 
-def get_package_from_gradle(build_path):
+gradle_init_script_path = None
+
+def gradle_init_script():
+    """Return path to a reusable Gradle init-script for property queries. Created once."""
+    global gradle_init_script_path
+    if gradle_init_script_path and os.path.isfile(gradle_init_script_path):
+        return gradle_init_script_path
+
+    fd, path = tempfile.mkstemp(suffix=".gradle")
+    with os.fdopen(fd, 'w') as f:
+        f.write(
+            'gradle.projectsEvaluated {\n'
+            '    def prop = gradle.rootProject.findProperty("property")\n'
+            '    def target = gradle.rootProject.findProject(":app") ?: gradle.rootProject\n'
+            '    for (part in prop.tokenize(".")) {\n'
+            '        target = target."${part}"\n'
+            '    }\n'
+            '    println target\n'
+            '}\n'
+            'rootProject { tasks.register("printProjectProperty") }\n'
+        )
+    atexit.register(lambda: os.path.exists(path) and os.unlink(path))
+    gradle_init_script_path = path
+    return path
+
+# Query a Gradle project's property using dot-separated path notation e.g. "android.namespace".
+def get_gradle_project_property(build_path, property_path):
+    gradlew_name = "gradlew.bat" if sys.platform == "win32" else "gradlew"
+    gradlew = os.path.join(build_path, gradlew_name)
+    if not os.path.isfile(gradlew):
+        # Look at the parent dir in multi-module Gradle layout
+        gradlew = os.path.join(build_path, os.pardir, gradlew_name)
+    if not os.path.isfile(gradlew):
+        return None
+
+    script_path = gradle_init_script()
+    if not script_path:
+        return None
+
     try:
-        # Check build.gradle for namespace
-        gradle_file = os.path.join(build_path, "build.gradle")
-        if os.path.isfile(gradle_file):
-            with open(gradle_file) as f:
-                for line in f:
-                    if line.strip().startswith("namespace"):
-                        # Match the following cases:
-                        #   namespace "org.qtproject.example.app"
-                        #   namespace 'org.qtproject.example.app'
-                        #   namespace = "org.qtproject.example.app"
-                        #   namespace = 'org.qtproject.example.app'
-                        match = re.search(r"namespace\s*=?\s*['\"]([^'\"]+)['\"]", line)
-                        if match:
-                            potential_package_name = match.group(1)
-                            if potential_package_name != "androidPackageName":
-                                return potential_package_name
-
-        # Check gradle.properties for androidPackageName
-        properties_file = os.path.join(build_path, "gradle.properties")
-        if os.path.isfile(properties_file):
-            with open(properties_file) as f:
-                for line in f:
-                    if line.startswith("androidPackageName="):
-                        return line.split('=')[1].strip()
+        gradle_root = os.path.dirname(gradlew)
+        property_arg = f"-Pproperty={property_path}"
+        result = subprocess.run(
+            [gradlew, "-q", "--init-script", script_path, property_arg, "printProjectProperty"],
+            cwd=gradle_root, capture_output=True, text=True, timeout=30
+        )
+        value = result.stdout.strip()
+        return value if value else None
     except Exception as e:
-        error(f"Failed to retrieve the app's package name, received error: {e}")
-
-    return None
+        error(f"Failed to query Gradle property '{property_path}', received error: {e}")
+        return None
 
 def get_app_details(build_path):
-    manifest_file = os.path.join(build_path, "AndroidManifest.xml")
-    package_name, activity_name = get_manifest_app_details(manifest_file)
+    # Get package name from Gradle
+    package_name = get_gradle_project_property(build_path, "android.namespace")
 
-    if not package_name:
-        package_name = get_package_from_gradle(build_path)
+    # Get activity from the manifest (try root level, then app/ subdir)
+    activity_name = get_manifest_activity(os.path.join(build_path, "AndroidManifest.xml"))
+    if not activity_name:
+        activity_name = get_manifest_activity(
+            os.path.join(build_path, "app", "AndroidManifest.xml"))
+
+    # Resolve relative activity name
+    if activity_name and activity_name.startswith('.') and package_name:
+        activity_name = package_name + activity_name
 
     return package_name, activity_name
 
@@ -171,16 +199,23 @@ if not package_name:
 if not activity_name:
     die("Failed to retrieve the main activity name of the app")
 
-start_cmd = f"{adb} shell am start -n {package_name}/{activity_name}"
+start_cmd = [*adb_argv, "shell", "am", "start", "-n", f"{package_name}/{activity_name}"]
 
-# Get environment variables
-env_vars = " ".join(f"{key}={value}" for key, value in os.environ.items())
-encoded_env_vars = base64.b64encode(env_vars.encode()).decode()
-start_cmd += f" -e extraenvvars \"{encoded_env_vars}\""
+# On Windows the am-start cmdline length is limited, so forward only Qt/test env vars there.
+# TODO: allow explicit filtering of which env vars to forward (e.g. a regex flag).
+if sys.platform == "win32":
+    env_items = [(key, value) for key, value in os.environ.items()
+                 if key.startswith("QT_") or key.startswith("QTEST_")]
+else:
+    env_items = list(os.environ.items())
+
+# Send each var as its own extra so values with spaces survive intact.
+for key, value in env_items:
+    start_cmd += ["-e", f"extraenvvars_{key}", shlex.quote(value)]
 
 # Get app arguments
 if remaining_args:
-    start_cmd += f" -e applicationArguments \"{' '.join(remaining_args)}\""
+    start_cmd += ["-e", "applicationArguments", shlex.quote(' '.join(remaining_args))]
 
 # Get formatted time from device
 start_timestamp = ""
@@ -191,7 +226,7 @@ except Exception as e:
     die(f"Failed to get formatted time from the device, received error: {e}")
 
 try:
-    subprocess.run(start_cmd, check=True, shell=True)
+    subprocess.run(start_cmd, check=True)
 except Exception as e:
     die(f"Failed to start the app {package_name}, received error: {e}")
 
@@ -221,7 +256,7 @@ def terminate_app(signum, frame):
 signal.signal(signal.SIGINT, terminate_app)
 
 # Show app's logs
-logcat_process = None;
+logcat_process = None
 try:
     format_arg = "-v brief -v color"
     time_arg = f"-T '{start_timestamp}'"

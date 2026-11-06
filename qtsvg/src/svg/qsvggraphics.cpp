@@ -29,6 +29,9 @@ Q_LOGGING_CATEGORY(lcSvgDraw, "qt.svg.draw")
 #define QT_SVG_MAX_LAYOUT_SIZE (qint64(QFIXED_MAX / 2))
 #endif
 
+QSvgDummyNode::~QSvgDummyNode()
+    = default;
+
 void QSvgDummyNode::drawCommand(QPainter *, QSvgExtraStates &)
 {
     qWarning("Dummy node not meant to be drawn");
@@ -38,6 +41,9 @@ QSvgEllipse::QSvgEllipse(QSvgNode *parent, const QRectF &rect)
     : QSvgNode(parent), m_bounds(rect)
 {
 }
+
+QSvgEllipse::~QSvgEllipse()
+    = default;
 
 QRectF QSvgEllipse::internalFastBounds(QPainter *p, QSvgExtraStates &) const
 {
@@ -53,14 +59,14 @@ QRectF QSvgEllipse::internalBounds(QPainter *p, QSvgExtraStates &) const
                             : boundsOnStroke(p, path, sw, BoundsMode::Simplistic);
 }
 
-QRectF QSvgEllipse::decoratedInternalBounds(QPainter *p, QSvgExtraStates &) const
+QRectF QSvgEllipse::decoratedInternalBounds(QPainter *p, QSvgExtraStates &s) const
 {
     QPainterPath path;
     path.addEllipse(m_bounds);
     qreal sw = strokeWidth(p);
     QRectF rect = qFuzzyIsNull(sw) ? p->transform().map(path).boundingRect()
                                    : boundsOnStroke(p, path, sw, BoundsMode::IncludeMiterLimit);
-    return filterRegion(rect);
+    return filterRegion(s.doc(), rect);
 }
 
 void QSvgEllipse::drawCommand(QPainter *p, QSvgExtraStates &)
@@ -88,6 +94,9 @@ QSvgImage::QSvgImage(QSvgNode *parent,
         m_bounds.setHeight(static_cast<qreal>(m_image.height()));
 }
 
+QSvgImage::~QSvgImage()
+    = default;
+
 void QSvgImage::drawCommand(QPainter *p, QSvgExtraStates &)
 {
     p->drawImage(m_bounds, m_image);
@@ -97,6 +106,9 @@ QSvgLine::QSvgLine(QSvgNode *parent, const QLineF &line)
     : QSvgNode(parent), m_line(line)
 {
 }
+
+QSvgLine::~QSvgLine()
+    = default;
 
 void QSvgLine::drawCommand(QPainter *p, QSvgExtraStates &states)
 {
@@ -116,6 +128,9 @@ QSvgPath::QSvgPath(QSvgNode *parent, const QPainterPath &qpath)
     : QSvgNode(parent), m_path(qpath)
 {
 }
+
+QSvgPath::~QSvgPath()
+    = default;
 
 void QSvgPath::drawCommand(QPainter *p, QSvgExtraStates &states)
 {
@@ -158,7 +173,7 @@ QRectF QSvgPath::decoratedInternalBounds(QPainter *p, QSvgExtraStates &s) const
     QRectF rect = qFuzzyIsNull(sw) ? p->transform().map(m_path).boundingRect()
                                    : boundsOnStroke(p, m_path, sw, BoundsMode::IncludeMiterLimit);
     rect |= QSvgMarker::markersBoundsForNode(this, p, s);
-    return filterRegion(rect);
+    return filterRegion(s.doc(), rect);
 }
 
 bool QSvgPath::requiresGroupRendering() const
@@ -170,6 +185,9 @@ QSvgPolygon::QSvgPolygon(QSvgNode *parent, const QPolygonF &poly)
     : QSvgNode(parent), m_poly(poly)
 {
 }
+
+QSvgPolygon::~QSvgPolygon()
+    = default;
 
 QRectF QSvgPolygon::internalFastBounds(QPainter *p, QSvgExtraStates &) const
 {
@@ -185,7 +203,7 @@ QRectF QSvgPolygon::decoratedInternalBounds(QPainter *p, QSvgExtraStates &s) con
 {
     QRectF rect = internalBounds(p, s, BoundsMode::IncludeMiterLimit);
     rect |= QSvgMarker::markersBoundsForNode(this, p, s);
-    return filterRegion(rect);
+    return filterRegion(s.doc(), rect);
 }
 
 bool QSvgPolygon::requiresGroupRendering() const
@@ -225,6 +243,9 @@ QSvgPolyline::QSvgPolyline(QSvgNode *parent, const QPolygonF &poly)
 
 }
 
+QSvgPolyline::~QSvgPolyline()
+    = default;
+
 void QSvgPolyline::drawCommand(QPainter *p, QSvgExtraStates &states)
 {
     if (p->brush().style() != Qt::NoBrush) {
@@ -249,6 +270,9 @@ QSvgRect::QSvgRect(QSvgNode *node, const QRectF &rect, qreal rx, qreal ry)
 {
 }
 
+QSvgRect::~QSvgRect()
+    = default;
+
 QRectF QSvgRect::internalFastBounds(QPainter *p, QSvgExtraStates &) const
 {
     return p->transform().mapRect(m_rect);
@@ -261,7 +285,7 @@ QRectF QSvgRect::internalBounds(QPainter *p, QSvgExtraStates &s) const
 
 QRectF QSvgRect::decoratedInternalBounds(QPainter *p, QSvgExtraStates &s) const
 {
-    return filterRegion(internalBounds(p, s, BoundsMode::IncludeMiterLimit));
+    return filterRegion(s.doc(), internalBounds(p, s, BoundsMode::IncludeMiterLimit));
 }
 
 QRectF QSvgRect::internalBounds(QPainter *p, QSvgExtraStates &, BoundsMode mode) const
@@ -316,7 +340,8 @@ void QSvgText::setTextArea(const QSizeF &size)
 
 QRectF QSvgText::internalFastBounds(QPainter *p, QSvgExtraStates &) const
 {
-    QFont font = m_style.font ? m_style.font->qfont() : p->font();
+    QSvgFontStyle *fontProperty = static_cast<QSvgFontStyle *>(m_style.property(QSvgStyleProperty::Font));
+    QFont font = fontProperty ? fontProperty->qfont() : p->font();
     QFontMetricsF fm(font);
 
     int charCount = 0;
@@ -356,7 +381,7 @@ bool QSvgText::shouldDrawNode(QPainter *p, QSvgExtraStates &) const
 
         numChars += span->text().size();
 
-        QSvgFontStyle *style = static_cast<QSvgFontStyle *>(span->styleProperty(QSvgStyleProperty::FONT));
+        QSvgFontStyle *style = static_cast<QSvgFontStyle *>(span->styleProperty(QSvgStyleProperty::Font));
         if (style != nullptr && style->qfont().pointSizeF() > maxFontSize)
             maxFontSize = style->qfont().pointSizeF();
     }
@@ -561,11 +586,17 @@ void QSvgText::addText(QStringView text)
     m_tspans.back()->addText(text);
 }
 
+QSvgTspan::~QSvgTspan()
+    = default;
+
 QSvgUse::QSvgUse(const QPointF &start, QSvgNode *parent, QSvgNode *node)
     : QSvgNode(parent), m_link(node), m_start(start), m_recursing(false)
 {
 
 }
+
+QSvgUse::~QSvgUse()
+    = default;
 
 void QSvgUse::drawCommand(QPainter *p, QSvgExtraStates &states)
 {
@@ -602,6 +633,10 @@ QSvgNode::Type QSvgDummyNode::type() const
 {
     return FeUnsupported;
 }
+
+
+QSvgCircle::~QSvgCircle()
+    = default;
 
 QSvgNode::Type QSvgCircle::type() const
 {
@@ -653,6 +688,9 @@ QSvgNode::Type QSvgUse::type() const
     return Use;
 }
 
+QSvgVideo::~QSvgVideo()
+    = default;
+
 QSvgNode::Type QSvgVideo::type() const
 {
     return Video;
@@ -696,7 +734,7 @@ QRectF QSvgPolyline::decoratedInternalBounds(QPainter *p, QSvgExtraStates &s) co
 {
     QRectF rect = internalBounds(p, s, BoundsMode::IncludeMiterLimit);
     rect |= QSvgMarker::markersBoundsForNode(this, p, s);
-    return filterRegion(rect);
+    return filterRegion(s.doc(), rect);
 }
 
 bool QSvgPolyline::requiresGroupRendering() const
@@ -741,7 +779,7 @@ QRectF QSvgLine::decoratedInternalBounds(QPainter *p, QSvgExtraStates &s) const
 {
     QRectF rect = internalBounds(p, s, BoundsMode::IncludeMiterLimit);
     rect |= QSvgMarker::markersBoundsForNode(this, p, s);
-    return filterRegion(rect);
+    return filterRegion(s.doc(), rect);
 }
 
 bool QSvgLine::requiresGroupRendering() const

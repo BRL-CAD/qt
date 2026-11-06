@@ -18,6 +18,7 @@
 //
 
 #include <QtSvg/private/qtsvgglobal_p.h>
+#include <QtSvg/private/qsvgeasinginterface_p.h>
 #include <QtCore/qlist.h>
 #include <QtCore/qvariant.h>
 #include <QtCore/qvarlengtharray.h>
@@ -29,6 +30,7 @@ QT_BEGIN_NAMESPACE
 
 class Q_SVG_EXPORT QSvgAbstractAnimatedProperty
 {
+    Q_DISABLE_COPY_MOVE(QSvgAbstractAnimatedProperty)
 public:
     enum Type
     {
@@ -44,6 +46,9 @@ public:
     void setKeyFrames(const QList<qreal> &keyFrames);
     void appendKeyFrame(qreal keyFrame);
     QList<qreal> keyFrames() const;
+
+    void appendEasing(QSvgEasingInterfacePtr easing);
+    const QSvgEasingInterface *easingAt(unsigned int i) const;
     void setPropertyName(const QString &name);
     QStringView propertyName() const;
     Type type() const;
@@ -53,6 +58,7 @@ public:
     static QSvgAbstractAnimatedProperty *createAnimatedProperty(const QString &name);
 protected:
     QList<qreal> m_keyFrames;
+    std::vector<QSvgEasingInterfacePtr> m_easings;
     mutable QVariant m_interpolatedValue;
 
 private:
@@ -64,6 +70,7 @@ class Q_SVG_EXPORT QSvgAnimatedPropertyColor : public QSvgAbstractAnimatedProper
 {
 public:
     QSvgAnimatedPropertyColor(const QString &name);
+    ~QSvgAnimatedPropertyColor() override;
 
     void setColors(const QList<QColor> &colors);
     void appendColor(const QColor &color);
@@ -79,6 +86,7 @@ class Q_SVG_EXPORT QSvgAnimatedPropertyFloat : public QSvgAbstractAnimatedProper
 {
 public:
     QSvgAnimatedPropertyFloat(const QString &name);
+    ~QSvgAnimatedPropertyFloat() override;
 
     void setValues(const QList<qreal> &values);
     void appendValue(const qreal value);
@@ -107,6 +115,7 @@ public:
 
 public:
     QSvgAnimatedPropertyTransform(const QString &name);
+    ~QSvgAnimatedPropertyTransform() override;
 
     void setTransformCount(quint32 count);
     quint32 transformCount() const;

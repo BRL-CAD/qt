@@ -36,7 +36,6 @@ qt_internal_add_plugin(QWasmIntegrationPlugin
         qwasmfiledialoghelper.cpp qwasmfiledialoghelper.h
     DEFINES
         QT_EGL_NO_X11
-        QT_NO_FOREACH
     LIBRARIES
         Qt::Core
         Qt::CorePrivate
@@ -85,6 +84,7 @@ qt_internal_extend_target(QWasmIntegrationPlugin CONDITION QT_FEATURE_opengl
 set(wasm_support_files
     wasm_shell.html
     qtloader.js
+    asan.js
     resources/qtlogo.svg
 )
 

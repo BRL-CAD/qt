@@ -51,14 +51,20 @@ public:
         : m(std::move(other))
     {}
 
-    // used in remove(); copies from source all the values not matching key.
-    // returns how many were NOT copied (removed).
-    size_type copyIfNotEquivalentTo(const Map &source, const Key &key)
+    // copies from source all the values not matching key.
+    // returns how many were NOT copied (removed), and first removed iterator
+    auto copyIfNotEquivalentTo(const Map &source, const Key &key)
     {
         Q_ASSERT(m.empty());
 
         size_type result = 0;
+        auto foundIt = source.end();
 
+        const auto markFound = [&](auto it) {
+            if (result == 0)
+                foundIt = it;
+            ++result;
+        };
         const auto keep = [this](auto it) { m.insert(m.cend(), *it); };
 
         auto it = source.cbegin();
@@ -69,12 +75,13 @@ public:
             keep(it);
         // Count and skip matches:
         for (; it != end && !cmp(key, it->first); ++it)
-            ++result;
+            markFound(it);
         // Keep all after:
         for (; it != end; ++it)
             keep(it);
 
-        return result;
+        struct resultType { size_type count; decltype(source.begin()) iterator; };
+        return resultType{result, foundIt};
     }
 
     void copyExceptFor(const Map &source, const iterator &skipit)
@@ -244,6 +251,41 @@ public:
     }
 };
 
+// common type traits
+namespace QtPrivate {
+
+template <typename Container, typename ...Ts>
+using map_has_operator_less_than =
+        std::conjunction<QTypeTraits::has_operator_less_than_container<Container, Ts>...>;
+
+// The is_base_of<Container, T> check is required for recursive containers.
+// Without it MSVC produces errors like:
+//
+// error C2968:
+// 'if_map_has_relational_operators<QMap<NoCmpParamRecursiveMapK, Empty>,
+//                                  NoCmpParamRecursiveMapK, Empty>':
+// recursive alias declaration
+//
+// The solution is similar to QTypeTraits::*_container checks.
+template <typename Container, typename T>
+using map_has_qt_compare_three_way_container =
+        std::disjunction<std::is_base_of<Container, T>, Qt::has_qt_compare_three_way<T>>;
+
+template <typename Container, typename ...Ts>
+using map_has_qt_compare_three_way =
+        std::conjunction<map_has_qt_compare_three_way_container<Container, Ts>...>;
+
+template <typename Container, typename ...Ts>
+using if_map_has_relational_operators =
+        std::enable_if_t<
+                std::disjunction_v<
+                    map_has_operator_less_than<Container, Ts...>,
+                    map_has_qt_compare_three_way<Container, Ts...>
+                >,
+        bool>;
+
+} // namespace QtPrivate
+
 //
 // QMap
 //
@@ -323,11 +365,29 @@ private:
     QT_DECLARE_EQUALITY_OPERATORS_HELPER(QMap, QMap, /* non-constexpr */, noexcept(false),
                         template <typename AKey = Key, typename AT = T,
                                   QTypeTraits::compare_eq_result_container<QMap, AKey, AT> = true>)
-    // TODO: add the other comparison operators; std::map has them.
+
+    template <typename AKey = Key, typename AT = T,
+              QtPrivate::if_map_has_relational_operators<QMap, AKey, AT> = true>
+    friend auto compareThreeWay(const QMap &lhs, const QMap &rhs)
+    {
+        return QtOrderingPrivate::lexicographicalCompareThreeWay(lhs.constKeyValueBegin(),
+                                                                 lhs.constKeyValueEnd(),
+                                                                 rhs.constKeyValueBegin(),
+                                                                 rhs.constKeyValueEnd());
+    }
+    QT_DECLARE_ORDERING_HELPER_AUTO(QMap, QMap, /* non-constexpr */, noexcept(false),
+                    template <typename AKey = Key, typename AT = T,
+                              QtPrivate::if_map_has_relational_operators<QMap, AKey, AT> = true>)
+
 public:
 #else
     friend bool operator==(const QMap &lhs, const QMap &rhs);
     friend bool operator!=(const QMap &lhs, const QMap &rhs);
+    friend bool operator<(const QMap &lhs, const QMap &rhs);
+    friend bool operator>(const QMap &lhs, const QMap &rhs);
+    friend bool operator<=(const QMap &lhs, const QMap &rhs);
+    friend bool operator>=(const QMap &lhs, const QMap &rhs);
+    friend auto operator<=>(const QMap &lhs, const QMap &rhs);
 #endif // Q_QDOC
 
     size_type size() const { return d ? size_type(d->m.size()) : size_type(0); }
@@ -345,6 +405,7 @@ public:
 
     // A detach for holding an already shared copy, until calling function
     // is done using references to keys or values that might reference it.
+    [[nodiscard]]
     QMap referenceHoldingDetach()
     {
         if (!d) {
@@ -358,6 +419,7 @@ public:
     }
 
     // Specialized version of referenceHoldingDetach(), which will not copy key, if copying
+    [[nodiscard]]
     QMap referenceHoldingDetachExcept(const Key &key)
     {
         if (!d) {
@@ -402,7 +464,7 @@ public:
             return size_type(d->m.erase(key));
 
         MapData *newData = new MapData;
-        size_type result = newData->copyIfNotEquivalentTo(d->m, key);
+        size_type result = newData->copyIfNotEquivalentTo(d->m, key).count;
 
         d.reset(newData);
 
@@ -421,41 +483,14 @@ public:
             return T();
 
         if (d.isShared()) {
-            Map m;
+            MapData *m = new MapData;
             // For historic reasons, we always un-share (was: detach()) when
             // this function is called, even if `key` isn't found
-            const auto commit = qScopeGuard([&] { QMap{std::move(m)}.swap(*this); });
+            const auto commit = qScopeGuard([&] { d.reset(m); });
 
-            // This way of copying ought to be O(N) (not NlogN) and not causing
-            // any rebalancings in `m`, because we build in-order and with hint
-            // [[citation needed]].
-
-            const auto keep = [&m] (auto it) { m.insert(m.cend(), *it); };
-
-            auto it = d->m.cbegin();
-            const auto end = d->m.cend();
-            const auto cmp = d->m.key_comp();
-            while (it != end) {
-                if (cmp(it->first, key)) { // still before
-                    keep(it);
-                    ++it;
-                } else if (cmp(key, it->first)) { // after, iow: not found
-                    // This should be faster than an actual range-insert, because
-                    // the latter cannot assume that the input is sorted; we can:
-                    while (it != end) {
-                        keep(it);
-                        ++it;
-                    }
-                    break;
-                } else { // found!
-                    return [&] {
-                        T r = it->second; // we cannot move (isShared()!)
-                        while (++it != end)
-                            keep(it);
-                        return r;
-                    }();
-                }
-            }
+            auto result = m->copyIfNotEquivalentTo(d->m, key);
+            if (result.count)
+                return result.iterator->second;
             // if we reach here, `key` wasn't found:
             return T();
         }
@@ -963,6 +998,29 @@ class QMultiMap
     using MapData = QMapData<Map>;
     QtPrivate::QExplicitlySharedDataPointerV2<MapData> d;
 
+    // Note: methods that look up a single element by key use lower_bound() rather
+    // than find(). The C++ standard permits std::multimap::find() to return any
+    // element with the matching key; libc++ 22 changed which one it returns.
+    // lower_bound() is where insert() places new elements, so it consistently
+    // identifies the most-recently-inserted one.
+
+    auto findIteratorByKey(const Key &key) const
+    {
+        auto i = d->m.lower_bound(key);
+        const auto &cmp = d->m.key_comp();
+        if (i != d->m.end() && !cmp(key, i->first))
+            return i;
+        return d->m.end();
+    }
+    auto findIteratorByKey(const Key &key)
+    {
+        auto i = d->m.lower_bound(key);
+        const auto &cmp = d->m.key_comp();
+        if (i != d->m.end() && !cmp(key, i->first))
+            return i;
+        return d->m.end();
+    }
+
 public:
     using key_type = Key;
     using mapped_type = T;
@@ -1065,11 +1123,28 @@ private:
     QT_DECLARE_EQUALITY_OPERATORS_HELPER(QMultiMap, QMultiMap, /* non-constexpr */, noexcept(false),
                  template <typename AKey = Key, typename AT = T,
                            QTypeTraits::compare_eq_result_container<QMultiMap, AKey, AT> = true>)
-    // TODO: add the other comparison operators; std::multimap has them.
+
+    template <typename AKey = Key, typename AT = T,
+              QtPrivate::if_map_has_relational_operators<QMultiMap, AKey, AT> = true>
+    friend auto compareThreeWay(const QMultiMap &lhs, const QMultiMap &rhs)
+    {
+        return QtOrderingPrivate::lexicographicalCompareThreeWay(lhs.constKeyValueBegin(),
+                                                                 lhs.constKeyValueEnd(),
+                                                                 rhs.constKeyValueBegin(),
+                                                                 rhs.constKeyValueEnd());
+    }
+    QT_DECLARE_ORDERING_HELPER_AUTO(QMultiMap, QMultiMap, /* non-constexpr */, noexcept(false),
+                template <typename AKey = Key, typename AT = T,
+                          QtPrivate::if_map_has_relational_operators<QMultiMap, AKey, AT> = true>)
 public:
 #else
     friend bool operator==(const QMultiMap &lhs, const QMultiMap &rhs);
     friend bool operator!=(const QMultiMap &lhs, const QMultiMap &rhs);
+    friend bool operator<(const QMultiMap &lhs, const QMultiMap &rhs);
+    friend bool operator>(const QMultiMap &lhs, const QMultiMap &rhs);
+    friend bool operator<=(const QMultiMap &lhs, const QMultiMap &rhs);
+    friend bool operator>=(const QMultiMap &lhs, const QMultiMap &rhs);
+    friend auto operator<=>(const QMultiMap &lhs, const QMultiMap &rhs);
 #endif // Q_QDOC
 
     size_type size() const { return d ? size_type(d->m.size()) : size_type(0); }
@@ -1140,7 +1215,7 @@ public:
             return size_type(d->m.erase(key));
 
         MapData *newData = new MapData;
-        size_type result = newData->copyIfNotEquivalentTo(d->m, key);
+        size_type result = newData->copyIfNotEquivalentTo(d->m, key).count;
 
         d.reset(newData);
 
@@ -1209,25 +1284,28 @@ public:
         if (!d)
             return T();
 
+        auto i = findIteratorByKey(key);
         if (d.isShared()) {
-            auto i = d->m.find(key);
+            if (i == d->m.end()) {
+                // NB: take always detaches, even if the key isn't found. This is for historic reasons.
+                detach();
+                return T();
+            }
             const auto hold = referenceHoldingDetachExceptFor(i);
             return i->second;
         }
 
+        if (i == d->m.end())
+            return T();
+
 #ifdef __cpp_lib_node_extract
-        if (const auto node = d->m.extract(key))
-            return std::move(node.mapped());
+        return std::move(d->m.extract(i).mapped());
 #else
-        auto i = d->m.find(key);
-        if (i != d->m.end()) {
-            // ### breaks RVO on most compilers (but only on old-fashioned ones, so who cares?)
-            T result(std::move(i->second));
-            d->m.erase(i);
-            return result;
-        }
+        // ### breaks RVO on most compilers (but only on old-fashioned ones, so who cares?)
+        T result(std::move(i->second));
+        d->m.erase(i);
+        return result;
 #endif
-        return T();
     }
 
     bool contains(const Key &key) const
@@ -1255,7 +1333,7 @@ public:
     {
         if (!d)
             return defaultValue;
-        const auto i = d->m.find(key);
+        auto i = findIteratorByKey(key);
         if (i != d->m.cend())
             return i->second;
         return defaultValue;
@@ -1559,14 +1637,14 @@ public:
     iterator find(const Key &key)
     {
         const auto hold = referenceHoldingDetach();
-        return iterator(d->m.find(key));
+        return iterator(findIteratorByKey(key));
     }
 
     const_iterator find(const Key &key) const
     {
         if (!d)
             return const_iterator();
-        return const_iterator(d->m.find(key));
+        return const_iterator(findIteratorByKey(key));
     }
 
     const_iterator constFind(const Key &key) const
@@ -1687,7 +1765,7 @@ public:
             d.reset(new MapData);
             return iterator(d->m.insert({ key, value }));
         }
-        auto i = d->m.find(key);
+        auto i = findIteratorByKey(key);
         if (d.isShared()) {
             const auto hold = referenceHoldingDetachExceptFor(i);
             return iterator(d->m.insert({ key, value }));

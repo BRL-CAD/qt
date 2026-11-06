@@ -264,19 +264,6 @@ elseif(UIKIT)
 endif()
 
 if ("${CMAKE_CXX_COMPILER_ID}" STREQUAL "AppleClang")
-    if(CMAKE_CXX_COMPILER_VERSION VERSION_GREATER_EQUAL "14.0.0")
-        # Xcode 14's Clang will emit objc_msgSend stubs by default, which ld
-        # from earlier Xcode versions will fail to understand when linking
-        # against static libraries with these stubs. Disable the stubs explicitly,
-        # for as long as we do support Xcode < 14.
-        set(is_static_lib "$<STREQUAL:$<TARGET_PROPERTY:TYPE>,STATIC_LIBRARY>")
-        set(is_objc "$<COMPILE_LANGUAGE:OBJC,OBJCXX>")
-        set(is_static_and_objc "$<AND:${is_static_lib},${is_objc}>")
-        target_compile_options(PlatformCommonInternal INTERFACE
-            "$<${is_static_and_objc}:-fno-objc-msgsend-selector-stubs>"
-        )
-    endif()
-
     # A bug in Xcode 15 adds duplicate flags to the linker. In addition, the
     # `-warn_duplicate_libraries` is now enabled by default which may result
     # in several 'duplicate libraries warning'.
@@ -339,6 +326,11 @@ if (MSVC AND NOT CLANG)
             "${is_not_clang_cl_start}-Zc:externConstexpr${is_not_clang_cl_end}"
             #-Zc:lambda # Buggy. TODO: Enable again when stable enough.
             #-Zc:preprocessor # breaks build due to bug in default Windows SDK 10.0.19041
+        )
+    endif()
+    if (MSVC_VERSION GREATER_EQUAL 1950) # MSVC 2026 / VS 18.0
+        target_compile_options(PlatformCommonInternal INTERFACE
+            "${is_not_clang_cl_start}-await:strict${is_not_clang_cl_end}"
         )
     endif()
 
@@ -410,7 +402,7 @@ if(QT_FEATURE_glibc_fortify_source)
     # Some compilers may define _FORTIFY_SOURCE by default when optimizing, remove it
     # before defining our own
     target_compile_options(PlatformCommonInternal BEFORE INTERFACE "$<${is_optimized_build}:-U_FORTIFY_SOURCE>")
-    if(TEST_glibc_234)
+    if(TEST_glibc_fortify_source_3)
         target_compile_options(PlatformCommonInternal INTERFACE "$<${is_optimized_build}:-D_FORTIFY_SOURCE=3>")
     else()
         target_compile_options(PlatformCommonInternal INTERFACE "$<${is_optimized_build}:-D_FORTIFY_SOURCE=2>")
@@ -580,6 +572,11 @@ function(qt_internal_apply_coverage_flags)
         target_compile_options(PlatformCommonInternal INTERFACE
             "$<$<CONFIG:Debug>:--coverage>")
         target_link_options(PlatformCommonInternal INTERFACE "$<$<CONFIG:Debug>:--coverage>")
+    elseif(QT_FEATURE_coverage_llvm)
+        target_compile_options(PlatformCommonInternal INTERFACE
+            -fprofile-instr-generate
+            -fcoverage-mapping)
+        target_link_options(PlatformCommonInternal INTERFACE -fprofile-instr-generate)
     endif()
 endfunction()
 qt_internal_apply_coverage_flags()

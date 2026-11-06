@@ -273,6 +273,21 @@ struct hb_gpu_paint_t
    * which matches HB_GPU_PAINT_GROUP_DEPTH in the fragment shader. */
   unsigned group_depth = 0;
 
+  /* Work budget for the current paint session; reset by
+   * hb_gpu_paint_clear().  All the session's work is outline-derived
+   * (outline traversal and the curves generated from it -- the GPU
+   * backend never rasterizes), so a single counter suffices.  It is the
+   * public draw/paint budget: seeded into the scratch encoder through the
+   * public draw-budget API before each glyph and read back afterwards. */
+  int64_t budget = HB_BUDGET_DEFAULT;
+  int64_t budget_remaining = HB_BUDGET_GLYPH;
+
+  void recharge_budget ()
+  {
+    budget_remaining = budget == HB_BUDGET_DEFAULT ?
+		       HB_BUDGET_GLYPH : budget;
+  }
+
   /* Stack of pending clips.  Each color/gradient op consumes the
    * current state of this stack: the layer is rendered where ALL
    * stacked clips are opaque (intersection).  Capped at depth
@@ -287,10 +302,10 @@ struct hb_gpu_paint_t
     hb_font_t            *font;     /* borrowed; nullptr for path clips */
     hb_transform_t<float> transform;
     /* Path clips are encoded into a sub-blob at push_clip_path_end
-     * time; glyph clips re-encode per consuming layer.  For path
-     * clips, sub_blob_index is the pre-baked index and ext_* the
-     * captured design-unit extents.  For glyph clips, sub_blob_index
-     * is -1 and the ext_* fields are unused. */
+     * time; glyph clips are encoded lazily on first consuming layer
+     * and cached.  sub_blob_index is -1 until the encode happens,
+     * then holds the index into c->sub_blobs and ext_* hold the
+     * design-unit extents. */
     int                   sub_blob_index;
     int                   ext_x0, ext_y0, ext_x1, ext_y1;
   };

@@ -363,19 +363,31 @@ To convertImplicit(const From& from)
     template <> struct IsPointerDeclaredOpaque<void *>       : std::true_type {};
     template <> struct IsPointerDeclaredOpaque<const void *> : std::true_type {};
 
+    template <typename T, typename UniqueType = void> constexpr inline
+    bool TypeIsCompleteOrVoid = is_complete<T, UniqueType>::value || std::is_void_v<T>;
+    template <typename T> constexpr inline
+    bool PointerIsSuitableForMetaTypeHelper =
+            IsPointerDeclaredOpaque<T>::value
+            || is_complete<std::remove_pointer_t<T>>::value;
+    template <typename T, typename UniqueType = void> constexpr inline
+    bool TypeIsSuitableForMetaType =
+            TypeIsCompleteOrVoid<T, UniqueType>
+            && !std::is_reference_v<T>
+            && (!std::is_pointer_v<T> || PointerIsSuitableForMetaTypeHelper<T>);
+
     template <typename X> static constexpr bool checkTypeIsSuitableForMetaType()
     {
         using T = typename MetatypeDecay<X>::type;
-        static_assert(is_complete<T, void>::value || std::is_void_v<T>,
-                "Meta Types must be fully defined");
+        static_assert(TypeIsCompleteOrVoid<T>, "Meta Types must be fully defined");
         static_assert(!std::is_reference_v<T>,
                 "Meta Types cannot be non-const references or rvalue references.");
-        if constexpr (std::is_pointer_v<T> && !IsPointerDeclaredOpaque<T>::value) {
-            using Pointed = std::remove_pointer_t<T>;
-            static_assert(is_complete<Pointed, void>::value,
+        if constexpr (std::is_pointer_v<T>) {
+            static_assert(PointerIsSuitableForMetaTypeHelper<T>,
                     "Pointer Meta Types must either point to fully-defined types "
                     "or be declared with Q_DECLARE_OPAQUE_POINTER(T *)");
         }
+        // final check
+        static_assert(TypeIsSuitableForMetaType<T>);
         return true;
     }
 }  // namespace QtPrivate
@@ -467,10 +479,10 @@ public:
 #if QT_DEPRECATED_SINCE(6, 0)
     QT_DEPRECATED_VERSION_6_0
     static int type(const char *typeName)
-    { return QMetaType::fromName(typeName).id(); }
+    { return QMetaType::fromName(typeName).rawId(); }
     QT_DEPRECATED_VERSION_6_0
     static int type(const QT_PREPEND_NAMESPACE(QByteArray) &typeName)
-    { return QMetaType::fromName(typeName).id(); }
+    { return QMetaType::fromName(typeName).rawId(); }
     QT_DEPRECATED_VERSION_6_0
     static const char *typeName(int type)
     { return QMetaType(type).name(); }
@@ -523,6 +535,12 @@ public:
         return registerHelper();
     }
 #endif
+    int rawId() const
+    {
+        Q_PRE(!isValid(QT6_CALL_NEW_OVERLOAD) || isRegistered(QT6_CALL_NEW_OVERLOAD));
+        return d_ptr ? d_ptr->typeId.loadRelaxed() : 0;
+    }
+
     constexpr qsizetype sizeOf() const;
     constexpr qsizetype alignOf() const;
     constexpr TypeFlags flags() const;
@@ -681,7 +699,7 @@ public:
         auto converter = [function = std::move(function)](const void *from, void *to) -> bool {
             const From *f = static_cast<const From *>(from);
             To *t = static_cast<To *>(to);
-            auto &&r = function(*f);
+            decltype(auto) r = function(*f);
             if constexpr (std::is_same_v<q20::remove_cvref_t<decltype(r)>, std::optional<To>>) {
                 if (!r)
                     return false;
@@ -1094,6 +1112,23 @@ namespace QtPrivate
         enum { Value = false };
     };
 
+    /* Used to check whether we need to register a converter function
+       for associative and sequential containers.
+       The rule is that for any registered container (template), we register
+       the conversion function if the element type is "defined" in the sense
+       of QMetaTypeId2, or if it's a pointer to a QObject subclass or a
+       default-constructible gadget (for the rare non-default constructible gadgets,
+       we can't create the converter.
+    */
+    template<typename T>
+    struct IsContainerElementWhichNeedsConverter
+    {
+        static constexpr bool value =
+                QMetaTypeId2<T>::Defined
+                || IsPointerToTypeDerivedFromQObject<T>::Value
+                || (IsRealGadget<T>::value && std::is_default_constructible_v<T>);
+    };
+
     template<typename T, bool = QtPrivate::IsSequentialContainer<T>::Value>
     struct SequentialContainerTransformationHelper
     {
@@ -1108,7 +1143,7 @@ namespace QtPrivate
         }
     };
 
-    template<typename T, bool = QMetaTypeId2<typename T::value_type>::Defined>
+    template<typename T, bool = IsContainerElementWhichNeedsConverter<typename T::value_type>::value>
     struct SequentialValueTypeIsMetaType
     {
         static bool registerConverter()
@@ -1141,7 +1176,7 @@ namespace QtPrivate
         }
     };
 
-    template<typename T, bool = QMetaTypeId2<typename T::key_type>::Defined>
+    template<typename T, bool = IsContainerElementWhichNeedsConverter<typename T::key_type>::value>
     struct AssociativeKeyTypeIsMetaType
     {
         static bool registerConverter()
@@ -1155,7 +1190,7 @@ namespace QtPrivate
         }
     };
 
-    template<typename T, bool = QMetaTypeId2<typename T::mapped_type>::Defined>
+    template<typename T, bool = IsContainerElementWhichNeedsConverter<typename T::mapped_type>::value>
     struct AssociativeMappedTypeIsMetaType
     {
         static bool registerConverter()
@@ -1174,8 +1209,8 @@ namespace QtPrivate
     {
     };
 
-    template<typename T, bool = QMetaTypeId2<typename T::first_type>::Defined
-                                && QMetaTypeId2<typename T::second_type>::Defined>
+    template<typename T, bool = IsContainerElementWhichNeedsConverter<typename T::first_type>::value
+                                && IsContainerElementWhichNeedsConverter<typename T::second_type>::value>
     struct IsMetaTypePair
     {
         static bool registerConverter()
@@ -1221,8 +1256,6 @@ namespace QtPrivate
 } // namespace QtPrivate
 
 template <typename T, int =
-    QtPrivate::IsPointerToTypeDerivedFromQObject<T>::Value ? QMetaType::PointerToQObject :
-    QtPrivate::IsRealGadget<T>::value                      ? QMetaType::IsGadget :
     QtPrivate::IsPointerToGadgetHelper<T>::IsRealGadget    ? QMetaType::PointerToGadget :
     QtPrivate::IsQEnumHelper<T>::Value                     ? QMetaType::IsEnumeration : 0>
 struct QMetaTypeIdQObject
@@ -1414,47 +1447,6 @@ inline int qRegisterMetaType(QMetaType meta)
 
 #ifndef QT_NO_QOBJECT
 template <typename T>
-struct QMetaTypeIdQObject<T*, QMetaType::PointerToQObject>
-{
-    enum {
-        Defined = 1
-    };
-
-    static int qt_metatype_id()
-    {
-        Q_CONSTINIT static QBasicAtomicInt metatype_id = Q_BASIC_ATOMIC_INITIALIZER(0);
-        if (const int id = metatype_id.loadAcquire())
-            return id;
-        const char *const cName = T::staticMetaObject.className();
-        QByteArray typeName;
-        typeName.reserve(strlen(cName) + 1);
-        typeName.append(cName).append('*');
-        const int newId = qRegisterNormalizedMetaType<T *>(typeName);
-        metatype_id.storeRelease(newId);
-        return newId;
-    }
-};
-
-template <typename T>
-struct QMetaTypeIdQObject<T, QMetaType::IsGadget>
-{
-    enum {
-        Defined = std::is_default_constructible<T>::value
-    };
-
-    static int qt_metatype_id()
-    {
-        Q_CONSTINIT static QBasicAtomicInt metatype_id = Q_BASIC_ATOMIC_INITIALIZER(0);
-        if (const int id = metatype_id.loadAcquire())
-            return id;
-        const char *const cName = T::staticMetaObject.className();
-        const int newId = qRegisterNormalizedMetaType<T>(cName);
-        metatype_id.storeRelease(newId);
-        return newId;
-    }
-};
-
-template <typename T>
 struct QMetaTypeIdQObject<T*, QMetaType::PointerToGadget>
 {
     enum {
@@ -1463,16 +1455,11 @@ struct QMetaTypeIdQObject<T*, QMetaType::PointerToGadget>
 
     static int qt_metatype_id()
     {
-        Q_CONSTINIT static QBasicAtomicInt metatype_id = Q_BASIC_ATOMIC_INITIALIZER(0);
-        if (const int id = metatype_id.loadAcquire())
-            return id;
-        const char *const cName = T::staticMetaObject.className();
-        QByteArray typeName;
-        typeName.reserve(strlen(cName) + 1);
-        typeName.append(cName).append('*');
-        const int newId = qRegisterNormalizedMetaType<T *>(typeName);
-        metatype_id.storeRelease(newId);
-        return newId;
+        // register the actual gadget type too
+        QMetaType::fromType<std::remove_cv_t<T>>().registerType();
+        if constexpr (std::is_const_v<T>)
+            QMetaType::fromType<T>().registerType();
+        return QMetaType::fromType<T *>().id();
     }
 };
 
@@ -1488,10 +1475,15 @@ struct QMetaTypeIdQObject<T, QMetaType::IsEnumeration>
         Q_CONSTINIT static QBasicAtomicInt metatype_id = Q_BASIC_ATOMIC_INITIALIZER(0);
         if (const int id = metatype_id.loadAcquire())
             return id;
+        // qt_getEnumName returns what was passed to Q_ENUM/Q_FLAG
+        // which might be different from the actual name
         const char *eName = qt_getEnumName(T());
         const char *cName = qt_getEnumMetaObject(T())->className();
         QByteArray typeName;
-        typeName.reserve(strlen(cName) + 2 + strlen(eName));
+        constexpr bool isConst = std::is_const_v<T>;
+        typeName.reserve(strlen(cName) + 2 + strlen(eName) + (isConst ? strlen("const ") : 0));
+        if constexpr (isConst)
+            typeName.append("const ");
         typeName.append(cName).append("::").append(eName);
         const int newId = qRegisterNormalizedMetaType<T>(typeName);
         metatype_id.storeRelease(newId);
@@ -1562,7 +1554,7 @@ template <typename T> \
 struct QMetaTypeId< SINGLE_ARG_TEMPLATE<T> > \
 { \
     enum { \
-        Defined = QMetaTypeId2<T>::Defined \
+        Defined = QtPrivate::IsContainerElementWhichNeedsConverter<T>::value \
     }; \
     static int qt_metatype_id() \
     { \
@@ -1590,7 +1582,8 @@ template<typename T, typename U> \
 struct QMetaTypeId< DOUBLE_ARG_TEMPLATE<T, U> > \
 { \
     enum { \
-        Defined = QMetaTypeId2<T>::Defined && QMetaTypeId2<U>::Defined \
+        Defined = QtPrivate::IsContainerElementWhichNeedsConverter<T>::value \
+            && QtPrivate::IsContainerElementWhichNeedsConverter<U>::value \
     }; \
     static int qt_metatype_id() \
     { \
@@ -2268,7 +2261,7 @@ constexpr auto typenameHelper()
         } else {
             t2Name = typenameHelper<T2>();
         }
-        constexpr auto nonTypeDependentLen = sizeof("std::pair<,>");
+        constexpr size_t nonTypeDependentLen = sizeof("std::pair<,>") - 1;
         constexpr auto t1Len = t1Name.size() - 1;
         constexpr auto t2Len = t2Name.size() - 1;
         constexpr auto length = nonTypeDependentLen + t1Len + t2Len;

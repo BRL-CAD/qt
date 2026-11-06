@@ -1,6 +1,7 @@
 // Copyright (C) 2016 The Qt Company Ltd.
 // Copyright (C) 2019 Klarälvdalens Datakonsult AB, a KDAB Group company, info@kdab.com, author Giuseppe D'Angelo <giuseppe.dangelo@kdab.com>
 // SPDX-License-Identifier: LicenseRef-Qt-Commercial OR LGPL-3.0-only OR GPL-2.0-only OR GPL-3.0-only
+// Qt-Security score:significant reason:default
 
 #include "qbrush.h"
 #include "qpixmap.h"
@@ -313,7 +314,8 @@ void QBrushDataPointerDeleter::operator()(QBrushData *d) const noexcept
 
     \table 100%
     \row
-    \li \inlineimage brush-outline.png Outlines
+    \li \inlineimage brush-outline.png
+                     {Two overlapping rectangles with outlines}
     \li
 
     To specify the style and color of lines and outlines, use the
@@ -1283,7 +1285,6 @@ QDataStream &operator>>(QDataStream &s, QBrush &b)
  * QGradient implementations
  */
 
-
 /*!
     \class QGradient
     \ingroup painting
@@ -1313,9 +1314,11 @@ QDataStream &operator>>(QDataStream &s, QBrush &b)
     \li QRadialGradient
     \li QConicalGradient
     \row
-    \li \inlineimage qgradient-linear.png
+    \li \inlineimage qgradient-linear.png {Linear gradient from white to blue}
     \li \inlineimage qgradient-radial.png
+                     {Radial gradient from white center to blue}
     \li \inlineimage qgradient-conical.png
+                     {Conical gradient sweeping around center}
     \endtable
 
     The colors in a gradient are defined using stop points of the
@@ -1351,8 +1354,11 @@ QDataStream &operator>>(QDataStream &s, QBrush &b)
     \table
     \row
     \li \inlineimage qradialgradient-pad.png
+                     {Radial gradient with pad spread}
     \li \inlineimage qradialgradient-repeat.png
+                     {Radial gradient with repeat spread}
     \li \inlineimage qradialgradient-reflect.png
+                     {Radial gradient with reflect spread}
     \row
     \li \l {QGradient::PadSpread}{PadSpread}
     \li \l {QGradient::RepeatSpread}{RepeatSpread}
@@ -1883,9 +1889,11 @@ bool QGradient::operator==(const QGradient &gradient) const
 
     \table
     \row
-    \li \inlineimage qlineargradient-pad.png
+    \li \inlineimage qlineargradient-pad.png {Linear gradient with pad spread}
     \li \inlineimage qlineargradient-reflect.png
+                     {Linear gradient with reflect spread}
     \li \inlineimage qlineargradient-repeat.png
+                     {Linear gradient with repeat spread}
     \row
     \li \l {QGradient::PadSpread}{PadSpread} (default)
     \li \l {QGradient::ReflectSpread}{ReflectSpread}
@@ -1908,7 +1916,6 @@ bool QGradient::operator==(const QGradient &gradient) const
     \sa QRadialGradient, QConicalGradient, {painting/gradients}{The
     Gradients Example}
 */
-
 
 /*!
     Constructs a default linear gradient with interpolation area
@@ -2048,7 +2055,6 @@ void QLinearGradient::setFinalStop(const QPointF &stop)
     m_data.linear.y2 = stop.y();
 }
 
-
 /*!
     \class QRadialGradient
     \ingroup painting
@@ -2072,8 +2078,11 @@ void QLinearGradient::setFinalStop(const QPointF &stop)
     \table
     \row
     \li \inlineimage qradialgradient-pad.png
+                     {Radial gradient with pad spread}
     \li \inlineimage qradialgradient-reflect.png
+                     {Radial gradient with reflect spread}
     \li \inlineimage qradialgradient-repeat.png
+                     {Radial gradient with repeat spread}
     \row
     \li \l {QGradient::PadSpread}{PadSpread} (default)
     \li \l {QGradient::ReflectSpread}{ReflectSpread}

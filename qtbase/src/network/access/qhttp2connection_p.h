@@ -104,6 +104,7 @@ public:
     struct Configuration
     {
         bool useDownloadBuffer = true;
+        bool useHeaderBuffer = true;
     };
 
     ~QHttp2Stream() noexcept;
@@ -189,8 +190,7 @@ private:
     void finishWithError(Http2::Http2Error errorCode, const QString &message);
     void finishWithError(Http2::Http2Error errorCode);
 
-    void streamError(Http2::Http2Error errorCode,
-                     QLatin1StringView message);
+    void streamError(Http2::Http2Error errorCode, const QString &message);
 
     // Keep it const since it never changes after creation
     const quint32 m_streamID = 0;
@@ -263,6 +263,8 @@ public:
     void close(Http2::Http2Error errorCode = Http2::HTTP2_NO_ERROR);
 
     bool isGoingAway() const noexcept { return m_goingAway; }
+    // Set once a GOAWAY has been received; the peer did not process streams above this ID.
+    std::optional<quint32> lastGoAwayStreamID() const noexcept { return m_lastGoAwayLastStreamID; }
 
     quint32 maxConcurrentStreams() const noexcept { return m_maxConcurrentStreams; }
     quint32 peerMaxConcurrentStreams() const noexcept { return m_peerMaxConcurrentStreams; }
@@ -302,7 +304,8 @@ private:
     Q_ALWAYS_INLINE
     bool streamIsIgnored(quint32 streamID) const noexcept;
 
-    void connectionError(Http2::Http2Error errorCode, const char *message, bool logAsError = true);
+    void connectionError(Http2::Http2Error errorCode, const QString &message,
+                         bool logAsError = true);
     void setH2Configuration(QHttp2Configuration config);
     void closeSession();
     void registerStreamAsResetLocally(quint32 streamID);
@@ -334,6 +337,8 @@ private:
     void handleCONTINUATION();
 
     void handleContinuedHEADERS();
+
+    bool validateHeaderListSize(const Http2::Frame &frame);
 
     bool acceptSetting(Http2::Settings identifier, quint32 newValue);
 
@@ -379,6 +384,7 @@ private:
     // from several CONTINUATION frames ...
     bool continuationExpected = false;
     std::vector<Http2::Frame> continuedFrames;
+    quint32 m_headerBlockSize = 0;
 
     // Control flow:
 
@@ -414,8 +420,9 @@ private:
     // Our peer's header size limitations. It's unlimited by default, but can
     // be changed via peer's SETTINGS frame.
     quint32 m_maxHeaderListSize = (std::numeric_limits<quint32>::max)();
-    // While we can send SETTINGS_MAX_HEADER_LIST_SIZE value (our limit on
-    // the headers size), we never enforce it, it's just a hint to our peer.
+    // The limit we advertise via SETTINGS_MAX_HEADER_LIST_SIZE is enforced on
+    // incoming header blocks both before HPACK decoding (compressed size) and
+    // during HPACK decoding (decoded size).
 
     bool m_upgradedConnection = false;
     bool m_goingAway = false;

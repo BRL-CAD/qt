@@ -32,6 +32,7 @@
 
 #include <algorithm>
 #include <memory>
+#include <stack>
 #include <stdlib.h>
 
 QT_BEGIN_NAMESPACE
@@ -790,9 +791,11 @@ QString QDir::absolutePath() const
     redundant "." or ".." elements.
 
     On systems that do not have symbolic links this function will
-    always return the same string that absolutePath() returns. If the
-    canonical path does not exist (normally due to dangling symbolic
-    links) canonicalPath() returns an empty string.
+    always return the same string that absolutePath() returns. This method
+    returns an empty string if the entry does not exist, is not reachable (for
+    example, the current user does not have access to a directory path), or an
+    error occurs while canonicalizing the path (normally due to dangling
+    symbolic links).
 
     Example:
 
@@ -1453,6 +1456,14 @@ QString QDir::operator[](qsizetype pos) const
     return d->fileCache.files[pos];
 }
 
+/*
+//! [entrylist_memory_spike]
+    For large directories this function may cause a memory spike because it
+    creates an instance of a \1 per each entry in the directory. Consider
+    using QDirListing if the goal is to iterate over the items one-by-one.
+//! [entrylist_memory_spike]
+*/
+
 /*!
     \overload
 
@@ -1469,6 +1480,8 @@ QString QDir::operator[](qsizetype pos) const
 
     \note To list symlinks that point to non existing files, \l System must be
      passed to the filter.
+
+    \include qdir.cpp {entrylist_memory_spike} {QString}
 
     \sa entryInfoList(), setNameFilters(), setSorting(), setFilter()
 */
@@ -1493,6 +1506,8 @@ QStringList QDir::entryList(Filters filters, SortFlags sort) const
     Returns an empty list if the directory is unreadable, does not
     exist, or if nothing matches the specification.
 
+    \include qdir.cpp {entrylist_memory_spike} {QFileInfo}
+
     \sa entryList(), setNameFilters(), setSorting(), setFilter(), isReadable(), exists()
 */
 QFileInfoList QDir::entryInfoList(Filters filters, SortFlags sort) const
@@ -1514,6 +1529,8 @@ QFileInfoList QDir::entryInfoList(Filters filters, SortFlags sort) const
 
     Returns an empty list if the directory is unreadable, does not
     exist, or if nothing matches the specification.
+
+    \include qdir.cpp {entrylist_memory_spike} {QString}
 
     \sa entryInfoList(), setNameFilters(), setSorting(), setFilter()
 */
@@ -1565,6 +1582,8 @@ QStringList QDir::entryList(const QStringList &nameFilters, Filters filters,
 
     Returns an empty list if the directory is unreadable, does not
     exist, or if nothing matches the specification.
+
+    \include qdir.cpp {entrylist_memory_spike} {QFileInfo}
 
     \sa entryList(), setNameFilters(), setSorting(), setFilter(), isReadable(), exists()
 */
@@ -1760,29 +1779,43 @@ bool QDir::removeRecursively()
     if (!d_ptr->exists())
         return true;
 
-    bool success = true;
-    const QString dirPath = path();
-    // not empty -- we must empty it first
-    for (const auto &dirEntry : QDirListing(dirPath, QDirListing::IteratorFlag::IncludeHidden)) {
-        const QString &filePath = dirEntry.filePath();
-        bool ok;
-        if (dirEntry.isDir() && !dirEntry.isSymLink()) {
-            ok = QDir(filePath).removeRecursively(); // recursive
-        } else {
-            ok = QFile::remove(filePath);
-            if (!ok) { // Read-only files prevent directory deletion on Windows, retry with Write permission.
-                const QFile::Permissions permissions = QFile::permissions(filePath);
-                if (!(permissions & QFile::WriteUser))
-                    ok = QFile::setPermissions(filePath, permissions | QFile::WriteUser)
-                        && QFile::remove(filePath);
-            }
-        }
-        if (!ok)
-            success = false;
-    }
+    struct DirInfo
+    {
+        QString path;
+        bool seen;
+    };
 
-    if (success)
-        success = rmdir(absolutePath());
+    bool success = true;
+
+    std::stack<DirInfo, std::vector<DirInfo>> dirsToRemove;
+    dirsToRemove.push({absolutePath(), false});
+
+    while (!dirsToRemove.empty()) {
+        auto &info = dirsToRemove.top();
+        if (!info.seen) {
+            info.seen = true;
+            for (const auto &dirEntry : QDirListing(info.path, QDirListing::IteratorFlag::IncludeHidden)) {
+                const QString &filePath = dirEntry.filePath();
+                if (dirEntry.isDir() && !dirEntry.isSymLink()) {
+                    dirsToRemove.push({filePath, false});
+                } else {
+                    bool ok = QFile::remove(filePath);
+                    if (!ok) { // Read-only files prevent directory deletion on Windows, retry with Write permission.
+                        const QFile::Permissions permissions = QFile::permissions(filePath);
+                        if (!(permissions & QFile::WriteUser))
+                            ok = QFile::setPermissions(filePath, permissions | QFile::WriteUser)
+                                    && QFile::remove(filePath);
+                    }
+                    if (!ok)
+                        success = false;
+                }
+            }
+        } else {
+            if (!rmdir(info.path))
+                success = false;
+            dirsToRemove.pop();
+        }
+    }
 
     return success;
 }
@@ -1866,7 +1899,7 @@ bool QDir::isRoot() const
 */
 
 /*!
-   \fn bool QDir::isAbsolutePath(const QString &)
+   \fn bool QDir::isAbsolutePath(const QString &path)
 
     Returns \c true if \a path is absolute; returns \c false if it is
     relative.

@@ -27,8 +27,6 @@
 #import <UIKit/UIKit.h>
 #endif
 
-#include <Accelerate/Accelerate.h>
-
 // These are available cross platform, exported as kCTFontWeightXXX from CoreText.framework,
 // but they are not documented and are not in public headers so are private API and exposed
 // only through the NSFontWeightXXX and UIFontWeightXXX aliases in AppKit and UIKit (rdar://26109857)
@@ -207,15 +205,14 @@ void QCoreTextFontEngine::init()
     synthesisFlags = 0;
     CTFontSymbolicTraits traits = CTFontGetSymbolicTraits(ctfont);
 
+    const auto requestedStyle = fontDef.style;
+
     if (traits & kCTFontColorGlyphsTrait)
         glyphFormat = QFontEngine::Format_ARGB;
     else if (shouldSmoothFont() && fontSmoothing() == FontSmoothing::Subpixel)
         glyphFormat = QFontEngine::Format_A32;
     else
         glyphFormat = QFontEngine::Format_A8;
-
-    if (traits & kCTFontItalicTrait)
-        fontDef.style = QFont::StyleItalic;
 
     static const auto getTraitValue = [](CFDictionaryRef allTraits, CFStringRef trait) -> float {
         if (CFDictionaryContainsKey(allTraits, trait)) {
@@ -229,15 +226,19 @@ void QCoreTextFontEngine::init()
 
     QCFType<CFDictionaryRef> allTraits = CTFontCopyTraits(ctfont);
     int slant = static_cast<int>(getTraitValue(allTraits, kCTFontSlantTrait) * 500 + 500);
-    if (slant > 500 && !(traits & kCTFontItalicTrait))
+    if (traits & kCTFontItalicTrait)
+        fontDef.style = QFont::StyleItalic;
+    else if (slant > 500)
         fontDef.style = QFont::StyleOblique;
+    else
+        fontDef.style = QFont::StyleNormal;
 
     if (fontDef.weight >= QFont::Bold && !(traits & kCTFontBoldTrait) && !qEnvironmentVariableIsSet("QT_NO_SYNTHESIZED_BOLD"))
         synthesisFlags |= SynthesizedBold;
     else
         fontDef.weight = QCoreTextFontEngine::qtWeightFromCFWeight(getTraitValue(allTraits, kCTFontWeightTrait));
 
-    if (fontDef.style != QFont::StyleNormal && !(traits & kCTFontItalicTrait) && !qEnvironmentVariableIsSet("QT_NO_SYNTHESIZED_ITALIC"))
+    if (requestedStyle != QFont::StyleNormal && fontDef.style == QFont::StyleNormal && !qEnvironmentVariableIsSet("QT_NO_SYNTHESIZED_ITALIC"))
         synthesisFlags |= SynthesizedItalic;
 
     avgCharWidth = 0;
@@ -772,6 +773,12 @@ qreal QCoreTextFontEngine::fontSmoothingGamma()
 QImage QCoreTextFontEngine::imageForGlyph(glyph_t glyph, const QFixedPoint &subPixelPosition, const QTransform &matrix, const QColor &color)
 {
     glyph_metrics_t br = alphaMapBoundingBox(glyph, subPixelPosition, matrix, glyphFormat);
+
+    if (glyphBoundingBoxExceedsLimit(br.width.toReal(),
+                                     br.height.toReal(),
+                                     effectivePixelSizeSquared(matrix))) {
+        return QImage();
+    }
 
     QImage::Format imageFormat = hasColorGlyphs() ? QImage::Format_ARGB32_Premultiplied : QImage::Format_RGB32;
     QImage im(br.width.ceil().toInt(), br.height.ceil().toInt(), imageFormat);

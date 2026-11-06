@@ -14,6 +14,8 @@
 #include <QtGui/qimageiohandler.h>
 #include <QVector4D>
 
+#include <memory>
+
 QT_BEGIN_NAMESPACE
 
 QSvgFeFilterPrimitive::QSvgFeFilterPrimitive(QSvgNode *parent, const QString &input,
@@ -25,6 +27,9 @@ QSvgFeFilterPrimitive::QSvgFeFilterPrimitive(QSvgNode *parent, const QString &in
 {
 
 }
+
+QSvgFeFilterPrimitive::~QSvgFeFilterPrimitive()
+    = default;
 
 bool QSvgFeFilterPrimitive::shouldDrawNode(QPainter *, QSvgExtraStates &) const
 {
@@ -90,7 +95,7 @@ const QSvgFeFilterPrimitive *QSvgFeFilterPrimitive::castToFilterPrimitive(const 
         node->type() == QSvgNode::FeComposite ||
         node->type() == QSvgNode::FeFlood ||
         node->type() == QSvgNode::FeBlend ) {
-        return reinterpret_cast<const QSvgFeFilterPrimitive*>(node);
+        return static_cast<const QSvgFeFilterPrimitive*>(node);
     } else {
         return nullptr;
     }
@@ -153,6 +158,9 @@ QSvgFeColorMatrix::QSvgFeColorMatrix(QSvgNode *parent, const QString &input, con
         m_matrix.data()[2+3*5] = 0.0721;
     }
 }
+
+QSvgFeColorMatrix::~QSvgFeColorMatrix()
+    = default;
 
 QSvgNode::Type QSvgFeColorMatrix::type() const
 {
@@ -229,6 +237,9 @@ QSvgFeGaussianBlur::QSvgFeGaussianBlur(QSvgNode *parent, const QString &input,
 {
     Q_UNUSED(m_edgemode);
 }
+
+QSvgFeGaussianBlur::~QSvgFeGaussianBlur()
+    = default;
 
 QSvgNode::Type QSvgFeGaussianBlur::type() const
 {
@@ -344,7 +355,7 @@ QImage QSvgFeGaussianBlur::apply(const QMap<QString, QImage> &sources, QPainter 
     copyPainter.drawImage(source.offset(), source);
     copyPainter.end();
 
-    QVarLengthArray<ColorValues, 32 * 32> buffer(tempSource.width() * tempSource.height());
+    const auto buffer = std::make_unique<ColorValues[]>(tempSource.width() * tempSource.height());
 
     const int sourceHeight = tempSource.height();
     const int sourceWidth = tempSource.width();
@@ -439,6 +450,9 @@ QSvgFeOffset::QSvgFeOffset(QSvgNode *parent, const QString &input, const QString
 
 }
 
+QSvgFeOffset::~QSvgFeOffset()
+    = default;
+
 QSvgNode::Type QSvgFeOffset::type() const
 {
     return QSvgNode::FeOffset;
@@ -490,6 +504,9 @@ QSvgFeMerge::QSvgFeMerge(QSvgNode *parent, const QString &input,
 {
 
 }
+
+QSvgFeMerge::~QSvgFeMerge()
+    = default;
 
 QSvgNode::Type QSvgFeMerge::type() const
 {
@@ -550,6 +567,9 @@ QSvgFeMergeNode::QSvgFeMergeNode(QSvgNode *parent, const QString &input,
 
 }
 
+QSvgFeMergeNode::~QSvgFeMergeNode()
+    = default;
+
 QSvgNode::Type QSvgFeMergeNode::type() const
 {
     return QSvgNode::FeMergenode;
@@ -571,6 +591,9 @@ QSvgFeComposite::QSvgFeComposite(QSvgNode *parent, const QString &input, const Q
 {
 
 }
+
+QSvgFeComposite::~QSvgFeComposite()
+    = default;
 
 QSvgNode::Type QSvgFeComposite::type() const
 {
@@ -709,6 +732,9 @@ QSvgFeFlood::QSvgFeFlood(QSvgNode *parent, const QString &input, const QString &
 
 }
 
+QSvgFeFlood::~QSvgFeFlood()
+    = default;
+
 QSvgNode::Type QSvgFeFlood::type() const
 {
     return QSvgNode::FeFlood;
@@ -742,6 +768,9 @@ QSvgFeBlend::QSvgFeBlend(QSvgNode *parent, const QString &input, const QString &
 {
 
 }
+
+QSvgFeBlend::~QSvgFeBlend()
+    = default;
 
 QSvgNode::Type QSvgFeBlend::type() const
 {
@@ -855,6 +884,9 @@ QSvgFeUnsupported::QSvgFeUnsupported(QSvgNode *parent, const QString &input, con
     : QSvgFeFilterPrimitive(parent, input, result, rect)
 {
 }
+
+QSvgFeUnsupported::~QSvgFeUnsupported()
+    = default;
 
 QSvgNode::Type QSvgFeUnsupported::type() const
 {

@@ -183,6 +183,7 @@ public:
     inline bool empty() const { return isEmpty(); }
 
     iterator insert(const_iterator, const T &value) { return insert(value); }
+    iterator insert(const_iterator, T &&value) { return insert(std::move(value)); }
 
     // comfort
     inline QSet<T> &operator<<(const T &value) { insert(value); return *this; }
@@ -214,7 +215,8 @@ public:
     friend QSet operator-(const QSet &lhs, const QSet &rhs) { return QSet(lhs) -= rhs; }
     friend QSet operator-(QSet &&lhs, const QSet &rhs) { lhs -= rhs; return std::move(lhs); }
 
-    inline QList<T> values() const;
+    inline QList<T> values() const &;
+    inline QList<T> values() &&;
 
 private:
     static inline QSet intersected_helper(const QSet &lhs, const QSet &rhs);
@@ -267,8 +269,8 @@ Q_INLINE_TEMPLATE auto QSet<T>::unite(QSet &&other) -> QSet&
         //      equivalent elements from `other`:
 
         if (other.isDetached()) { // can move elements from `other`
-            for (auto &e : other)
-                _emplace_or_overwrite(std::move(e));
+            for (auto it = other.q_hash.begin(), end = other.q_hash.end(); it != end; ++it)
+                _emplace_or_overwrite(std::move(it.i.node()->key));
         } else { // need to copy elements from `other`
             for (const auto &e : std::as_const(other))
                 _emplace_or_overwrite(e);
@@ -385,7 +387,7 @@ Q_INLINE_TEMPLATE bool QSet<T>::contains(const QSet<T> &other) const
 }
 
 template <typename T>
-QList<T> QSet<T>::values() const
+QList<T> QSet<T>::values() const &
 {
     QList<T> result;
     result.reserve(size());
@@ -395,6 +397,21 @@ QList<T> QSet<T>::values() const
         ++i;
     }
     return result;
+}
+
+template <typename T>
+QList<T> QSet<T>::values() &&
+{
+    if (!isDetached())
+        return values(); // lvalue overload
+    // we can move from *this:
+    return [&] {
+        QList<T> result;
+        result.reserve(size());
+        for (auto it = q_hash.begin(), end = q_hash.end(); it != end; ++it)
+            result.push_back(std::move(it.i.node()->key));
+        return result;
+    }();
 }
 
 Q_DECLARE_SEQUENTIAL_ITERATOR(Set)

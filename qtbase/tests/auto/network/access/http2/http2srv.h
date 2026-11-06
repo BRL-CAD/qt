@@ -75,7 +75,10 @@ public:
     void setRedirect(const QByteArray &redirectUrl, int count);
     // Send a trailing HEADERS frame with PRIORITY and END_STREAM flag
     void setSendTrailingHEADERS(bool enable);
-    void emulateGOAWAY(int goawayCode, int timeout);
+    // Emulate a non-conformant server that sends a stray, empty DATA frame with END_STREAM set
+    // after the stream was already closed by a previous END_STREAM.
+    void setSendRedundantEndStreamDATA(bool enable);
+    void emulateGOAWAY(int goawayCode, int timeout, bool disconnectAfter = false);
     void redirectOpenStream(quint16 targetPort);
 
     bool isClearText() const;
@@ -187,6 +190,7 @@ private:
     bool testingGOAWAY = false;
     int goawayTimeout = 0;
     int goawayCode = 0;
+    bool goawayDisconnect = false; // set via emulateGOAWAY disconnectAfter parameter
 
     // Clear text HTTP/2, we have to deal with the protocol upgrade request
     // from the initial HTTP/1.1 request.
@@ -215,6 +219,7 @@ private:
     int redirectCount = 0;
 
     bool sendTrailingHEADERS = false;
+    bool sendRedundantEndStreamDATA = false;
     int informationalStatusCode = 0;
 
     std::optional<quint32> pendingMaxTableSizeUpdate;

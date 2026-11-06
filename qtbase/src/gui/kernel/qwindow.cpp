@@ -1,5 +1,6 @@
 // Copyright (C) 2016 The Qt Company Ltd.
 // SPDX-License-Identifier: LicenseRef-Qt-Commercial OR LGPL-3.0-only OR GPL-2.0-only OR GPL-3.0-only
+// Qt-Security score:significant reason:default
 
 #include "qwindow.h"
 
@@ -520,6 +521,7 @@ void QWindowPrivate::emitScreenChangedRecursion(QScreen *newScreen)
 void QWindowPrivate::setTopLevelScreen(QScreen *newScreen, bool recreate)
 {
     Q_Q(QWindow);
+
     if (parentWindow) {
         qWarning() << q << '(' << newScreen << "): Attempt to set a screen on a child window.";
         return;
@@ -790,8 +792,11 @@ QWindow *QWindow::parent(AncestorMode mode) const
 void QWindow::setParent(QWindow *parent)
 {
     Q_D(QWindow);
-    if (d->parentWindow == parent)
+    if (d->parentWindow == parent
+        // Allow explicit reparenting to top level for embedded windows
+        && !(d->platformWindow && d->platformWindow->isEmbedded())) {
         return;
+    }
 
     QScreen *oldScreen = screen();
     QScreen *newScreen = parent ? parent->screen() : oldScreen;
@@ -1003,6 +1008,7 @@ void QWindow::setFlags(Qt::WindowFlags flags)
 
     if (d->platformWindow)
         d->platformWindow->setWindowFlags(flags);
+
     d->windowFlags = flags;
 
     emit flagsChanged(this->flags());
@@ -1865,17 +1871,12 @@ void QWindow::setGeometry(const QRect &rect)
 
     d->positionPolicy = QWindowPrivate::WindowFrameExclusive;
     if (d->platformWindow) {
-        // Setting a new geometry may move the window to a new screen.
-        // The QHighDpi layer needs to know the new screen to be able
-        // to resolve the resulting geometry based on the screen's DPR,
-        // so we update the screen before passing the geometry on to
-        // the platform layer. FIXME: Find a way to tell QHighDpi about
-        // the new screen without actually changing the screen, so that
-        // the geometry change is the trigger for the screen change.
-        QScreen *newScreen = d->screenForGeometry(rect);
-        if (newScreen && isTopLevel())
-            d->setTopLevelScreen(newScreen, true);
-        d->platformWindow->setGeometry(QHighDpi::toNativeWindowGeometry(rect, this));
+        if (isTopLevel()) {
+            QScreen *newScreen = d->screenForGeometry(rect);
+            d->platformWindow->setGeometry(QHighDpi::toNativeGlobalPosition(rect, newScreen));
+        } else {
+            d->platformWindow->setGeometry(QHighDpi::toNativeWindowGeometry(rect, this));
+        }
     } else {
         d->geometry = rect;
 
@@ -1997,6 +1998,16 @@ void QWindow::setFramePosition(const QPoint &point)
         d->geometry.moveTopLeft(point);
     }
 }
+
+/*!
+    \fn void QWindow::setFramePosition(int x, int y)
+    \brief Sets the upper left position of the window, including its window frame, to \a x, \a y
+
+    The position is in relation to the virtualGeometry() of its screen.
+
+    \since 6.12
+    \sa setGeometry(), frameGeometry()
+*/
 
 /*!
     Returns the safe area margins of the window.

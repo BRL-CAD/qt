@@ -444,17 +444,16 @@ QFileSystemModelPrivate::QFileSystemNode *QFileSystemModelPrivate::node(const QS
 
         QFileSystemModelPrivate::QFileSystemNode *node;
         if (!alreadyExisted) {
+            QString ePath = elementPath;
 #ifdef Q_OS_WIN
             // Special case: elementPath is a drive root path (C:). If we do not have the trailing
             // '/' it will be read as a relative path (QTBUG-133746)
-            if (elementPath.length() == 2 && elementPath.at(0).isLetter()
-                && elementPath.at(1) == u':') {
-                elementPath.append(u'/');
-            }
+            if (ePath.length() == 2 && ePath.at(0).isLetter() && ePath.at(1) == u':')
+                ePath.append(u'/');
 #endif
             // Someone might call ::index("file://cookie/monster/doesn't/like/veggies"),
             // a path that doesn't exists, I.E. don't blindly create directories.
-            QFileInfo info(elementPath);
+            QFileInfo info(ePath);
             if (!info.exists())
                 return const_cast<QFileSystemModelPrivate::QFileSystemNode*>(&root);
             QFileSystemModelPrivate *p = const_cast<QFileSystemModelPrivate*>(this);
@@ -788,7 +787,7 @@ QString QFileSystemModelPrivate::size(const QModelIndex &index) const
         return QString();
     const QFileSystemNode *n = node(index);
     if (n->isDir()) {
-#ifdef Q_OS_MAC
+#ifdef Q_OS_MACOS
         return "--"_L1;
 #else
         return ""_L1;
@@ -976,7 +975,7 @@ QVariant QFileSystemModel::headerData(int section, Qt::Orientation orientation, 
         break;
     case QFileSystemModelPrivate::TypeColumn:
         returnValue =
-#ifdef Q_OS_MAC
+#ifdef Q_OS_MACOS
                     tr("Kind", "Match OS X Finder");
 #else
                     tr("Type", "All other platforms");
@@ -1053,7 +1052,7 @@ public:
     {
         switch (sortColumn) {
         case QFileSystemModelPrivate::NameColumn: {
-#ifndef Q_OS_MAC
+#ifndef Q_OS_MACOS
             // place directories before files
             bool left = l->isDir();
             bool right = r->isDir();
@@ -1166,8 +1165,8 @@ void QFileSystemModel::sort(int column, Qt::SortOrder order)
         return;
 
     emit layoutAboutToBeChanged();
-    QModelIndexList oldList = persistentIndexList();
-    QList<std::pair<QFileSystemModelPrivate::QFileSystemNode *, int>> oldNodes;
+    const QModelIndexList oldList = persistentIndexList();
+    std::vector<std::pair<QFileSystemModelPrivate::QFileSystemNode *, int>> oldNodes;
     oldNodes.reserve(oldList.size());
     for (const QModelIndex &oldNode : oldList)
         oldNodes.emplace_back(d->node(oldNode), oldNode.column());
@@ -1736,7 +1735,7 @@ void QFileSystemModel::setNameFilters(const QStringList &filters)
     if (!d->bypassFilters.isEmpty()) {
         // update the bypass filter to only bypass the stuff that must be kept around
         d->bypassFilters.clear();
-        // We guarantee that rootPath will stick around
+        // AXIVION Next Line Qt-UnusedNonTrivialVariable: We guarantee that rootPath will stick around
         QPersistentModelIndex root(index(rootPath()));
         const QModelIndexList persistentList = persistentIndexList();
         for (const auto &persistentIndex : persistentList) {
@@ -1895,8 +1894,11 @@ void QFileSystemModelPrivate::removeNode(QFileSystemModelPrivate::QFileSystemNod
     QFileSystemNode * node = parentNode->children.take(name);
     delete node;
     // cleanup sort files after removing rather then re-sorting which is O(n)
-    if (vLocation >= 0)
+    if (vLocation >= 0) {
         parentNode->visibleChildren.removeAt(vLocation);
+        if (vLocation < parentNode->dirtyChildrenIndex)
+            --parentNode->dirtyChildrenIndex;
+    }
     if (vLocation >= 0 && !indexHidden)
         q->endRemoveRows();
 }
@@ -1948,6 +1950,8 @@ void QFileSystemModelPrivate::removeVisibleFile(QFileSystemNode *parentNode, int
                                        translateVisibleLocation(parentNode, vLocation));
     parentNode->children.value(parentNode->visibleChildren.at(vLocation))->isVisible = false;
     parentNode->visibleChildren.removeAt(vLocation);
+    if (vLocation < parentNode->dirtyChildrenIndex)
+        --parentNode->dirtyChildrenIndex;
     if (!indexHidden)
         q->endRemoveRows();
 }

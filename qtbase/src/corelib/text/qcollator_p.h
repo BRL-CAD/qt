@@ -41,7 +41,7 @@ typedef QList<UCCollationValue> CollatorKeyType;
 const CollatorType NoCollator = 0;
 
 #elif defined(Q_OS_WIN)
-typedef QString CollatorKeyType;
+typedef QByteArray CollatorKeyType;
 typedef int CollatorType;
 const CollatorType NoCollator = 0;
 
@@ -56,9 +56,6 @@ class QCollatorPrivate
 public:
     QAtomicInt ref = 1;
     QLocale locale;
-#if defined(Q_OS_WIN) && !QT_CONFIG(icu)
-    LCID localeID;
-#endif
     Qt::CaseSensitivity caseSensitivity = Qt::CaseSensitive;
     bool numericMode = false;
     bool ignorePunctuation = false;
@@ -68,7 +65,7 @@ public:
 
     QCollatorPrivate(const QLocale &locale) : locale(locale) {}
     ~QCollatorPrivate() { cleanup(); }
-    bool isC() { return locale.language() == QLocale::C; }
+    bool isC() const { return locale.language() == QLocale::C; }
 
     void clear() {
         cleanup();
@@ -85,18 +82,17 @@ public:
     void init();
     void cleanup();
 
+    static QCollatorSortKey sortKeyFromData(CollatorKeyType &&data);
+
 private:
     Q_DISABLE_COPY_MOVE(QCollatorPrivate)
 };
 
 class QCollatorSortKeyPrivate : public QSharedData
 {
-    friend class QCollator;
 public:
-    template <typename...T>
-    explicit QCollatorSortKeyPrivate(T &&...args)
-        : QSharedData()
-        , m_key(std::forward<T>(args)...)
+    explicit QCollatorSortKeyPrivate(CollatorKeyType &&list)
+        : QSharedData(), m_key(std::move(list))
     {
     }
 
@@ -106,6 +102,10 @@ private:
     Q_DISABLE_COPY_MOVE(QCollatorSortKeyPrivate)
 };
 
+inline QCollatorSortKey QCollatorPrivate::sortKeyFromData(CollatorKeyType &&data)
+{
+    return QCollatorSortKey(new QCollatorSortKeyPrivate(std::move(data)));
+}
 
 QT_END_NAMESPACE
 

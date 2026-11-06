@@ -872,12 +872,19 @@ void QSslSocket::close()
 
     if (!d->abortCalled && (encryptedBytesToWrite() || !d->writeBuffer.isEmpty()))
         flush();
+
+    // Initiate TLS shutdown while the read buffer is still valid;
+    // QTcpSocket::close() destroys it before calling disconnectFromHost().
+    if (!d->abortCalled)
+        disconnectFromHost();
+
     if (d->plainSocket) {
         if (d->abortCalled)
             d->plainSocket->abort();
         else
             d->plainSocket->close();
     }
+
     QTcpSocket::close();
 
     // must be cleared, reading/writing not possible on closed socket:
@@ -969,6 +976,8 @@ void QSslSocket::setSslConfiguration(const QSslConfiguration &configuration)
     d->configuration.nextAllowedProtocols = configuration.allowedNextProtocols();
     d->configuration.nextNegotiatedProtocol = configuration.nextNegotiatedProtocol();
     d->configuration.nextProtocolNegotiationStatus = configuration.nextProtocolNegotiationStatus();
+    // The getter is non-const, it hands the values over, so read the private:
+    d->configuration.keyingMaterial = configuration.d->keyingMaterial;
 #if QT_CONFIG(ocsp)
     d->configuration.ocspStaplingEnabled = configuration.ocspStaplingEnabled();
 #endif
@@ -2973,6 +2982,7 @@ QList<QByteArray> QSslSocketPrivate::unixRootCertDirectories()
         ba("/etc/openssl/certs/"), // BlackBerry
         ba("/opt/openssl/certs/"), // HP-UX
         ba("/etc/ssl/"), // OpenBSD
+        ba("/etc/security/certificates/"), // HarmonyOS
     };
     QList<QByteArray> result = QList<QByteArray>::fromReadOnlyData(dirs);
     if constexpr (isVxworks) {

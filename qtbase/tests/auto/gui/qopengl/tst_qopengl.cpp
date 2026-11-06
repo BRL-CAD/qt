@@ -823,16 +823,19 @@ void tst_QOpenGL::fboMRT()
         QCOMPARE(sizes, fbo.sizes());
         QCOMPARE(sizes[0], fbo.size());
         // Clear the three buffers to red, green and blue.
-        GLenum drawBuf = GL_COLOR_ATTACHMENT0;
-        ef->glDrawBuffers(1, &drawBuf);
+        // GLES 3.0 requires bufs[i] == GL_COLOR_ATTACHMENTi or GL_NONE, so
+        // pad with GL_NONE entries so that the array index matches the
+        // attachment number.  This form is also valid on desktop OpenGL.
+        const GLenum drawBuf0[1] = {GL_COLOR_ATTACHMENT0};
+        const GLenum drawBuf1[2] = {GL_NONE, GL_COLOR_ATTACHMENT0 + 1};
+        const GLenum drawBuf2[3] = {GL_NONE, GL_NONE, GL_COLOR_ATTACHMENT0 + 2};
+        ef->glDrawBuffers(1, drawBuf0);
         ef->glClearColor(1, 0, 0, 1);
         ef->glClear(GL_COLOR_BUFFER_BIT);
-        drawBuf = GL_COLOR_ATTACHMENT0 + 1;
-        ef->glDrawBuffers(1, &drawBuf);
+        ef->glDrawBuffers(2, drawBuf1);
         ef->glClearColor(0, 1, 0, 1);
         ef->glClear(GL_COLOR_BUFFER_BIT);
-        drawBuf = GL_COLOR_ATTACHMENT0 + 2;
-        ef->glDrawBuffers(1, &drawBuf);
+        ef->glDrawBuffers(3, drawBuf2);
         ef->glClearColor(0, 0, 1, 1);
         ef->glClear(GL_COLOR_BUFFER_BIT);
         // Verify, keeping in mind that only a 128x123 area is touched in the buffers.
@@ -1790,6 +1793,9 @@ void tst_QOpenGL::dontCrashOnInvalidContextThreadTeardown()
 // that the user's FBO is still bound.
 void tst_QOpenGL::makeCurrentAfterResizeWithNonDefaultFBOBound()
 {
+    if (QGuiApplication::platformName().startsWith(QLatin1String("wayland"), Qt::CaseInsensitive))
+        QSKIP("Wayland: fails has no empty window is shown on Wayland.");
+
     class FBOWindow : public QWindow
     {
     public:
@@ -1811,6 +1817,9 @@ void tst_QOpenGL::makeCurrentAfterResizeWithNonDefaultFBOBound()
 
         void exposeEvent(QExposeEvent *) override
         {
+            if (!fbo)
+                return; // macOS 26.0-26.4 might send expose during makeCurrent
+
             ++paintCount;
 
             // If FBO was bound in a previous frame we shouldn't crash

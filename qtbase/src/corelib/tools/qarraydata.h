@@ -17,12 +17,22 @@ QT_BEGIN_NAMESPACE
 #if __has_cpp_attribute(gnu::malloc)
 #  define Q_DECL_MALLOCLIKE [[nodiscard, gnu::malloc]]
 #elif Q_CC_MSVC_ONLY
-#  define Q_DECL_MALLOCLIKE __declspec(allocator) __declspec(restrict) [[nodiscard]]
+#  define Q_DECL_MALLOCLIKE [[nodiscard]] __declspec(allocator) __declspec(restrict)
 #else
 #  define Q_DECL_MALLOCLIKE [[nodiscard]]
 #endif
 
 template <class T> struct QTypedArrayData;
+
+template <class T>
+struct QTypedArrayAllocationResult
+{
+    QTypedArrayData<T> *header;
+    T *ptr;
+
+    [[deprecated]]
+    operator std::pair<QTypedArrayData<T>*, T*>() const noexcept { return {header, ptr}; }
+};
 
 struct QArrayData
 {
@@ -129,9 +139,11 @@ struct QTypedArrayData
 {
     struct AlignmentDummy { QtPrivate::AlignedQArrayData header; T data; };
 
-    [[nodiscard]] static std::pair<QTypedArrayData *, T *> allocate(qsizetype capacity, AllocationOption option = QArrayData::KeepSize)
+    [[nodiscard]] static QTypedArrayAllocationResult<T>
+    allocate(qsizetype capacity, AllocationOption option = QArrayData::KeepSize)
     {
         static_assert(sizeof(QTypedArrayData) == sizeof(QArrayData));
+        Q_DECL_UNINITIALIZED
         QArrayData *d;
         void *result;
         if constexpr (sizeof(T) == 1) {
@@ -150,7 +162,7 @@ struct QTypedArrayData
         return {static_cast<QTypedArrayData *>(d), static_cast<T *>(result)};
     }
 
-    static std::pair<QTypedArrayData *, T *>
+    static QTypedArrayAllocationResult<T>
     reallocateUnaligned(QTypedArrayData *data, T *dataPointer, qsizetype capacity, AllocationOption option)
     {
         static_assert(sizeof(QTypedArrayData) == sizeof(QArrayData));
@@ -169,8 +181,8 @@ struct QTypedArrayData
     {
         // Alignment is a power of two
         Q_ASSERT(alignment >= qsizetype(alignof(QArrayData)) && !(alignment & (alignment - 1)));
-        void *start =  reinterpret_cast<void *>(
-            (quintptr(data) + sizeof(QArrayData) + alignment - 1) & ~(alignment - 1));
+        void *start = reinterpret_cast<void *>((quintptr(data) + sizeof(QArrayData) + alignment - 1)
+                                               & ~quintptr(alignment - 1));
         return static_cast<T *>(start);
     }
 

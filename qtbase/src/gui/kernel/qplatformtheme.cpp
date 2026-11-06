@@ -1,5 +1,6 @@
 // Copyright (C) 2016 The Qt Company Ltd.
 // SPDX-License-Identifier: LicenseRef-Qt-Commercial OR LGPL-3.0-only OR GPL-2.0-only OR GPL-3.0-only
+// Qt-Security score:significant reason:default
 
 #include "qplatformtheme.h"
 
@@ -354,9 +355,9 @@ const QKeyBinding QPlatformThemePrivate::keyBindings[] = {
     {QKeySequence::SaveAs,                  0,          Qt::SHIFT | Qt::Key_Save,               KB_All},
     {QKeySequence::Preferences,             0,          Qt::CTRL | Qt::Key_Comma,               KB_Mac},
     {QKeySequence::Preferences,             0,          Qt::CTRL | Qt::SHIFT | Qt::Key_Comma,   KB_KDE},
-    {QKeySequence::Preferences,             0,          Qt::Key_Settings,                       KB_All},
+    {QKeySequence::Preferences,             0,          Qt::Key_Settings,                       KB_Mac | KB_KDE},
     {QKeySequence::Quit,                    0,          Qt::CTRL | Qt::Key_Q,                   KB_X11 | KB_Gnome | KB_KDE | KB_Mac},
-    {QKeySequence::Quit,                    0,          Qt::Key_Exit,                           KB_All},
+    {QKeySequence::Quit,                    0,          Qt::Key_Exit,                           KB_X11 | KB_Gnome | KB_KDE | KB_Mac},
     {QKeySequence::FullScreen,              1,          Qt::META | Qt::CTRL | Qt::Key_F,        KB_Mac},
     {QKeySequence::FullScreen,              0,          Qt::ALT  | Qt::Key_Enter,               KB_Win},
     {QKeySequence::FullScreen,              0,          Qt::CTRL | Qt::SHIFT | Qt::Key_F,       KB_KDE},
@@ -490,6 +491,11 @@ void QPlatformTheme::requestColorScheme(Qt::ColorScheme scheme)
 Qt::ContrastPreference QPlatformTheme::contrastPreference() const
 {
     return Qt::ContrastPreference::NoPreference;
+}
+
+Qt::MotionPreference QPlatformTheme::motionPreference() const
+{
+    return Qt::MotionPreference::NoPreference;
 }
 
 /*!

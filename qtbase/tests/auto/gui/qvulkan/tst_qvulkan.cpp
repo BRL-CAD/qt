@@ -20,6 +20,7 @@ class tst_QVulkan : public QObject
     Q_OBJECT
 
 private slots:
+    void init();
     void vulkanInstance();
     void vulkanCheckSupported();
     void vulkanPlainWindow();
@@ -29,6 +30,21 @@ private slots:
     void vulkanWindowRenderer();
     void vulkanWindowGrab();
 };
+
+void tst_QVulkan::init()
+{
+    if (QSysInfo::productType() == QLatin1String("rhel") && QSysInfo::productVersion() == QLatin1String("10.0")) {
+        const char *testName = QTest::currentTestFunction();
+        if (!testName)
+            return;
+
+        if (qstrcmp(testName, "vulkanWindow") == 0 ||
+            qstrcmp(testName, "vulkanWindowRenderer") == 0 ||
+            qstrcmp(testName, "vulkanWindowGrab") == 0) {
+                QSKIP("Vulkan/Wayland crash on RHEL 10.0 (QTBUG-146206)");
+        }
+    }
+}
 
 void tst_QVulkan::vulkanInstance()
 {
@@ -118,9 +134,13 @@ void tst_QVulkan::vulkan11()
         err = f->vkEnumeratePhysicalDeviceGroups(inst.vkInstance(), &count, groupProperties.data()); // 1.1 API
         QCOMPARE(err, VK_SUCCESS);
         for (const VkPhysicalDeviceGroupProperties &gp : groupProperties) {
-#ifdef Q_OS_ANDROID
+#if defined(Q_OS_ANDROID)
             QEXPECT_FAIL("",
                 "VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_GROUP_PROPERTIES check fails on Android",
+                Continue);
+#elif defined(Q_OS_QNX)
+            QEXPECT_FAIL("",
+                "VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_GROUP_PROPERTIES check fails on QNX (Mesa V3D does not populate sType)",
                 Continue);
 #endif
             QCOMPARE(gp.sType, VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_GROUP_PROPERTIES);
@@ -258,6 +278,10 @@ static void waitForUnexposed(QWindow *w)
 
 void tst_QVulkan::vulkanWindow()
 {
+#if defined(Q_OS_QNX)
+    QSKIP("Mesa V3D driver state corruption on QNX: destroy/recreate cycle corrupts "
+          "internal driver state, causing subsequent Vulkan tests to crash (SIGSEGV)");
+#endif
     QVulkanInstance inst;
     if (!inst.create())
         QSKIP("Vulkan init failed; skip");
@@ -396,7 +420,7 @@ void TestVulkanRenderer::startNextFrame()
 {
     ++testVulkan.startNextFrameCount;
 
-    VkClearColorValue clearColor = { 0, 1, 0, 1 };
+    VkClearColorValue clearColor = { { 0, 1, 0, 1 } };
     VkClearDepthStencilValue clearDS = { 1, 0 };
     VkClearValue clearValues[2];
     memset(clearValues, 0, sizeof(clearValues));

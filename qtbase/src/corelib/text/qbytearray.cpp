@@ -325,15 +325,16 @@ int qstricmp(const char *str1, const char *str2)
 }
 
 /*! \relates QByteArray
+    \fn int qstrnicmp(const char *s1, const char *s2, size_t len)
 
     A safe \c strnicmp() function.
 
-    Compares at most \a len bytes of \a str1 and \a str2, ignoring differences
+    Compares at most \a len bytes of \a s1 and \a s2, ignoring differences
     in the case of any ASCII characters.
 
-    Returns a negative value if \a str1 is less than \a str2, 0 if \a str1
-    is equal to \a str2 or a positive value if \a str1 is greater than \a
-    str2.
+    Returns a negative value if \a s1 is less than \a s2, 0 if \a s1
+    is equal to \a s2 or a positive value if \a s1 is greater than \a
+    s2.
 
     If both strings are \nullptr, they are deemed equal; otherwise, if either is
     \nullptr, it is treated as less than the other (even if the other is an
@@ -343,71 +344,15 @@ int qstricmp(const char *str1, const char *str2)
     QByteArray::compare()
 */
 
-int qstrnicmp(const char *str1, const char *str2, size_t len)
-{
-    const uchar *s1 = reinterpret_cast<const uchar *>(str1);
-    const uchar *s2 = reinterpret_cast<const uchar *>(str2);
-    if (!s1 || !s2)
-        return s1 ? 1 : (s2 ? -1 : 0);
-    for (; len--; ++s1, ++s2) {
-        const uchar c = *s1;
-        if (int res = QtMiscUtils::caseCompareAscii(c, *s2))
-            return res;
-        if (!c)                                // strings are equal
-            break;
-    }
-    return 0;
-}
-
 /*!
     \internal
+    \fn int qstrnicmp(const char *s1, qsizetype len1, const char *s2, qsizetype len2)
     \since 5.12
 
-    A helper for QByteArray::compare. Compares \a len1 bytes from \a str1 to \a
-    len2 bytes from \a str2. If \a len2 is -1, then \a str2 is expected to be
+    A helper for QByteArray::compare. Compares \a len1 bytes from \a s1 to \a
+    len2 bytes from \a s2. If \a len2 is -1, then \a s2 is expected to be
     '\\0'-terminated.
  */
-int qstrnicmp(const char *str1, qsizetype len1, const char *str2, qsizetype len2)
-{
-    Q_ASSERT(len1 >= 0);
-    Q_ASSERT(len2 >= -1);
-    const uchar *s1 = reinterpret_cast<const uchar *>(str1);
-    const uchar *s2 = reinterpret_cast<const uchar *>(str2);
-    if (!s1 || !len1) {
-        if (len2 == 0)
-            return 0;
-        if (len2 == -1)
-            return (!s2 || !*s2) ? 0 : -1;
-        Q_ASSERT(s2);
-        return -1;
-    }
-    if (!s2)
-        return len1 == 0 ? 0 : 1;
-
-    if (len2 == -1) {
-        // null-terminated str2
-        qsizetype i;
-        for (i = 0; i < len1; ++i) {
-            const uchar c = s2[i];
-            if (!c)
-                return 1;
-
-            if (int res = QtMiscUtils::caseCompareAscii(s1[i], c))
-                return res;
-        }
-        return s2[i] ? -1 : 0;
-    } else {
-        // not null-terminated
-        const qsizetype len = qMin(len1, len2);
-        for (qsizetype i = 0; i < len; ++i) {
-            if (int res = QtMiscUtils::caseCompareAscii(s1[i], s2[i]))
-                return res;
-        }
-        if (len1 == len2)
-            return 0;
-        return len1 < len2 ? -1 : 1;
-    }
-}
 
 /*!
     \internal
@@ -644,7 +589,7 @@ static QByteArray xxflate(ZLibOp op, QArrayDataPointer<char> out, QByteArrayView
 
             qsizetype avail_out = capacity - out.size;
             if (avail_out == 0) {
-                out->reallocateAndGrow(QArrayData::GrowsAtEnd, 1); // grow to next natural capacity
+                out.reallocateAndGrow(QArrayData::GrowsAtEnd, 1); // grow to next natural capacity
                 if (out.data() == nullptr) // reallocation failed
                     return tooMuchData(op);
                 capacity = out.allocatedCapacity();
@@ -680,9 +625,6 @@ static QByteArray xxflate(ZLibOp op, QArrayDataPointer<char> out, QByteArrayView
         return tooMuchData(op);
 
     case Z_BUF_ERROR:
-        Q_UNREACHABLE(); // cannot happen - we supply a buffer that can hold the result,
-                         // or else error out early
-
     case Z_DATA_ERROR:   // can only happen on decompression
         Q_ASSERT(op == ZLibOp::Decompression);
         return invalidCompressedData();
@@ -1919,10 +1861,10 @@ void QByteArray::resize(qsizetype size)
         size = 0;
 
     const auto capacityAtEnd = capacity() - d.freeSpaceAtBegin();
-    if (d->needsDetach() || size > capacityAtEnd)
+    if (d.needsDetach() || size > capacityAtEnd)
         reallocData(size, QArrayData::Grow);
     d.size = size;
-    if (d->allocatedCapacity())
+    if (d.allocatedCapacity())
         d.data()[size] = 0;
 }
 
@@ -1995,7 +1937,7 @@ void QByteArray::reallocData(qsizetype alloc, QArrayData::AllocationOption optio
     // at the beginning: might shift data pointer outside of allocated space
     const bool cannotUseReallocate = d.freeSpaceAtBegin() > 0;
 
-    if (d->needsDetach() || cannotUseReallocate) {
+    if (d.needsDetach() || cannotUseReallocate) {
         DataPointer dd(alloc, qMin(alloc, d.size), option);
         Q_CHECK_PTR(dd.data());
         if (dd.size > 0)
@@ -2012,7 +1954,7 @@ void QByteArray::reallocGrowData(qsizetype n)
     if (!n)  // expected to always allocate
         n = 1;
 
-    if (d->needsDetach()) {
+    if (d.needsDetach()) {
         DataPointer dd(DataPointer::allocateGrow(d, n, QArrayData::GrowsAtEnd));
         Q_CHECK_PTR(dd.data());
         dd->copyAppend(d.data(), d.data() + d.size);
@@ -2286,7 +2228,8 @@ QByteArray &QByteArray::assign(QByteArrayView v)
         const auto offset = d.freeSpaceAtBegin();
         if (offset)
             d.setBegin(d.begin() - offset);
-        std::memcpy(d.begin(), v.data(), len);
+        if (len)
+            std::memcpy(d.begin(), v.data(), len);
         d.size = len;
         d.data()[d.size] = '\0';
     } else {
@@ -2324,20 +2267,20 @@ QByteArray &QByteArray::insert(qsizetype i, QByteArrayView data)
 
     // handle this specially, as QArrayDataOps::insert() doesn't handle out of
     // bounds positions
-    if (i >= d->size) {
+    if (i >= d.size) {
         // In case when data points into the range or is == *this, we need to
         // defer a call to free() so that it comes after we copied the data from
         // the old memory:
         DataPointer detached{};  // construction is free
         d.detachAndGrow(Data::GrowsAtEnd, (i - d.size) + size, &str, &detached);
         Q_CHECK_PTR(d.data());
-        d->copyAppend(i - d->size, ' ');
+        d->copyAppend(i - d.size, ' ');
         d->copyAppend(str, str + size);
         d.data()[d.size] = '\0';
         return *this;
     }
 
-    if (!d->needsDetach() && QtPrivate::q_points_into_range(str, d)) {
+    if (!d.needsDetach() && QtPrivate::q_points_into_range(str, d)) {
         QVarLengthArray a(str, str + size);
         return insert(i, a);
     }
@@ -2405,11 +2348,11 @@ QByteArray &QByteArray::insert(qsizetype i, qsizetype count, char ch)
     if (i < 0 || count <= 0)
         return *this;
 
-    if (i >= d->size) {
+    if (i >= d.size) {
         // handle this specially, as QArrayDataOps::insert() doesn't handle out of bounds positions
         d.detachAndGrow(Data::GrowsAtEnd, (i - d.size) + count, nullptr, nullptr);
         Q_CHECK_PTR(d.data());
-        d->copyAppend(i - d->size, ' ');
+        d->copyAppend(i - d.size, ' ');
         d->copyAppend(count, ch);
         d.data()[d.size] = '\0';
         return *this;
@@ -2442,11 +2385,11 @@ QByteArray &QByteArray::remove(qsizetype pos, qsizetype len)
 {
     if (len <= 0  || pos < 0 || size_t(pos) >= size_t(size()))
         return *this;
-    if (pos + len > d->size)
-        len = d->size - pos;
+    if (pos + len > d.size)
+        len = d.size - pos;
 
     const auto toRemove_start = d.begin() + pos;
-    if (!d->isShared()) {
+    if (!d.isShared()) {
         d->erase(toRemove_start, len);
         d.data()[d.size] = '\0';
     } else {
@@ -4288,13 +4231,13 @@ QByteArray &QByteArray::setNum(qulonglong n, int base)
 
 /*!
     \overload
-
+//! [set-num]
     Represent the floating-point number \a n as text.
 
     Sets this byte array to a string representing \a n, with a given \a format
-    and \a precision (with the same meanings as for \l {QString::number(double,
+    and \a precision (with the same meanings as for \l {QLocale::toString(double,
     char, int)}), and returns a reference to this byte array.
-
+//! [set-num]
     \sa toDouble(), QLocale::FloatingPointPrecisionOption
 */
 
@@ -4304,16 +4247,12 @@ QByteArray &QByteArray::setNum(double n, char format, int precision)
 }
 
 /*!
-    \fn QByteArray &QByteArray::setNum(float n, char format, int precision)
     \overload
+    \fn QByteArray &QByteArray::setNum(float n, char format, int precision)
 
-    Represent the floating-point number \a n as text.
+    \include qbytearray.cpp set-num
 
-    Sets this byte array to a string representing \a n, with a given \a format
-    and \a precision (with the same meanings as for \l {QString::number(double,
-    char, int)}), and returns a reference to this byte array.
-
-    \sa toFloat()
+    \sa toFloat(), QLocale::FloatingPointPrecisionOption
 */
 
 /*!
@@ -4735,10 +4674,10 @@ static qsizetype q_fromPercentEncoding(QByteArrayView src, char percent, QSpan<c
     while (i < len) {
         char c = inputPtr[i];
         if (c == percent && i + 2 < len) {
-            if (int a = QtMiscUtils::fromHex(uchar(inputPtr[++i])); a != -1)
-                *data = a << 4;
-            if (int b = QtMiscUtils::fromHex(uchar(inputPtr[++i])); b != -1)
-                *data |= b;
+            int a = QtMiscUtils::fromHex(uchar(inputPtr[++i]));
+            int b = QtMiscUtils::fromHex(uchar(inputPtr[++i]));
+            // don't check for validity; GIGO applies
+            *data = uchar(a << 4) | uchar(b);
         } else {
             *data = c;
         }
@@ -4806,7 +4745,7 @@ QByteArray QByteArray::fromPercentEncoding(const QByteArray &input, char percent
 */
 QByteArray QByteArray::fromPercentEncoding(QByteArray &&input, char percent)
 {
-    if (input.d->needsDetach())
+    if (input.d.needsDetach())
         return fromPercentEncoding(input, percent); // lvalue overload
 
     if (input.isEmpty())
@@ -5176,6 +5115,7 @@ emscripten::val QByteArray::toEcmaUint8Array()
 
 /*!
     \fn const QByteArray &QByteArray::FromBase64Result::operator*() const &
+    \fn const QByteArray &&QByteArray::FromBase64Result::operator*() const &&
     \fn QByteArray &QByteArray::FromBase64Result::operator*() &
     \fn QByteArray &&QByteArray::FromBase64Result::operator*() &&
 

@@ -10,6 +10,8 @@
 #include <private/qeventdispatcher_win_p.h>
 #include "qloggingcategory.h"
 #include "qmutex.h"
+#include <private/quniquehandle_types_p.h>
+#include <private/qwin32ticks_p.h>
 
 #include <qt_windows.h>
 
@@ -40,6 +42,9 @@ typedef struct _THREAD_POWER_THROTTLING_STATE {
 } THREAD_POWER_THROTTLING_STATE;
 #endif
 
+#ifndef CREATE_WAITABLE_TIMER_HIGH_RESOLUTION
+#define CREATE_WAITABLE_TIMER_HIGH_RESOLUTION 0x2
+#endif
 
 QT_BEGIN_NAMESPACE
 
@@ -292,6 +297,35 @@ Qt::HANDLE QThread::currentThreadIdImpl() noexcept
 
 int QThread::idealThreadCount() noexcept
 {
+    // Since Windows 11 & Server 2022, the process defaults to affinity to all
+    // processor groups, even though each thread is limited to a specific
+    // processor group. Prior to that, the application starts with affinity to
+    // a specific group but the process becomes multi-group if the application
+    // changes any thread's affinity to another group.
+    //
+    // https://learn.microsoft.com/en-us/windows/win32/procthread/processor-groups#behavior-starting-with-windows-11-and-windows-server-2022
+    auto countArray = [](QSpan<const USHORT> groups) {
+        int total = 0;
+        for (USHORT group : groups)
+            total += GetActiveProcessorCount(group);
+        return total;
+    };
+
+    // Typical case: all but the largest systems will fit this array
+    // Note: this API has been around since Windows 7.
+    USHORT groups[16];
+    USHORT groupCount = std::size(groups);
+    if (Q_LIKELY(GetProcessGroupAffinity(HANDLE(-1), &groupCount, groups))) {
+        return countArray({ groups, groupCount });
+    } else if (groupCount > std::size(groups)) {
+        // use a larger buffer
+        auto buffer = static_cast<USHORT *>(alloca(sizeof(USHORT) * groupCount));
+        if (GetProcessGroupAffinity(HANDLE(-1), &groupCount, buffer))
+            return countArray({ buffer, groupCount });
+    }
+
+    // The new API failed, for some reason (it shouldn't have!). Fall back to
+    // the oldest of APIs. Note this may be limited to 64 logical processors.
     SYSTEM_INFO sysinfo;
     GetSystemInfo(&sysinfo);
     return sysinfo.dwNumberOfProcessors;
@@ -307,7 +341,32 @@ void QThread::yieldCurrentThread()
 void QThread::sleep(std::chrono::nanoseconds nsecs)
 {
     using namespace std::chrono;
-    ::Sleep(DWORD(duration_cast<milliseconds>(nsecs).count()));
+    if (nsecs < 30ms) {
+        QUniqueWin32NullHandle waitableTimerHandle;
+        waitableTimerHandle.reset(CreateWaitableTimerEx(
+                nullptr, nullptr, CREATE_WAITABLE_TIMER_HIGH_RESOLUTION, TIMER_ALL_ACCESS));
+        if (waitableTimerHandle) {
+            using namespace std::chrono_literals;
+            // SetWaitableTimerEx's uses intervals of 100ns (0.1µs)
+            const auto ticks100ns = ceil<QtPrivate::win32_ticks>(nsecs);
+            LARGE_INTEGER i;
+            // Negate to make it a relative timeout:
+            i.QuadPart = std::min(-(ticks100ns.count()), -1ll);
+            BOOL timerResult = SetWaitableTimerEx(
+                    waitableTimerHandle.get(), &i,
+                    0, // not periodic
+                    nullptr, nullptr, // no callback
+                    nullptr, // no wake context / don't wake from sleep
+                    0); // lowest tolerated delay
+
+            if (timerResult == TRUE) {
+                if (WaitForSingleObject(waitableTimerHandle.get(), INFINITE) == ERROR_SUCCESS)
+                    return;
+            }
+        }
+    }
+    // Fallback:
+    ::Sleep(DWORD(ceil<milliseconds>(nsecs).count()));
 }
 
 void QThread::sleep(unsigned long secs)
@@ -322,7 +381,7 @@ void QThread::msleep(unsigned long msecs)
 
 void QThread::usleep(unsigned long usecs)
 {
-    ::Sleep((usecs / 1000) + 1);
+    sleep(std::chrono::microseconds(usecs));
 }
 
 #if QT_CONFIG(thread)

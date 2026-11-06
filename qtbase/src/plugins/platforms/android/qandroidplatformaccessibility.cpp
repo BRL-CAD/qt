@@ -33,7 +33,8 @@ void QAndroidPlatformAccessibility::notifyAccessibilityUpdate(QAccessibleEvent *
         QtAndroidAccessibility::notifyObjectFocus(event->uniqueId());
     } else if (event->type() == QAccessible::ValueChanged) {
         QtAndroidAccessibility::notifyValueChanged(event->uniqueId());
-    } else if (event->type() == QAccessible::ScrollingEnd) {
+    } else if (event->type() == QAccessible::ScrollingEnd
+               || event->type() == QAccessible::ScrollingPositionChanged) {
         QtAndroidAccessibility::notifyScrolledEvent(event->uniqueId());
     } else if (event->type() == QAccessible::NameChanged
                || event->type() == QAccessible::DescriptionChanged) {
@@ -43,6 +44,11 @@ void QAndroidPlatformAccessibility::notifyAccessibilityUpdate(QAccessibleEvent *
         QtAndroidAccessibility::notifyAnnouncementEvent(announcementEvent->uniqueId(),
                                                         announcementEvent->message());
     }
+    // Text-change events are intentionally not forwarded from here: typed and
+    // programmatic edits are announced from the IME chokepoints in
+    // QAndroidInputContext, which also cover the input-method and key-event
+    // paths that emit no QAccessible event. Forwarding TextInserted/Removed/
+    // Updated here too would double-announce programmatic changes.
 }
 
 void QAndroidPlatformAccessibility::setRootObject(QObject *obj)

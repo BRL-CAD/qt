@@ -16,6 +16,8 @@
 #include "private/qtimezoneprivate_p.h"
 #endif
 
+#include <QtCore/q20utility.h>
+
 #include <time.h>
 #ifdef Q_OS_WIN
 #  include <qt_windows.h>
@@ -532,11 +534,12 @@ int getUtcOffset(qint64 atMSecsSinceEpoch)
 QDateTimePrivate::ZoneState utcToLocal(qint64 utcMillis)
 {
     const auto epoch = QRoundingDown::qDivMod<MSECS_PER_SEC>(utcMillis);
-    const time_t epochSeconds = epoch.quotient;
-    const int msec = epoch.remainder;
+    const auto msec = epoch.remainder;
     Q_ASSERT(msec >= 0 && msec < MSECS_PER_SEC);
-    if (qint64(epochSeconds) * MSECS_PER_SEC + msec != utcMillis) // time_t range too narrow
+    if (!q20::in_range<time_t>(epoch.quotient))
         return {utcMillis};
+
+    const auto epochSeconds = time_t(epoch.quotient);
 
     tm local;
     if (!qLocalTime(epochSeconds, &local))
@@ -550,7 +553,7 @@ QDateTimePrivate::ZoneState utcToLocal(qint64 utcMillis)
     Q_ASSERT(0 <= daySeconds && daySeconds < SECS_PER_DAY);
     qint64 localSeconds, localMillis;
     if (Q_UNLIKELY(daysAndSecondsOverflow(*jd, daySeconds, &localSeconds)
-                   || secondsAndMillisOverflow(localSeconds, qint64(msec), &localMillis))) {
+                   || secondsAndMillisOverflow(localSeconds, msec, &localMillis))) {
         return {utcMillis};
     }
     const auto dst
@@ -558,7 +561,7 @@ QDateTimePrivate::ZoneState utcToLocal(qint64 utcMillis)
     return { localMillis, int(localSeconds - epochSeconds), dst };
 }
 
-QString localTimeAbbbreviationAt(qint64 local, QDateTimePrivate::TransitionOptions resolve)
+QString localTimeAbbreviationAt(qint64 local, QDateTimePrivate::TransitionOptions resolve)
 {
     auto use = resolveLocalTime(QRoundingDown::qDiv<MSECS_PER_SEC>(local), resolve);
     if (!use.good)

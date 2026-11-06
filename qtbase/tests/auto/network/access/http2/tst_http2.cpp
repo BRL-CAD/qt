@@ -14,8 +14,10 @@
 #include <QtNetwork/private/qhttpnetworkconnection_p.h>
 #include <QtNetwork/private/qhttpnetworkreply_p.h>
 #include <QtNetwork/private/http2protocol_p.h>
+#include <QtNetwork/private/qhttp2protocolhandler_p.h>
 #include <QtNetwork/qnetworkaccessmanager.h>
 #include <QtNetwork/qhttp2configuration.h>
+#include <QtNetwork/private/qhttp2configuration_p.h>
 #include <QtNetwork/qnetworkrequest.h>
 #include <QtNetwork/qnetworkreply.h>
 
@@ -43,6 +45,7 @@ Q_DECLARE_METATYPE(QNetworkRequest::Attribute)
 QT_BEGIN_NAMESPACE
 
 using namespace Qt::StringLiterals;
+using namespace std::chrono_literals;
 
 QHttp2Configuration qt_defaultH2Configuration()
 {
@@ -60,6 +63,10 @@ RawSettings qt_H2ConfigurationToSettings(const QHttp2Configuration &config = qt_
     settings[Http2::Settings::INITIAL_WINDOW_SIZE_ID] = config.streamReceiveWindowSize();
     if (config.maxFrameSize() != Http2::minPayloadLimit)
         settings[Http2::Settings::MAX_FRAME_SIZE_ID] = config.maxFrameSize();
+    if (const quint32 maxHeaderListSize =
+                QHttp2ConfigurationPrivate::get(config)->maxHeaderListSize;
+        maxHeaderListSize != (std::numeric_limits<quint32>::max)())
+        settings[Http2::Settings::MAX_HEADER_LIST_SIZE_ID] = maxHeaderListSize;
     return settings;
 }
 
@@ -86,9 +93,12 @@ private slots:
     void pushPromise();
     void goaway_data();
     void goaway();
+    void goawayNoErrorContentReSend();
+    void goawayDisconnectQueuedRequest();
     void earlyResponse();
     void earlyError();
     void abortReply();
+    void abortReplyThenReceiveHeaders();
     void connectToHost_data();
     void connectToHost();
     void maxFrameSize();
@@ -104,6 +114,7 @@ private slots:
     void authenticationRequired();
 
     void unsupportedAuthenticateChallenge();
+    void ntlmAuthenticateChallengeEmitsFinished();
 
     void h2cAllowedAttribute_data();
     void h2cAllowedAttribute();
@@ -112,6 +123,8 @@ private slots:
     void redirect();
 
     void trailingHEADERS();
+
+    void dataFrameAfterEndStream();
 
     void duplicateRequestsWithAborts();
 
@@ -608,7 +621,7 @@ void tst_Http2::goaway_data()
     QTest::addColumn<QNetworkReply::NetworkError>("expectedError");
     QTest::newRow("ImmediateGOAWAY") << 0 << int(Http2::INTERNAL_ERROR) << QNetworkReply::InternalServerError;
     QTest::newRow("DelayedGOAWAY") << 1000 << int(Http2::INTERNAL_ERROR) << QNetworkReply::InternalServerError;
-    QTest::newRow("Graceful") << 0 << int(Http2::HTTP2_NO_ERROR) << QNetworkReply::RemoteHostClosedError;
+    QTest::newRow("Graceful") << 0 << int(Http2::HTTP2_NO_ERROR) << QNetworkReply::ContentReSendError;
     QTest::newRow("Unknown") << 0 << 500000 << QNetworkReply::ProtocolFailure;
 }
 
@@ -657,6 +670,106 @@ void tst_Http2::goaway()
     // Our server did not bother to send anything except a single GOAWAY frame:
     QVERIFY(!prefaceOK);
     QVERIFY(!serverGotSettingsACK);
+}
+
+void tst_Http2::goawayNoErrorContentReSend()
+{
+    // QTBUG-147237: when a server sends a graceful GOAWAY (NO_ERROR) with lastStreamID
+    // that is less than a stream we already started, the stream was not processed by the
+    // server and is safe to resend. The reply should carry ContentReSendError, not
+    // RemoteHostClosedError.
+
+    clearHTTP2State();
+    serverPort = 0;
+    nRequests = 1;
+
+    ServerPtr srv(newServer(defaultServerSettings, defaultConnectionType()));
+    // The 500ms delay gives the client time to open stream 1 before the GOAWAY arrives.
+    srv->emulateGOAWAY(int(Http2::HTTP2_NO_ERROR), 500);
+    QMetaObject::invokeMethod(srv.get(), "startServer", Qt::QueuedConnection);
+    runEventLoop();
+
+    QVERIFY(serverPort != 0);
+
+    auto url = requestUrl(defaultConnectionType());
+    url.setPath("/0"_L1);
+    QNetworkRequest request(url);
+    request.setAttribute(QNetworkRequest::Http2CleartextAllowedAttribute, true);
+    request.setAttribute(QNetworkRequest::Http2AllowedAttribute, true);
+
+    std::unique_ptr<QNetworkReply> reply(manager->get(request));
+    reply->ignoreSslErrors();
+    connect(reply.get(), &QNetworkReply::errorOccurred, this, &tst_Http2::replyFinishedWithError);
+
+    runEventLoop(5000);
+    STOP_ON_FAILURE
+
+    QCOMPARE(reply->error(), QNetworkReply::ContentReSendError);
+}
+
+void tst_Http2::goawayDisconnectQueuedRequest()
+{
+    // QTBUG-147237: a request queued while the channel is reconnecting after a graceful
+    // GOAWAY + TCP disconnect should receive ContentReSendError rather than hanging until
+    // a transferTimeout fires.
+
+    clearHTTP2State();
+    serverPort = 0;
+    nRequests = 1;
+
+    ServerPtr srv(newServer(defaultServerSettings, defaultConnectionType()));
+    // The 500ms delay gives the client time to open stream 1 before the GOAWAY arrives.
+    srv->emulateGOAWAY(int(Http2::HTTP2_NO_ERROR), 500, true);
+    QMetaObject::invokeMethod(srv.get(), "startServer", Qt::QueuedConnection);
+    runEventLoop();
+    QCOMPARE_NE(serverPort, quint16(0));
+
+    auto makeRequest = [this](int index) {
+        auto url = requestUrl(defaultConnectionType());
+        url.setPath(u"/%1"_s.arg(index));
+        QNetworkRequest req(url);
+        req.setAttribute(QNetworkRequest::Http2CleartextAllowedAttribute, true);
+        req.setAttribute(QNetworkRequest::Http2AllowedAttribute, true);
+        // A request queued on a going-away channel that never reconnects is never sent at
+        // all, so bound the wait instead of letting the test block until it is killed.
+        req.setTransferTimeout(3s);
+        return req;
+    };
+
+    // First request: establishes the H2 session and receives ContentReSendError because
+    // the server sends GOAWAY with lastStreamID 0, so stream 1 was never processed.
+    std::unique_ptr<QNetworkReply> initial(manager->get(makeRequest(0)));
+    initial->ignoreSslErrors();
+
+    // Queue a second request once the first one has errored.
+    std::unique_ptr<QNetworkReply> retry;
+    connect(initial.get(), &QNetworkReply::errorOccurred, this,
+            [&](QNetworkReply::NetworkError) {
+                retry.reset(manager->get(makeRequest(1)));
+                retry->ignoreSslErrors();
+                connect(retry.get(), &QNetworkReply::errorOccurred, this,
+                        [this](QNetworkReply::NetworkError) {
+                            --nRequests;
+                            if (!nRequests)
+                                stopEventLoop();
+                        });
+            });
+
+    runEventLoop(10000);
+    STOP_ON_FAILURE
+
+    // Stream 1 had ID > lastStreamID 0, so the server never processed it.
+    QCOMPARE(initial->error(), QNetworkReply::ContentReSendError);
+
+    // The retry was held while the going-away connection closed, then retried on a new
+    // connection. The server stopped accepting new connections, so the reconnect fails.
+    QList<QNetworkReply::NetworkError> expectedErrors = { QNetworkReply::ConnectionRefusedError };
+#ifdef Q_OS_WIN
+    // Windows does not promptly refuse a connection to a just-closed port, so instead of
+    // failing fast the reconnect stalls until the transfer timeout set above fires.
+    expectedErrors += QNetworkReply::TimeoutError;
+#endif
+    QVERIFY2(expectedErrors.contains(retry->error()), qPrintable(retry->errorString()));
 }
 
 void tst_Http2::earlyResponse()
@@ -845,6 +958,69 @@ void tst_Http2::abortReply()
     using namespace std::chrono_literals;
     // Process some extra events in case they trigger an error:
     QTest::qWait(100ms);
+}
+
+void tst_Http2::abortReplyThenReceiveHeaders()
+{
+    clearHTTP2State();
+    serverPort = 0;
+
+    const auto serverConnectionType = defaultConnectionType() == H2Type::h2c ? H2Type::h2Direct
+                                                                             : H2Type::h2Alpn;
+    ServerPtr targetServer(newServer(defaultServerSettings, serverConnectionType));
+
+    QMetaObject::invokeMethod(targetServer.get(), "startServer", Qt::QueuedConnection);
+    runEventLoop();
+
+    QVERIFY(serverPort != 0);
+
+    // SETUP create QHttpNetworkConnection primed for http2 usage
+    const auto connectionType = serverConnectionType == H2Type::h2Direct
+            ? QHttpNetworkConnection::ConnectionTypeHTTP2Direct
+            : QHttpNetworkConnection::ConnectionTypeHTTP2;
+    QHttpNetworkConnection connection(1, "127.0.0.1", serverPort, true, false, nullptr,
+                                      connectionType);
+#if QT_CONFIG(ssl)
+    QSslConfiguration config = QSslConfiguration::defaultConfiguration();
+    config.setAllowedNextProtocols({"h2"});
+    connection.setSslConfiguration(config);
+    connection.ignoreSslErrors();
+#endif
+    // SETUP manually setup the QHttpNetworkRequest
+    QHttpNetworkRequest req;
+    req.setSsl(true);
+    req.setHTTP2Allowed(true);
+    if (defaultConnectionType() == H2Type::h2c)
+        req.setH2cAllowed(true);
+    req.setOperation(QHttpNetworkRequest::Get);
+    req.setUrl(requestUrl(defaultConnectionType()));
+    // ^ All the above is set-up, the real code starts below v
+
+    std::unique_ptr<QHttpNetworkReply> reply{connection.sendRequest(req)};
+    QVERIFY(reply);
+    QSemaphore sem;
+    connect(reply.get(), &QHttpNetworkReply::finished, reply.get(), [&sem] {
+        sem.release();
+    });
+
+    using namespace std::chrono_literals;
+    QDeadlineTimer timer(5s);
+    // We purposefully do not use any of the qWait* functions because we don't want to process
+    // deleteLater's yet
+    while (!sem.tryAcquire() && !timer.hasExpired())
+        QCoreApplication::processEvents();
+    QCOMPARE_GT(timer.remainingTime(), 0);
+
+    auto *handler = static_cast<QHttp2ProtocolHandler *>(
+            connection.channels()->protocolHandler.get());
+    QVERIFY(handler);
+    QCOMPARE(handler->requestReplyPairs.size(), 0);
+
+    // Ensure deleteLater() for the stream has executed before reply destruction.
+    QCoreApplication::sendPostedEvents(nullptr, QEvent::DeferredDelete);
+    QTest::qWait(50ms);
+
+    reply.reset();
 }
 
 
@@ -1356,10 +1532,8 @@ void tst_Http2::authenticationRequired()
     if (success) {
         connect(reply.get(), &QNetworkReply::finished, this, &tst_Http2::replyFinished);
     } else {
-        // Use queued connection so that the finished signal can be emitted and the isFinished
-        // property can be set.
-        connect(reply.get(), &QNetworkReply::errorOccurred, this,
-                &tst_Http2::replyFinishedWithError, Qt::QueuedConnection);
+        // finished() guarantees errorOccurred() was already delivered.
+        connect(reply.get(), &QNetworkReply::finished, this, &tst_Http2::replyFinishedWithError);
     }
     // Since we're using self-signed certificates,
     // ignore SSL errors:
@@ -1448,10 +1622,8 @@ void tst_Http2::unsupportedAuthenticateChallenge()
                 receivedDataOnStreams.insert(streamID);
             });
 
-    // Use queued connection so that the finished signal can be emitted and the
-    // isFinished property can be set.
-    connect(reply.get(), &QNetworkReply::errorOccurred, this,
-            &tst_Http2::replyFinishedWithError, Qt::QueuedConnection);
+    // finished() guarantees errorOccurred() was already delivered.
+    connect(reply.get(), &QNetworkReply::finished, this, &tst_Http2::replyFinishedWithError);
 
     // Since we're using self-signed certificates, ignore SSL errors:
     reply->ignoreSslErrors();
@@ -1480,6 +1652,50 @@ void tst_Http2::unsupportedAuthenticateChallenge()
     // received.
     QTRY_VERIFY(serverGotSettingsACK);
 
+}
+
+void tst_Http2::ntlmAuthenticateChallengeEmitsFinished()
+{
+    // QTBUG-143926: a server returning NTLM/Negotiate must still emit finished()
+    clearHTTP2State();
+    serverPort = 0;
+
+    if (defaultConnectionType() == H2Type::h2c)
+        QSKIP("This test requires TLS with ALPN to work");
+
+    ServerPtr targetServer(newServer(defaultServerSettings, defaultConnectionType()));
+    targetServer->setAuthenticationHeader("NTLM");
+
+    QMetaObject::invokeMethod(targetServer.get(), "startServer", Qt::QueuedConnection);
+    runEventLoop();
+
+    QVERIFY(serverPort != 0);
+
+    nRequests = 1;
+
+    QUrl url = requestUrl(defaultConnectionType());
+    url.setPath("/index.html");
+    QNetworkRequest request(url);
+
+    auto reply = std::unique_ptr<QNetworkReply>(manager->get(request));
+
+    bool finishedReceived = false;
+    connect(reply.get(), &QNetworkReply::finished, reply.get(),
+            [&]() { finishedReceived = true; });
+
+    // finished() guarantees errorOccurred() was already delivered.
+    connect(reply.get(), &QNetworkReply::finished, this, &tst_Http2::replyFinishedWithError);
+
+    reply->ignoreSslErrors();
+
+    runEventLoop();
+    STOP_ON_FAILURE
+
+    QVERIFY2(reply->isFinished(), "QNetworkReply::finished must be emitted for NTLM challenges");
+    QCOMPARE(reply->error(), QNetworkReply::AuthenticationRequiredError);
+    QVERIFY(finishedReceived);
+
+    QTRY_VERIFY(serverGotSettingsACK);
 }
 
 void tst_Http2::h2cAllowedAttribute_data()
@@ -1646,6 +1862,51 @@ void tst_Http2::trailingHEADERS()
     QCOMPARE(nRequests, 0);
 
     QCOMPARE(reply->error(), QNetworkReply::NoError);
+    QTRY_VERIFY(serverGotSettingsACK);
+}
+
+void tst_Http2::dataFrameAfterEndStream()
+{
+    // A non-conformant server (observed with VK's "kittenx") may send a stray,
+    // empty DATA frame with END_STREAM after the stream was already closed by
+    // a previous END_STREAM. Per RFC 9113 6.1 we answer with RST_STREAM, but an
+    // already fully-received reply must not be turned into an error, and no data
+    // that was received must be dropped.
+    // See QHttp2ProtocolHandler::finishStream().
+    clearHTTP2State();
+    serverPort = 0;
+
+    const QByteArray responseBody = "The complete and correct response body.";
+
+    ServerPtr targetServer(newServer(defaultServerSettings, defaultConnectionType()));
+    targetServer->setResponseBody(responseBody);
+    targetServer->setSendRedundantEndStreamDATA(true);
+
+    QMetaObject::invokeMethod(targetServer.get(), "startServer", Qt::QueuedConnection);
+    runEventLoop();
+
+    QVERIFY(serverPort != 0);
+
+    nRequests = 1;
+
+    const auto url = requestUrl(defaultConnectionType());
+    QNetworkRequest request(url);
+    // H2C might be used on macOS where SecureTransport doesn't support server-side ALPN:
+    request.setAttribute(QNetworkRequest::Http2CleartextAllowedAttribute, true);
+
+    std::unique_ptr<QNetworkReply> reply{ manager->get(request) };
+    connect(reply.get(), &QNetworkReply::finished, this, &tst_Http2::replyFinished);
+
+    // Since we're using self-signed certificates, ignore SSL errors:
+    reply->ignoreSslErrors();
+
+    runEventLoop();
+    STOP_ON_FAILURE
+
+    QCOMPARE(nRequests, 0);
+
+    QCOMPARE(reply->error(), QNetworkReply::NoError);
+    QCOMPARE(reply->readAll(), responseBody);
     QTRY_VERIFY(serverGotSettingsACK);
 }
 

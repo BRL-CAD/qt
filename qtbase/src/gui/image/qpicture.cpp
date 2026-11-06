@@ -1,5 +1,6 @@
 // Copyright (C) 2016 The Qt Company Ltd.
 // SPDX-License-Identifier: LicenseRef-Qt-Commercial OR LGPL-3.0-only OR GPL-2.0-only OR GPL-3.0-only
+// Qt-Security score:significant reason:default
 
 #include "qpicture.h"
 #include <private/qpicture_p.h>
@@ -91,7 +92,7 @@ void qt_format_text(const QFont &fnt,
     \since 5.2
 */
 
-const char  *qt_mfhdr_tag = "QPIC"; // header tag
+const char *const qt_mfhdr_tag = "QPIC"; // header tag
 static const quint16 mfhdr_maj = QDataStream::Qt_DefaultCompiledVersion; // major version #
 static const quint16 mfhdr_min = 0; // minor version #
 

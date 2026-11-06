@@ -48,16 +48,10 @@ public:
 
     void unlock()
     {
-        unsigned flags = 0;
         QReadWriteLockPrivate *d = d_ptr.loadRelaxed();
+        unsigned flags = describeLockForTSan(d);
         quintptr u = quintptr(d);
         Q_ASSERT_X(u, "QReadWriteLock::unlock()", "Cannot unlock an unlocked lock");
-        if (u & StateLockedForRead)
-            flags |= QtTsan::ReadLock;
-#ifdef QT_BUILDING_UNDER_TSAN
-        else if (u > StateMask && isContendedLockForRead(d))
-            flags |= QtTsan::ReadLock;
-#endif
 
         QtTsan::mutexPreUnlock(this, flags);
         if (u > StateMask || !d_ptr.testAndSetRelease(d, nullptr, d))
@@ -131,7 +125,18 @@ protected:
     Q_CORE_EXPORT bool contendedTryLockForRead(QDeadlineTimer timeout, void *dd);
     Q_CORE_EXPORT bool contendedTryLockForWrite(QDeadlineTimer timeout, void *dd);
     Q_CORE_EXPORT void contendedUnlock(void *dd);
+#if QT_CORE_REMOVED_SINCE(6, 12)
     Q_CORE_EXPORT bool isContendedLockForRead(const void *dd) Q_DECL_PURE_FUNCTION;
+#endif
+    static Q_CORE_EXPORT quintptr describeLockInternal(void *dd) noexcept Q_DECL_PURE_FUNCTION;
+    static uint describeLockForTSan(QReadWriteLockPrivate *d, uint flags = 0) noexcept
+    {
+        if constexpr (QtTsan::IsEnabled) {
+            if (describeLockInternal(d) & StateLockedForRead)
+                flags |= QtTsan::ReadLock;
+        }
+        return flags;
+    }
 
     constexpr QBasicReadWriteLock(QReadWriteLockPrivate *d) noexcept : d_ptr(d)
     {}
@@ -179,22 +184,46 @@ public:
 #endif
 
 private:
-    QT7_ONLY(Q_CORE_EXPORT)
+#if QT_CORE_REMOVED_SINCE(6, 12)
     static QReadWriteLockPrivate *initRecursive();
-    QT7_ONLY(Q_CORE_EXPORT)
     static void destroyRecursive(QReadWriteLockPrivate *);
+#endif
+
+    QT7_ONLY(Q_CORE_EXPORT) static void *initRecursiveHelper();
+    QT7_ONLY(Q_CORE_EXPORT) static void destroyRecursiveHelper(void *) noexcept;
+    static QReadWriteLockPrivate *initRecursiveInline()
+    {
+        auto d = static_cast<QReadWriteLockPrivate *>(initRecursiveHelper());
+        Q_PRESUME(quintptr(d) > StateMask);
+#ifdef QT_BUILDING_UNDER_TSAN
+        unsigned flags = __tsan_mutex_write_reentrant | __tsan_mutex_read_reentrant;
+#  if (defined(Q_CC_GNU_ONLY) && Q_CC_GNU >= 1200) || (defined(Q_CC_CLANG) && Q_CC_CLANG >= 1200)
+        flags |= __tsan_mutex_not_static;
+#  endif
+        __tsan_mutex_create(d, flags);
+#endif
+        return d;
+    }
+    static void destroyRecursiveInline(QReadWriteLockPrivate *d)
+    {
+#ifdef QT_BUILDING_UNDER_TSAN
+        unsigned flags = 0;
+        __tsan_mutex_destroy(d, flags);
+#endif
+        destroyRecursiveHelper(d);
+    }
 };
 
 #if QT_CORE_INLINE_IMPL_SINCE(6, 6)
 QReadWriteLock::QReadWriteLock(RecursionMode recursionMode)
-    : QBasicReadWriteLock(recursionMode == Recursive ? initRecursive() : nullptr)
+    : QBasicReadWriteLock(recursionMode == Recursive ? initRecursiveInline() : nullptr)
 {
 }
 
 QReadWriteLock::~QReadWriteLock()
 {
     if (auto d = d_ptr.loadAcquire())
-        destroyRecursive(d);
+        destroyRecursiveInline(d);
 }
 
 bool QReadWriteLock::tryLockForRead(int timeout)

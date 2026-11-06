@@ -161,6 +161,8 @@ public:
     static QObjectPrivate *get(QObject *o) { return o->d_func(); }
     static const QObjectPrivate *get(const QObject *o) { return o->d_func(); }
 
+    static void deleteInOwnThread(QObject *object);
+
     int signalIndex(const char *signalName, const QMetaObject **meta = nullptr) const;
     bool isSignalConnected(uint signalIdx, bool checkDeclarative = true) const;
     bool maybeSignalConnected(uint signalIndex) const;
@@ -365,6 +367,8 @@ public:
                    void **args, QLatch *latch);
 
     virtual void placeMetaCall(QObject *object) override;
+
+    int id() const { return d.method_offset_ + d.method_relative_; }
 
 protected:
     struct Data {

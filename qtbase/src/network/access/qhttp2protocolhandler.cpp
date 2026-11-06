@@ -142,6 +142,11 @@ QHttp2ProtocolHandler::QHttp2ProtocolHandler(QHttpNetworkConnectionChannel *chan
             &QHttp2ProtocolHandler::closeSession);
 }
 
+bool QHttp2ProtocolHandler::isGoingAway() const noexcept
+{
+    return h2Connection && h2Connection->isGoingAway();
+}
+
 void QHttp2ProtocolHandler::handleConnectionClosure()
 {
     // The channel has just received RemoteHostClosedError and since it will
@@ -177,14 +182,8 @@ void QHttp2ProtocolHandler::_q_receiveReply()
 
 bool QHttp2ProtocolHandler::sendRequest()
 {
-    if (h2Connection->isGoingAway()) {
-        // Stop further calls to this method: we have received GOAWAY
-        // so we cannot create new streams.
-        m_channel->emitFinishedWithError(QNetworkReply::ProtocolUnknownError,
-                                         "GOAWAY received, cannot start a request");
-        m_channel->h2RequestsToSend.clear();
+    if (isGoingAway())
         return false;
-    }
 
     // Process 'fake' (created by QNetworkAccessManager::connectToHostEncrypted())
     // requests first:
@@ -269,7 +268,7 @@ bool QHttp2ProtocolHandler::tryRemoveReply(QHttpNetworkReply *reply)
     QHttp2Stream *stream = streamIDs.take(reply);
     if (stream) {
         stream->sendRST_STREAM(stream->isUploadingDATA() ? Http2::CANCEL : Http2::HTTP2_NO_ERROR);
-        requestReplyPairs.remove(stream);
+        clearStreamState(stream);
         stream->deleteLater();
         return true;
     }
@@ -442,12 +441,16 @@ void QHttp2ProtocolHandler::handleAuthorization(QHttp2Stream *stream)
         Q_ASSERT(httpReply);
         const QByteArrayView auth = authField.trimmed();
         if (auth.startsWith("Negotiate") || auth.startsWith("NTLM")) {
-            // @todo: We're supposed to fall back to http/1.1:
-            // https://docs.microsoft.com/en-us/iis/get-started/whats-new-in-iis-10/http2-on-iis#when-is-http2-not-supported
-            // "Windows authentication (NTLM/Kerberos/Negotiate) is not supported with HTTP/2.
-            // In this case IIS will fall back to HTTP/1.1."
-            // Though it might be OK to ignore this. The server shouldn't let us connect with
-            // HTTP/2 if it doesn't support us using it.
+            // NTLM/Kerberos/Negotiate authentication is not supported with HTTP/2.
+            // Finish the stream with an error so QNetworkReply::finished is emitted.
+            // Falling back to HTTP/1.1 is a separate, larger effort (QTBUG-143926).
+            emit httpReply->headerChanged();
+            emit httpReply->readyRead();
+            const QNetworkReply::NetworkError error = isProxy
+                    ? QNetworkReply::ProxyAuthenticationRequiredError
+                    : QNetworkReply::AuthenticationRequiredError;
+            finishStreamWithError(stream, error,
+                                  m_connection->d_func()->errorDetail(error, m_socket));
             return false;
         }
         // Somewhat mimics parts of QHttpNetworkConnectionChannel::handleStatus
@@ -507,6 +510,8 @@ void QHttp2ProtocolHandler::handleAuthorization(QHttp2Stream *stream)
     }
     if (authOk) {
         stream->sendRST_STREAM(CANCEL);
+        clearStreamState(stream);
+        stream->deleteLater();
     } // else: errors handled inside handleAuth
 }
 
@@ -538,8 +543,17 @@ void QHttp2ProtocolHandler::finishStream(QHttp2Stream *stream, Qt::ConnectionTyp
         }
     }
 
+    clearStreamState(stream);
     qCDebug(QT_HTTP2) << "stream" << stream->streamID() << "closed";
-    stream->deleteLater();
+
+    // Detach the reply and tear down the stream via canonical path, so a
+    // later stray frame cannot fail an already-finished reply. tryRemoveReply()
+    // also clears the reply->stream map, its sendRST_STREAM() does nothing on a
+    // gracefully closed stream.
+    if (!httpReply || !tryRemoveReply(httpReply)) {
+        requestReplyPairs.remove(stream);
+        stream->deleteLater();
+    }
 }
 
 void QHttp2ProtocolHandler::handleGOAWAY(Http2Error errorCode, quint32 lastStreamID)
@@ -547,24 +561,20 @@ void QHttp2ProtocolHandler::handleGOAWAY(Http2Error errorCode, quint32 lastStrea
     qCDebug(QT_HTTP2) << "GOAWAY received, error code:" << errorCode << "last stream ID:"
                       << lastStreamID;
 
-    // For the requests (and streams) we did not start yet, we have to report an
-    // error.
-    m_channel->emitFinishedWithError(QNetworkReply::ProtocolUnknownError,
-                                     "GOAWAY received, cannot start a request");
-    // Also, prevent further calls to sendRequest:
-    m_channel->h2RequestsToSend.clear();
-
-    QNetworkReply::NetworkError error = QNetworkReply::NoError;
-    QString message;
-    qt_error(errorCode, error, message);
-
-    // Even if the GOAWAY frame contains NO_ERROR we must send an error
-    // when terminating streams to ensure users can distinguish from a
-    // successful completion.
     if (errorCode == HTTP2_NO_ERROR) {
-        error = QNetworkReply::ContentReSendError;
-        message = "Server stopped accepting new streams before this stream was established"_L1;
+        // Graceful GOAWAY: the queued requests are sent on the next connection.
+        // *noop*
+    } else {
+        // Error GOAWAY: the queued requests were never processed, so a retry could still
+        // succeed, but something went wrong on this connection - report it to the user
+        // rather than silently trying again.
+        m_channel->emitFinishedWithError(QNetworkReply::ProtocolUnknownError,
+                                         "GOAWAY received, cannot start a request");
+        m_channel->h2RequestsToSend.clear();
     }
+
+    // Active streams are not handled here: QHttp2Connection::handleGOAWAY() cancels the ones
+    // the peer will not process and we pick them up through QHttp2Stream::errorOccurred.
 }
 
 void QHttp2ProtocolHandler::finishStreamWithError(QHttp2Stream *stream, Http2Error errorCode)
@@ -587,6 +597,8 @@ void QHttp2ProtocolHandler::finishStreamWithError(QHttp2Stream *stream,
         emit httpReply->finishedWithError(error, message);
     }
 
+    clearStreamState(stream);
+    stream->deleteLater();
     qCWarning(QT_HTTP2) << "stream" << stream->streamID() << "finished with error:" << message;
 }
 
@@ -647,8 +659,10 @@ void QHttp2ProtocolHandler::connectStream(const HttpMessagePair &message, QHttp2
 
     reply->setHttp2WasUsed(true);
     QPointer<QHttp2Stream> &oldStream = streamIDs[reply];
-    if (oldStream)
+    if (oldStream) {
         disconnect(oldStream, nullptr, this, nullptr);
+        clearStreamState(oldStream);
+    }
     oldStream = stream;
     requestReplyPairs.emplace(stream, message);
 
@@ -660,7 +674,21 @@ void QHttp2ProtocolHandler::connectStream(const HttpMessagePair &message, QHttp2
                      [this, stream](Http2Error errorCode, const QString &errorString) {
                          qCWarning(QT_HTTP2)
                                  << "stream" << stream->streamID() << "error:" << errorString;
-                         finishStreamWithError(stream, errorCode);
+                         // A graceful GOAWAY cancels exactly the streams the peer will not
+                         // process, so those requests can still be sent on a new connection.
+                         // An error GOAWAY, or any other failure, keeps its own error.
+                         if (const auto lastId = h2Connection->lastGoAwayStreamID();
+                             errorCode == HTTP2_NO_ERROR && lastId
+                             && stream->streamID() > *lastId) {
+                             finishStreamWithError(
+                                     stream, QNetworkReply::ContentReSendError,
+                                     QCoreApplication::translate(
+                                             "QHttp",
+                                             "Server stopped accepting new streams before this "
+                                             "stream was established"));
+                         } else {
+                             finishStreamWithError(stream, errorCode);
+                         }
                      });
 
     QObject::connect(stream, &QHttp2Stream::stateChanged, this, [this](QHttp2Stream::State state) {
@@ -672,6 +700,20 @@ void QHttp2ProtocolHandler::connectStream(const HttpMessagePair &message, QHttp2
             }
         }
     });
+}
+
+void QHttp2ProtocolHandler::clearStreamState(QHttp2Stream *stream)
+{
+    auto it = requestReplyPairs.find(stream);
+    if (it == requestReplyPairs.end())
+        return;
+
+    if (auto *reply = it->second)
+        streamIDs.remove(reply);
+    if (auto *uploadDevice = it->first.uploadByteDevice())
+        streamIDs.remove(uploadDevice);
+
+    requestReplyPairs.erase(it);
 }
 
 void QHttp2ProtocolHandler::initReplyFromPushPromise(const HttpMessagePair &message,
@@ -710,7 +752,8 @@ void QHttp2ProtocolHandler::connectionError(Http2::Http2Error errorCode, const Q
     qCCritical(QT_HTTP2) << "connection error:" << message;
 
     const auto error = qt_error(errorCode);
-    m_channel->emitFinishedWithError(error, qPrintable(message));
+    m_channel->emitFinishedWithError(error, message);
+    m_channel->h2RequestsToSend.clear();
 
     closeSession();
 }

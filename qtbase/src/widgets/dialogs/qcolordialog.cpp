@@ -150,6 +150,7 @@ public:
 
     QPointer<QObject> receiverToDisconnectOnClose;
     QByteArray memberToDisconnectOnClose;
+    bool optionsExplicitlySet = false;
 #ifdef Q_OS_WIN32
     QTimer *updateTimer;
     QWindow dummyTransparentWindow;
@@ -430,6 +431,36 @@ private:
 
 } // namespace QtPrivate
 
+/*
+    Internal event filter used to adjust dialog options during widget polish.
+
+    Enables DontUseNativeDialog automatically when QColorDialog is subclassed
+    and no explicit options were set by the user.
+*/
+class QColorPolishFilter : public QObject
+{
+public:
+    explicit QColorPolishFilter(QColorDialog *cd) : QObject(cd)
+    {
+        cd->installEventFilter(this);
+    }
+
+    bool eventFilter(QObject *obj, QEvent *event) override
+    {
+        if (event->type() == QEvent::Polish ) {
+            Q_ASSERT(qobject_cast<QColorDialog *>(obj));
+            auto *cd = static_cast<QColorDialog *>(obj);
+            auto *d = static_cast<QColorDialogPrivate *>(QObjectPrivate::get(cd));
+
+            if (cd->metaObject() != &QColorDialog::staticMetaObject && !d->optionsExplicitlySet)
+                cd->setOption(QColorDialog::DontUseNativeDialog);
+
+            deleteLater(); // no longer needed after first polish
+        }
+        return false;
+    }
+};
+
 /*!
     Returns the number of custom colors supported by QColorDialog. All
     color dialogs share the same custom colors.
@@ -651,7 +682,7 @@ private:
     int val2y(int val);
     void setVal(int v);
 
-    QPixmap *pix;
+    QPixmap pix;
 };
 
 
@@ -671,14 +702,12 @@ QColorLuminancePicker::QColorLuminancePicker(QWidget* parent)
     :QWidget(parent)
 {
     hue = 100; val = 100; sat = 100;
-    pix = nullptr;
     //    setAttribute(WA_NoErase, true);
     setFocusPolicy(Qt::StrongFocus);
 }
 
 QColorLuminancePicker::~QColorLuminancePicker()
 {
-    delete pix;
 }
 
 void QColorLuminancePicker::keyPressEvent(QKeyEvent *event)
@@ -714,7 +743,7 @@ void QColorLuminancePicker::setVal(int v)
     if (val == v)
         return;
     val = qMax(0, qMin(v,255));
-    delete pix; pix=nullptr;
+    pix = QPixmap();
     repaint();
     emit newHsv(hue, sat, val);
 }
@@ -733,8 +762,7 @@ void QColorLuminancePicker::paintEvent(QPaintEvent *)
     QRect r(0, foff, w, height() - 2*foff);
     int wi = r.width() - 2;
     int hi = r.height() - 2;
-    if (!pix || pix->height() != hi || pix->width() != wi) {
-        delete pix;
+    if (pix.isNull() || pix.height() != hi || pix.width() != wi) {
         QImage img(wi, hi, QImage::Format_RGB32);
         int y;
         uint *pixel = (uint *) img.scanLine(0);
@@ -743,10 +771,10 @@ void QColorLuminancePicker::paintEvent(QPaintEvent *)
             std::fill(pixel, end, QColor::fromHsv(hue, sat, y2val(y + coff)).rgb());
             pixel = end;
         }
-        pix = new QPixmap(QPixmap::fromImage(img));
+        pix = QPixmap::fromImage(img);
     }
     QPainter p(this);
-    p.drawPixmap(1, coff, *pix);
+    p.drawPixmap(1, coff, pix);
     const QPalette &g = palette();
     qDrawShadePanel(&p, r, g, true);
     p.setPen(g.windowText().color());
@@ -762,7 +790,7 @@ void QColorLuminancePicker::setCol(int h, int s , int v)
     val = v;
     hue = h;
     sat = s;
-    delete pix; pix=nullptr;
+    pix = QPixmap();
     repaint();
 }
 
@@ -1625,10 +1653,18 @@ void QColorDialogPrivate::pickScreenColor()
 
 void QColorDialogPrivate::updateColorLabelText(const QPoint &globalPos)
 {
-    if (lblScreenColorInfo)
-        lblScreenColorInfo->setText(QColorDialog::tr("Cursor at %1, %2\nPress ESC to cancel")
+    if (!lblScreenColorInfo)
+        return;
+#ifdef Q_OS_HARMONY
+    Q_UNUSED(globalPos)
+    lblScreenColorInfo->setText(QColorDialog::tr("Cursor at %1, %2\nPress ESC to cancel")
+                                .arg(QStringLiteral("-"))
+                                .arg(QStringLiteral("-")));
+#else
+    lblScreenColorInfo->setText(QColorDialog::tr("Cursor at %1, %2\nPress ESC to cancel")
                                 .arg(globalPos.x())
                                 .arg(globalPos.y()));
+#endif
 }
 
 void QColorDialogPrivate::releaseColorPicking()
@@ -1944,6 +1980,7 @@ static const Qt::WindowFlags qcd_DefaultWindowFlags =
 QColorDialog::QColorDialog(QWidget *parent)
     : QColorDialog(QColor(Qt::white), parent)
 {
+    new QColorPolishFilter(this);
 }
 
 /*!
@@ -1954,6 +1991,7 @@ QColorDialog::QColorDialog(const QColor &initial, QWidget *parent)
     : QDialog(*new QColorDialogPrivate, parent, qcd_DefaultWindowFlags)
 {
     Q_D(QColorDialog);
+    new QColorPolishFilter(this);
     d->init(initial);
 }
 
@@ -2011,6 +2049,9 @@ QColor QColorDialog::selectedColor() const
 */
 void QColorDialog::setOption(ColorDialogOption option, bool on)
 {
+    Q_D(QColorDialog);
+    d->optionsExplicitlySet = true;
+
     const QColorDialog::ColorDialogOptions previousOptions = options();
     if (!(previousOptions & option) != !on)
         setOptions(previousOptions ^ option);
@@ -2043,6 +2084,7 @@ bool QColorDialog::testOption(ColorDialogOption option) const
 void QColorDialog::setOptions(ColorDialogOptions options)
 {
     Q_D(QColorDialog);
+    d->optionsExplicitlySet = true;
 
     if (QColorDialog::options() == options)
         return;

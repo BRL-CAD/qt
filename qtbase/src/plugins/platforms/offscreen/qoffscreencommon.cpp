@@ -1,5 +1,6 @@
 // Copyright (C) 2016 The Qt Company Ltd.
 // SPDX-License-Identifier: LicenseRef-Qt-Commercial OR LGPL-3.0-only OR GPL-2.0-only OR GPL-3.0-only
+// Qt-Security score:significant reason:default
 
 #include "qoffscreencommon.h"
 #include "qoffscreenintegration.h"
@@ -21,7 +22,8 @@ QPlatformWindow *QOffscreenScreen::windowContainingCursor = nullptr;
 QList<QPlatformScreen *> QOffscreenScreen::virtualSiblings() const
 {
     QList<QPlatformScreen *> platformScreens;
-    for (auto screen : m_integration->screens()) {
+    const auto screens = m_integration->screens();
+    for (auto screen : screens) {
         platformScreens.append(screen);
     }
     return platformScreens;

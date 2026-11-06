@@ -192,6 +192,7 @@ foreach(format_case IN LISTS format_cases)
     run_cmake_and_build(minimal "${format_case}")
     run_cmake_and_build(full "${format_case}")
     run_cmake_and_build(versions "${format_case}")
+    run_cmake_and_build(entity_types "${format_case}")
     run_cmake_and_build(target_relationships "${format_case}")
 
     # The next test depends on the previous one successfully passing.
@@ -205,6 +206,9 @@ foreach(format_case IN LISTS format_cases)
     run_cmake_and_build(spdx_suffixes_external "${format_case}"
         SEARCH_CASE_PACKAGES spdx_suffixes)
 
+    run_cmake_and_build(attribution_files "${format_case}")
     run_cmake_and_build(build_tools "${format_case}")
+    run_cmake_and_build(recursive_file_inclusion "${format_case}")
+    run_cmake_and_build(multiple_project_calls_same_doc "${format_case}")
 endforeach()
 

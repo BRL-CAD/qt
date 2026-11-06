@@ -103,6 +103,7 @@ public:
     void addMetaObject(const QMetaObject *prototype, QMetaObjectBuilder::AddMembers members = AllMembers);
 
     QMetaMethodBuilder method(int index) const;
+    QMetaMethodBuilder signal(int index) const;
     QMetaMethodBuilder constructor(int index) const;
     QMetaPropertyBuilder property(int index) const;
     QMetaEnumBuilder enumerator(int index) const;
@@ -112,6 +113,7 @@ public:
     QByteArray classInfoValue(int index) const;
 
     void removeMethod(int index);
+    void removeSignal(int index);
     void removeConstructor(int index);
     void removeProperty(int index);
     void removeEnumerator(int index);
@@ -146,7 +148,7 @@ private:
 class Q_CORE_EXPORT QMetaMethodBuilder
 {
 public:
-    QMetaMethodBuilder() : _mobj(nullptr), _index(0) {}
+    QMetaMethodBuilder() = default;
 
     int index() const;
 
@@ -176,14 +178,15 @@ public:
     void setRevision(int revision);
 
 private:
-    const QMetaObjectBuilder *_mobj;
-    int _index;
+    const QMetaObjectBuilder *_mobj = nullptr;
+    int _index = 0;
+    QMetaMethod::MethodType _type = QMetaMethod::MethodType::Method;
 
     friend class QMetaObjectBuilder;
     friend class QMetaPropertyBuilder;
 
-    QMetaMethodBuilder(const QMetaObjectBuilder *mobj, int index)
-        : _mobj(mobj), _index(index) {}
+    QMetaMethodBuilder(const QMetaObjectBuilder *mobj, int index, QMetaMethod::MethodType type)
+        : _mobj(mobj), _index(index), _type(type) {}
 
     QMetaMethodBuilderPrivate *d_func() const;
 };

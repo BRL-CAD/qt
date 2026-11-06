@@ -21,6 +21,9 @@
 #if QT_CONFIG(clipboard)
 #include "qandroidplatformclipboard.h"
 #endif
+#if QT_CONFIG(draganddrop)
+#include "qandroidplatformdrag.h"
+#endif
 #if QT_CONFIG(accessibility)
 #include "androidjniaccessibility.h"
 #endif
@@ -32,6 +35,7 @@
 #include <android/bitmap.h>
 
 #include <QtCore/private/qjnihelpers_p.h>
+#include <QtCore/private/qlocale_p.h>
 #include <QtCore/qbasicatomic.h>
 #include <QtCore/qjnienvironment.h>
 #include <QtCore/qjniobject.h>
@@ -228,6 +232,15 @@ namespace QtAndroid
         m_backendRegister->callInterface<QtJniTypes::QtAccessibilityInterface, void>(
                 "notifyAnnouncementEvent", accessibilityObjectId, message);
     }
+
+    void notifyTextChanged(uint accessibilityObjectId, const QString &text,
+                           const QString &beforeText, int fromIndex,
+                           int addedCount, int removedCount)
+    {
+        m_backendRegister->callInterface<QtJniTypes::QtAccessibilityInterface, void>(
+                "notifyTextChanged", accessibilityObjectId, text, beforeText,
+                fromIndex, addedCount, removedCount);
+    }
 #endif //QT_CONFIG(accessibility)
 
     void notifyNativePluginIntegrationReady(bool ready)
@@ -242,16 +255,17 @@ namespace QtAndroid
         if (!m_bitmapClass)
             return 0;
 
-        if (img.format() != QImage::Format_RGBA8888 && img.format() != QImage::Format_RGB16)
-            img = std::move(img).convertToFormat(QImage::Format_RGBA8888);
+        // Android's ARGB_8888 bitmaps are premultiplied, so upload premultiplied
+        // pixels or antialiased and transparent edges get dark or colored fringes.
+        // See https://developer.android.com/reference/android/graphics/Bitmap#setPremultiplied(boolean)
+        jobject config = m_ARGB_8888_BitmapConfigValue;
+        if (img.format() == QImage::Format_RGB16)
+            config = m_RGB_565_BitmapConfigValue;
+        else if (img.format() != QImage::Format_RGBA8888_Premultiplied)
+            img = std::move(img).convertToFormat(QImage::Format_RGBA8888_Premultiplied);
 
-        jobject bitmap = env->CallStaticObjectMethod(m_bitmapClass,
-                                                     m_createBitmapMethodID,
-                                                     img.width(),
-                                                     img.height(),
-                                                     img.format() == QImage::Format_RGBA8888
-                                                        ? m_ARGB_8888_BitmapConfigValue
-                                                        : m_RGB_565_BitmapConfigValue);
+        jobject bitmap = env->CallStaticObjectMethod(
+            m_bitmapClass, m_createBitmapMethodID, img.width(), img.height(), config);
         if (!bitmap)
             return 0;
 
@@ -394,7 +408,7 @@ static bool initAndroidQpaPlugin(JNIEnv *jenv, jobject object)
 
     m_backendRegister = new AndroidBackendRegister();
 
-    if (sem_init(&m_exitSemaphore, 0, 0) == -1 && sem_init(&m_stopQtSemaphore, 0, 0) == -1) {
+    if (sem_init(&m_exitSemaphore, 0, 0) == -1 || sem_init(&m_stopQtSemaphore, 0, 0) == -1) {
         qCritical() << "Failed to init Qt application cleanup semaphores";
         return false;
     }
@@ -634,6 +648,10 @@ static void updateApplicationState(JNIEnv */*env*/, jobject /*thiz*/, jint state
 
 static void updateLocale(JNIEnv */*env*/, jobject /*thiz*/)
 {
+#ifndef QT_NO_SYSTEMLOCALE
+    // Transient instance marks the cached system locale data as stale (QTBUG-116642).
+    { QSystemLocale dummy; }
+#endif
     QCoreApplication::postEvent(QCoreApplication::instance(), new QEvent(QEvent::LocaleChange));
     QCoreApplication::postEvent(QCoreApplication::instance(), new QEvent(QEvent::LanguageChange));
 }
@@ -811,6 +829,9 @@ static bool registerNatives(QJniEnvironment &env)
         && QtAndroidDialogHelpers::registerNatives(env)
 #if QT_CONFIG(clipboard)
         && QAndroidPlatformClipboard::registerNatives(env)
+#endif
+#if QT_CONFIG(draganddrop)
+        && QAndroidPlatformDrag::registerNatives(env)
 #endif
         && QAndroidPlatformWindow::registerNatives(env)
         && QtAndroidWindowEmbedding::registerNatives(env)

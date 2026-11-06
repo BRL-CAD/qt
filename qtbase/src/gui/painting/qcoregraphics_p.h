@@ -1,5 +1,6 @@
 // Copyright (C) 2017 The Qt Company Ltd.
 // SPDX-License-Identifier: LicenseRef-Qt-Commercial OR LGPL-3.0-only OR GPL-2.0-only OR GPL-3.0-only
+// Qt-Security score:significant reason:default
 
 #ifndef QCOREGRAPHICS_P_H
 #define QCOREGRAPHICS_P_H
@@ -37,11 +38,17 @@ Q_FORWARD_DECLARE_OBJC_CLASS(NSImage);
 Q_FORWARD_DECLARE_OBJC_CLASS(UIImage);
 Q_FORWARD_DECLARE_OBJC_CLASS(NSColor);
 
-struct vImage_CGImageFormat;
-
 QT_BEGIN_NAMESPACE
 
-Q_GUI_EXPORT std::optional<vImage_CGImageFormat> qt_mac_cgImageFormatForImage(const QImage &image);
+struct Q_GUI_EXPORT QCGImageFormat
+{
+    uint32_t bitsPerComponent = 0;
+    uint32_t bitsPerPixel = 0;
+    QCFType<CGColorSpaceRef> colorSpace;
+    CGBitmapInfo bitmapInfo = 0;
+};
+
+Q_GUI_EXPORT std::optional<QCGImageFormat> qt_mac_cgImageFormatForImage(const QImage &image);
 
 #ifdef QT_PLATFORM_UIKIT
 Q_GUI_EXPORT QImage qt_mac_toQImage(const UIImage *image, QSizeF size);

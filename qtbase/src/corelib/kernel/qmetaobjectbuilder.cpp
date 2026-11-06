@@ -7,10 +7,14 @@
 #include "qobject_p.h"
 #include "qmetaobject_p.h"
 
+#include <QtCore/qstring.h>
+
 #include <vector>
 #include <stdlib.h>
 
 QT_BEGIN_NAMESPACE
+
+using namespace Qt::StringLiterals;
 
 /*!
     \class QMetaObjectBuilder
@@ -44,7 +48,7 @@ QT_BEGIN_NAMESPACE
 
 static bool isBuiltinType(QByteArrayView type)
 {
-    int id = QMetaType::fromName(type).id();
+    int id = QMetaType::fromName(type).rawId();
     if (!id && !type.isEmpty() && type != "void")
         return false;
     return (id < QMetaType::User);
@@ -191,7 +195,8 @@ public:
     QByteArray className;
     const QMetaObject *superClass;
     QMetaObjectBuilder::StaticMetacallFunction staticMetacallFunction;
-    std::vector<QMetaMethodBuilderPrivate> methods;
+    std::vector<QMetaMethodBuilderPrivate> signalVec; // QMetaMethod::Signal type
+    std::vector<QMetaMethodBuilderPrivate> methods; // QMetaMethod::Method and Slot types
     std::vector<QMetaMethodBuilderPrivate> constructors;
     std::vector<QMetaPropertyBuilderPrivate> properties;
     QList<QByteArray> classInfoNames;
@@ -313,7 +318,7 @@ void QMetaObjectBuilder::setFlags(MetaObjectFlags flags)
 */
 int QMetaObjectBuilder::methodCount() const
 {
-    return int(d->methods.size());
+    return int(d->signalVec.size() + d->methods.size());
 }
 
 /*!
@@ -389,7 +394,7 @@ QMetaMethodBuilder QMetaObjectBuilder::addMethod(const QByteArray &signature)
 {
     int index = int(d->methods.size());
     d->methods.push_back(QMetaMethodBuilderPrivate(QMetaMethod::Method, signature));
-    return QMetaMethodBuilder(this, index);
+    return QMetaMethodBuilder(this, index, QMetaMethod::Method);
 }
 
 /*!
@@ -406,7 +411,7 @@ QMetaMethodBuilder QMetaObjectBuilder::addMethod(const QByteArray &signature,
 {
     int index = int(d->methods.size());
     d->methods.push_back(QMetaMethodBuilderPrivate(QMetaMethod::Method, signature, returnType));
-    return QMetaMethodBuilder(this, index);
+    return QMetaMethodBuilder(this, index, QMetaMethod::Method);
 }
 
 /*!
@@ -423,14 +428,20 @@ QMetaMethodBuilder QMetaObjectBuilder::addMethod(const QByteArray &signature,
 QMetaMethodBuilder QMetaObjectBuilder::addMethod(const QMetaMethod &prototype)
 {
     QMetaMethodBuilder method;
-    if (prototype.methodType() == QMetaMethod::Method)
+    switch (prototype.methodType()) {
+    case QMetaMethod::Method:
         method = addMethod(prototype.methodSignature());
-    else if (prototype.methodType() == QMetaMethod::Signal)
+        break;
+    case QMetaMethod::Signal:
         method = addSignal(prototype.methodSignature());
-    else if (prototype.methodType() == QMetaMethod::Slot)
+        break;
+    case QMetaMethod::Slot:
         method = addSlot(prototype.methodSignature());
-    else if (prototype.methodType() == QMetaMethod::Constructor)
+        break;
+    case QMetaMethod::Constructor:
         method = addConstructor(prototype.methodSignature());
+        break;
+    }
     method.setReturnType(prototype.typeName());
     method.setParameterNames(prototype.parameterNames());
     method.setTag(prototype.tag());
@@ -453,7 +464,7 @@ QMetaMethodBuilder QMetaObjectBuilder::addSlot(const QByteArray &signature)
 {
     int index = int(d->methods.size());
     d->methods.push_back(QMetaMethodBuilderPrivate(QMetaMethod::Slot, signature));
-    return QMetaMethodBuilder(this, index);
+    return QMetaMethodBuilder(this, index, QMetaMethod::Slot);
 }
 
 /*!
@@ -466,10 +477,9 @@ QMetaMethodBuilder QMetaObjectBuilder::addSlot(const QByteArray &signature)
 */
 QMetaMethodBuilder QMetaObjectBuilder::addSignal(const QByteArray &signature)
 {
-    int index = int(d->methods.size());
-    d->methods.push_back(QMetaMethodBuilderPrivate(QMetaMethod::Signal, signature,
-                                                   QByteArray("void"), QMetaMethod::Public));
-    return QMetaMethodBuilder(this, index);
+    int index = int(d->signalVec.size());
+    d->signalVec.emplace_back(QMetaMethod::Signal, signature, "void"_ba, QMetaMethod::Public);
+    return QMetaMethodBuilder(this, index, QMetaMethod::Signal);
 }
 
 /*!
@@ -486,7 +496,7 @@ QMetaMethodBuilder QMetaObjectBuilder::addConstructor(const QByteArray &signatur
     int index = int(d->constructors.size());
     d->constructors.push_back(QMetaMethodBuilderPrivate(QMetaMethod::Constructor, signature,
                                                         /*returnType=*/QByteArray()));
-    return QMetaMethodBuilder(this, -(index + 1));
+    return QMetaMethodBuilder(this, index, QMetaMethod::Constructor);
 }
 
 /*!
@@ -565,9 +575,10 @@ QMetaPropertyBuilder QMetaObjectBuilder::addProperty(const QMetaProperty &protot
     if (prototype.hasNotifySignal()) {
         // Find an existing method for the notify signal, or add a new one.
         QMetaMethod method = prototype.notifySignal();
-        int index = indexOfMethod(method.methodSignature());
+        const QByteArray signature = method.methodSignature();
+        int index = indexOfSignal(signature);
         if (index == -1)
-            index = addMethod(method).index();
+            index = addSignal(signature).index();
         d->properties[property._index].notifySignal = index;
     }
     return property;
@@ -669,21 +680,36 @@ void QMetaObjectBuilder::addMetaObject(const QMetaObject *prototype,
         for (index = prototype->methodOffset(); index < prototype->methodCount(); ++index) {
             QMetaMethod method = prototype->method(index);
             if (method.methodType() != QMetaMethod::Signal) {
-                if (method.access() == QMetaMethod::Public && (members & PublicMethods) == 0)
-                    continue;
-                if (method.access() == QMetaMethod::Private && (members & PrivateMethods) == 0)
-                    continue;
-                if (method.access() == QMetaMethod::Protected && (members & ProtectedMethods) == 0)
-                    continue;
+                switch (method.access()) {
+                case QMetaMethod::Public:
+                    if ((members & PublicMethods) == 0)
+                        continue;
+                    break;
+                case QMetaMethod::Private:
+                    if ((members & PrivateMethods) == 0)
+                        continue;
+                    break;
+                case QMetaMethod::Protected:
+                    if ((members & ProtectedMethods) == 0)
+                        continue;
+                    break;
+                }
             }
-            if (method.methodType() == QMetaMethod::Method && (members & Methods) != 0) {
-                addMethod(method);
-            } else if (method.methodType() == QMetaMethod::Signal &&
-                       (members & Signals) != 0) {
-                addMethod(method);
-            } else if (method.methodType() == QMetaMethod::Slot &&
-                       (members & Slots) != 0) {
-                addMethod(method);
+            switch (method.methodType()) {
+            case QMetaMethod::Method:
+                if (members & Methods)
+                    addMethod(method);
+                break;
+            case QMetaMethod::Signal:
+                if (members & Signals)
+                    addMethod(method);
+                break;
+            case QMetaMethod::Slot:
+                if (members & Slots)
+                    addMethod(method);
+                break;
+            case QMetaMethod::Constructor:
+                ;
             }
         }
     }
@@ -729,16 +755,36 @@ void QMetaObjectBuilder::addMetaObject(const QMetaObject *prototype,
 }
 
 /*!
-    Returns the method at \a index in this class.
+    Returns the method at \a index in this class. The returned object's type is
+    either QMetaMethod::Method or QMetaMethod::Slot. For signals, use signal().
 
-    \sa methodCount(), addMethod(), removeMethod(), indexOfMethod()
+    \note Starting from Qt 6.12, this function can only be used for
+    QMetaMethod::Method or QMetaMethod::Slot functions. Before Qt 6.12
+    this method could be used for signals too.
+
+    \sa signal(), methodCount(), addMethod(), removeMethod(), indexOfMethod()
 */
 QMetaMethodBuilder QMetaObjectBuilder::method(int index) const
 {
     if (uint(index) < d->methods.size())
-        return QMetaMethodBuilder(this, index);
+        return QMetaMethodBuilder(this, index, QMetaMethod::Method);
     else
         return QMetaMethodBuilder();
+}
+
+
+/*! \since 6.12
+
+    Returns the signal at \a index in this class. The returned object's
+    type is QMetaMethod::Signal.
+
+    \sa method(), slot(), indexOfSignal()
+*/
+QMetaMethodBuilder QMetaObjectBuilder::signal(int index) const
+{
+    if (size_t(index) < d->signalVec.size())
+        return QMetaMethodBuilder(this, index, QMetaMethod::Signal);
+    return QMetaMethodBuilder();
 }
 
 /*!
@@ -749,7 +795,7 @@ QMetaMethodBuilder QMetaObjectBuilder::method(int index) const
 QMetaMethodBuilder QMetaObjectBuilder::constructor(int index) const
 {
     if (uint(index) < d->constructors.size())
-        return QMetaMethodBuilder(this, -(index + 1));
+        return QMetaMethodBuilder(this, index, QMetaMethod::Constructor);
     else
         return QMetaMethodBuilder();
 }
@@ -830,17 +876,35 @@ QByteArray QMetaObjectBuilder::classInfoValue(int index) const
 }
 
 /*!
-    Removes the method at \a index from this class.  The indices of
-    all following methods will be adjusted downwards by 1.  If the
-    method is registered as a notify signal on a property, then the
-    notify signal will be removed from the property.
+    Removes the method at \a index from this class. This method's type is either
+    QMetaMethod::Method or QMetaMethod::Slot. The indices of all following
+    methods and slots will be decremented by 1. For signals use removeSignal().
 
-    \sa methodCount(), addMethod(), method(), indexOfMethod()
+    \note Starting from Qt 6.12, this function can only be used for
+    QMetaMethod::Method or QMetaMethod::Slot functions. Before Qt 6.12 this
+    function could be used to remove signals too.
+
+    \sa removeSignal(), methodCount(), addMethod(), method(), indexOfMethod()
 */
 void QMetaObjectBuilder::removeMethod(int index)
 {
-    if (uint(index) < d->methods.size()) {
+    if (size_t(index) < d->methods.size())
         d->methods.erase(d->methods.begin() + index);
+}
+
+/*! \since 6.12
+
+    Removes the signal at \a index from this class. The indices of all
+    following signals will be decremented by 1. If the signal is registered
+    as a notify signal on a property, then the notify signal will be removed
+    from the property.
+
+    \sa removeMethod()
+*/
+void QMetaObjectBuilder::removeSignal(int index)
+{
+    if (size_t(index) < d->signalVec.size()) {
+        d->signalVec.erase(d->signalVec.begin() + index);
         for (auto &property : d->properties) {
             // Adjust the indices of property notify signal references.
             if (property.notifySignal == index) {
@@ -947,9 +1011,9 @@ int QMetaObjectBuilder::indexOfMethod(const QByteArray &signature)
 int QMetaObjectBuilder::indexOfSignal(const QByteArray &signature)
 {
     QByteArray sig = QMetaObject::normalizedSignature(signature);
-    for (const auto &method : d->methods) {
-        if (method.methodType() == QMetaMethod::Signal && sig == method.signature)
-            return int(&method - &d->methods.front());
+    for (size_t i = 0; i < d->signalVec.size(); ++i) {
+        if (sig == d->signalVec[i].signature)
+            return int(i);
     }
     return -1;
 }
@@ -1178,21 +1242,24 @@ static int buildMetaObject(QMetaObjectBuilderPrivate *d, char *buf,
     //int pmetaSize = size;
     dataIndex = MetaObjectPrivateFieldCount;
     int methodParametersDataSize = aggregateParameterCount(d->methods)
+             + aggregateParameterCount(d->signalVec)
              + aggregateParameterCount(d->constructors);
     if constexpr (mode == Construct) {
         static_assert(QMetaObjectPrivate::OutputRevision == 13, "QMetaObjectBuilder should generate the same version as moc");
         pmeta->revision = QMetaObjectPrivate::OutputRevision;
         pmeta->flags = d->flags.toInt() | AllocatedMetaObject;
         pmeta->className = 0;   // Class name is always the first string.
-        //pmeta->signalCount is handled in the "output method loop" as an optimization.
 
         pmeta->classInfoCount = d->classInfoNames.size();
         pmeta->classInfoData = dataIndex;
         dataIndex += 2 * d->classInfoNames.size();
 
-        pmeta->methodCount = int(d->methods.size());
+        // QMetaObject treats QMetaObjectPrivate::methodData as the beginning of all "methods",
+        // including signals
         pmeta->methodData = dataIndex;
-        dataIndex += QMetaObjectPrivate::IntsPerMethod * int(d->methods.size());
+        pmeta->signalCount = int(d->signalVec.size());
+        pmeta->methodCount = int(d->methods.size()) + pmeta->signalCount;
+        dataIndex += QMetaObjectPrivate::IntsPerMethod * pmeta->methodCount;
         paramsIndex = dataIndex;
         dataIndex += methodParametersDataSize;
 
@@ -1209,7 +1276,8 @@ static int buildMetaObject(QMetaObjectBuilderPrivate *d, char *buf,
         dataIndex += QMetaObjectPrivate::IntsPerMethod * int(d->constructors.size());
     } else {
         dataIndex += 2 * int(d->classInfoNames.size());
-        dataIndex += QMetaObjectPrivate::IntsPerMethod * int(d->methods.size());
+        const auto method_count = int(d->signalVec.size() + d->methods.size());
+        dataIndex += QMetaObjectPrivate::IntsPerMethod * method_count;
         paramsIndex = dataIndex;
         dataIndex += methodParametersDataSize;
         dataIndex += QMetaObjectPrivate::IntsPerProperty * int(d->properties.size());
@@ -1255,11 +1323,12 @@ static int buildMetaObject(QMetaObjectBuilderPrivate *d, char *buf,
         dataIndex += 2;
     }
 
-    // Output the methods in the class.
+    // Output all the methods in the class.
     Q_ASSERT(!buf || dataIndex == pmeta->methodData);
     // property count + enum count  + 1 for metatype of this metaobject
     int parameterMetaTypesIndex = int(d->properties.size()) + int(d->enumerators.size()) + 1;
-    for (const auto &method : d->methods) {
+
+    auto add_method = [&](const auto &method) {
         [[maybe_unused]] int name = strings.enter(method.name());
         int argc = method.parameterCount();
         [[maybe_unused]] int tag = strings.enter(method.tag);
@@ -1273,17 +1342,23 @@ static int buildMetaObject(QMetaObjectBuilderPrivate *d, char *buf,
             data[dataIndex + 3] = tag;
             data[dataIndex + 4] = attrs;
             data[dataIndex + 5] = parameterMetaTypesIndex;
-            if (method.methodType() == QMetaMethod::Signal)
-                pmeta->signalCount++;
         }
         dataIndex += QMetaObjectPrivate::IntsPerMethod;
         paramsIndex += 1 + argc * 2;
         parameterMetaTypesIndex += 1 + argc;
-    }
+    };
+
+    // first output the signals in the class, to match meta-objects generated by moc
+    for (const auto &signal : d->signalVec)
+        add_method(signal);
+
+    // Output the rest of the methods (QMetaMethod::{Method,Slot}) in the class
+    for (const auto &method : d->methods)
+        add_method(method);
 
     auto getTypeInfo = [&](const auto &typeName) {
         if (isBuiltinType(typeName))
-            return QMetaType::fromName(typeName).id();
+            return QMetaType::fromName(typeName).rawId();
         int index;
         if constexpr (std::is_same_v<decltype(typeName), const QByteArrayView &>)
             index = strings.enter(QByteArray::fromRawData(typeName.constData(), typeName.size()));
@@ -1293,9 +1368,8 @@ static int buildMetaObject(QMetaObjectBuilderPrivate *d, char *buf,
     };
 
     // Output the method parameters in the class.
-    Q_ASSERT(!buf || dataIndex == pmeta->methodData + int(d->methods.size()) * QMetaObjectPrivate::IntsPerMethod);
-    for (int x = 0; x < 2; ++x) {
-        const std::vector<QMetaMethodBuilderPrivate> &methods = (x == 0) ? d->methods : d->constructors;
+    Q_ASSERT(!buf || dataIndex == pmeta->methodData + pmeta->methodCount * QMetaObjectPrivate::IntsPerMethod);
+    auto processMethodParameters = [&](const auto &methods) {
         for (const auto &method : methods) {
             if (method.revision) {
                 if constexpr (mode == Construct)
@@ -1326,7 +1400,10 @@ static int buildMetaObject(QMetaObjectBuilderPrivate *d, char *buf,
                 ++dataIndex;
             }
         }
-    }
+    };
+    processMethodParameters(d->signalVec);
+    processMethodParameters(d->methods);
+    processMethodParameters(d->constructors);
 
     // Output the properties in the class.
     Q_ASSERT(!buf || dataIndex == pmeta->propertyData);
@@ -1451,8 +1528,9 @@ static int buildMetaObject(QMetaObjectBuilderPrivate *d, char *buf,
         // as we can't know our metatype
         *types = nullptr;
         types++;
-        for (const auto &method: d->methods) {
-            QMetaType mt(QMetaType::fromName(method.returnType).id());
+
+        auto addMetaTypes = [&](const auto &method) {
+            QMetaType mt(QMetaType::fromName(method.returnType).rawId());
             *types = reinterpret_cast<QtPrivate::QMetaTypeInterface *&>(mt);
             types++;
             for (auto parameterType: method.parameterTypes()) {
@@ -1460,7 +1538,12 @@ static int buildMetaObject(QMetaObjectBuilderPrivate *d, char *buf,
                 *types = mt.iface();
                 types++;
             }
-        }
+        };
+        for (const auto &method : d->signalVec)
+            addMetaTypes(method);
+        for (const auto &method : d->methods)
+            addMetaTypes(method);
+
         for (const auto &constructor : d->constructors) {
             for (auto parameterType : constructor.parameterTypes()) {
                 QMetaType mt = QMetaType::fromName(parameterType);
@@ -1536,13 +1619,24 @@ void QMetaObjectBuilder::setStaticMetacallFunction
 
 QMetaMethodBuilderPrivate *QMetaMethodBuilder::d_func() const
 {
-    // Positive indices indicate methods, negative indices indicate constructors.
-    if (_mobj && _index >= 0 && _index < int(_mobj->d->methods.size()))
-        return &(_mobj->d->methods[_index]);
-    else if (_mobj && -_index >= 1 && -_index <= int(_mobj->d->constructors.size()))
-        return &(_mobj->d->constructors[(-_index) - 1]);
-    else
+    if (!_mobj)
         return nullptr;
+    switch (_type) {
+    case QMetaMethod::Signal:
+        if (_index < int(_mobj->d->signalVec.size()))
+            return &(_mobj->d->signalVec[_index]);
+        break;
+    case QMetaMethod::Method:
+    case QMetaMethod::Slot:
+        if (_index < int(_mobj->d->methods.size()))
+            return &(_mobj->d->methods[_index]);
+        break;
+    case QMetaMethod::Constructor:
+        if (_index < int(_mobj->d->constructors.size()))
+            return &(_mobj->d->constructors[_index]);
+        break;
+    }
+    return nullptr;
 }
 
 /*!
@@ -1555,10 +1649,7 @@ QMetaMethodBuilderPrivate *QMetaMethodBuilder::d_func() const
 */
 int QMetaMethodBuilder::index() const
 {
-    if (_index >= 0)
-        return _index;          // Method, signal, or slot
-    else
-        return (-_index) - 1;   // Constructor
+    return _index;
 }
 
 /*!
@@ -1870,7 +1961,7 @@ QMetaMethodBuilder QMetaPropertyBuilder::notifySignal() const
 {
     QMetaPropertyBuilderPrivate *d = d_func();
     if (d && d->notifySignal >= 0)
-        return QMetaMethodBuilder(_mobj, d->notifySignal);
+        return QMetaMethodBuilder(_mobj, d->notifySignal, QMetaMethod::Signal);
     else
         return QMetaMethodBuilder();
 }

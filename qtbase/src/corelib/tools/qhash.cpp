@@ -1103,6 +1103,32 @@ uint qt_hash(QStringView key, uint chained) noexcept
 */
 
 /*!
+    \fn template <typename T> size_t qHash(std::nullopt_t key, size_t seed = 0)
+    \since 6.12
+    \qhashbuiltin
+
+    \sa qHash(const std::optional<T> &, size_t)
+*/
+
+/*!
+    \fn template <typename T> size_t qHash(const std::optional<T> &key, size_t seed = 0)
+    \since 6.12
+    \qhashbuiltinT{T}
+
+    This is equivalent to
+    \code
+    key ? qHash(*key, seed) : qHash(std::nullopt, seed);
+    \endcode
+
+    In particular, if \a key is engaged (\c{has_value()}), the hash value of \a
+    key is guaranteed to be the same as that of \c{key.value()}, and all
+    disengaged (\c{!has_value()}) optionals, of any type, hash to the same
+    value.
+
+    \sa qHash(std::nullopt_t, size_t)
+*/
+
+/*!
     \fn template <typename... T> size_t qHashMulti(size_t seed, const T &...args)
     \relates QHash
     \since 6.0
@@ -1485,12 +1511,14 @@ size_t qHash(long double key, size_t seed) noexcept
 
     \ingroup tools
     \ingroup shared
+    \ingroup containers
 
     \reentrant
 
-    QHash\<Key, T\> is one of Qt's generic \l{container classes}. It
-    stores (key, value) pairs and provides very fast lookup of the
-    value associated with a key.
+    QHash\<Key, T\> is one of Qt's generic \l{container classes}, where
+    \a Key is the type used for lookup keys and \a T is the mapped value
+    type. It stores (key, value) pairs and provides very fast lookup of
+    the value associated with a key.
 
     QHash provides very similar functionality to QMap. The
     differences are:
@@ -2326,6 +2354,9 @@ size_t qHash(long double key, size_t seed) noexcept
     If there is already an item with the \a key, that item's value
     is replaced with \a value.
 
+    Inserting a key/value pair with an existing key replaces
+    the existing value.
+
     Returns an iterator pointing to the new/updated element.
 
     \include qhash.cpp qhash-iterator-invalidation-func-desc
@@ -2345,7 +2376,8 @@ size_t qHash(long double key, size_t seed) noexcept
 
     Inserts a new element into the container. This new element
     is constructed in-place using \a args as the arguments for its
-    construction.
+    construction. If the element already exists in the container, it
+    is replaced.
 
     Returns an iterator pointing to the new element.
 
@@ -3067,10 +3099,12 @@ size_t qHash(long double key, size_t seed) noexcept
 
     \ingroup tools
     \ingroup shared
+    \ingroup containers
 
     \reentrant
 
-    QMultiHash\<Key, T\> is one of Qt's generic \l{container classes}.
+    QMultiHash\<Key, T\> is one of Qt's generic \l{container classes}, where
+    \a Key is the type used for lookup keys and \a T is the mapped value type.
     It provides a hash table that allows multiple values for the same key.
 
     QMultiHash mostly mirrors QHash's API. For example, you can use isEmpty() to test
@@ -3171,6 +3205,10 @@ size_t qHash(long double key, size_t seed) noexcept
     function will simply create a new one. (This behavior is
     different from replace(), which overwrites the value of an
     existing item.)
+
+    QMultiHash allows duplicate keys. Inserting a key that
+    already exists adds another entry instead of overwriting
+    it. The order of items in QMultHash is not guaranteed.
 
     Returns an iterator pointing to the new element.
 

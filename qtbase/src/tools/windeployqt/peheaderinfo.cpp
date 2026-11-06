@@ -46,19 +46,48 @@ PeHeaderInfo::PeHeaderInfo(const QString fileName)
     if (!mNtHeaders)
         return;
 
+    // Extract all the information immediately, and then release the handles to avoid file
+    // locking.
+    mWordSize = ntHeaderWordSize(mNtHeaders);
+    mMachineArch = mNtHeaders->FileHeader.Machine;
+    if (mWordSize == 32) {
+        mDependentLibs =
+            determineDependentLibs(reinterpret_cast<const IMAGE_NT_HEADERS32 *>(mNtHeaders));
+        mIsDebug = determineDebug(reinterpret_cast<const IMAGE_NT_HEADERS32 *>(mNtHeaders));
+    } else {
+        mDependentLibs =
+            determineDependentLibs(reinterpret_cast<const IMAGE_NT_HEADERS64 *>(mNtHeaders));
+        mIsDebug = determineDebug(reinterpret_cast<const IMAGE_NT_HEADERS64 *>(mNtHeaders));
+    }
+
     mValid = true;
+
+    releaseFileResources();
 }
 
 PeHeaderInfo::~PeHeaderInfo()
 {
-    if (mFileMemory)
+    releaseFileResources();
+}
+
+void PeHeaderInfo::releaseFileResources()
+{
+    if (mFileMemory) {
         UnmapViewOfFile(mFileMemory);
+        mFileMemory = nullptr;
+    }
 
-    if (mFileMapHandle != NULL)
+    if (mFileMapHandle != NULL) {
         CloseHandle(mFileMapHandle);
+        mFileMapHandle = NULL;
+    }
 
-    if (mFileHandle != NULL && mFileHandle != INVALID_HANDLE_VALUE)
+    if (mFileHandle != NULL && mFileHandle != INVALID_HANDLE_VALUE) {
         CloseHandle(mFileHandle);
+        mFileHandle = NULL;
+    }
+
+    mNtHeaders = nullptr;
 }
 
 bool PeHeaderInfo::isValid()
@@ -73,50 +102,22 @@ QString PeHeaderInfo::errorMessage()
 
 unsigned int PeHeaderInfo::wordSize()
 {
-    if (!isValid())
-        return 0;
-
-    return ntHeaderWordSize(mNtHeaders);
+    return mWordSize;
 }
 
 unsigned int PeHeaderInfo::machineArch()
 {
-    if (!isValid())
-        return 0;
-
-    return mNtHeaders->FileHeader.Machine;
+    return mMachineArch;
 }
 
 QStringList PeHeaderInfo::dependentLibs()
 {
-    if (!isValid())
-        return QStringList();
-
-    if (!mDependentLibs.isEmpty())
-        return mDependentLibs;
-
-    if (wordSize() == 32) {
-        mDependentLibs
-                = determineDependentLibs(reinterpret_cast<const IMAGE_NT_HEADERS32 *>(mNtHeaders));
-    } else {
-        mDependentLibs
-                = determineDependentLibs(reinterpret_cast<const IMAGE_NT_HEADERS64 *>(mNtHeaders));
-    }
     return mDependentLibs;
 }
 
 bool PeHeaderInfo::isDebug()
 {
-    if (!mIsDebug.has_value()) {
-        QStringList dependents = dependentLibs();
-        if (wordSize() == 32) {
-            mIsDebug = determineDebug(reinterpret_cast<const IMAGE_NT_HEADERS32 *>(mNtHeaders));
-        } else {
-            mIsDebug = determineDebug(reinterpret_cast<const IMAGE_NT_HEADERS64 *>(mNtHeaders));
-        }
-    }
-
-    return mIsDebug.value();
+    return mIsDebug.value_or(false);
 }
 
 IMAGE_NT_HEADERS *PeHeaderInfo::getNtHeader()
@@ -192,7 +193,7 @@ template <class ImageNtHeader>
 QStringList PeHeaderInfo::readImportSections(const ImageNtHeader *ntHeaders)
 {
     // Get import directory entry RVA and read out
-    const DWORD importsStartRVA = mNtHeaders->OptionalHeader.DataDirectory[IMAGE_DIRECTORY_ENTRY_IMPORT].VirtualAddress;
+    const DWORD importsStartRVA = ntHeaders->OptionalHeader.DataDirectory[IMAGE_DIRECTORY_ENTRY_IMPORT].VirtualAddress;
     if (!importsStartRVA) {
         mErrorMessage = QString::fromLatin1("Failed to find IMAGE_DIRECTORY_ENTRY_IMPORT entry.");
         return QStringList();
@@ -206,9 +207,9 @@ QStringList PeHeaderInfo::readImportSections(const ImageNtHeader *ntHeaders)
     for ( ; importDesc->Name; ++importDesc)
         result.push_back(stringFromRvaPtr(rvaToPtr(importDesc->Name, ntHeaders, mFileMemory)));
 
-           // Read delay-loaded DLLs, see http://msdn.microsoft.com/en-us/magazine/cc301808.aspx .
-           // Check on grAttr bit 1 whether this is the format using RVA's > VS 6
-    if (const DWORD delayedImportsStartRVA = mNtHeaders->OptionalHeader.DataDirectory[IMAGE_DIRECTORY_ENTRY_DELAY_IMPORT].VirtualAddress) {
+    // Read delay-loaded DLLs, see http://msdn.microsoft.com/en-us/magazine/cc301808.aspx .
+    // Check on grAttr bit 1 whether this is the format using RVA's > VS 6
+    if (const DWORD delayedImportsStartRVA = ntHeaders->OptionalHeader.DataDirectory[IMAGE_DIRECTORY_ENTRY_DELAY_IMPORT].VirtualAddress) {
         const ImgDelayDescr *delayedImportDesc = static_cast<const ImgDelayDescr *>(rvaToPtr(delayedImportsStartRVA, ntHeaders, mFileMemory));
         for ( ; delayedImportDesc->rvaDLLName && (delayedImportDesc->grAttrs & 1); ++delayedImportDesc)
             result.push_back(stringFromRvaPtr(rvaToPtr(delayedImportDesc->rvaDLLName, ntHeaders, mFileMemory)));
@@ -232,7 +233,7 @@ bool PeHeaderInfo::determineDebug(const ImageNtHeader *nth)
     if (mDependentLibs.isEmpty())
         mDependentLibs = determineDependentLibs(nth);
 
-    const bool hasDebugEntry = mNtHeaders->OptionalHeader.DataDirectory[IMAGE_DIRECTORY_ENTRY_DEBUG].Size;
+    const bool hasDebugEntry = nth->OptionalHeader.DataDirectory[IMAGE_DIRECTORY_ENTRY_DEBUG].Size;
     // When an MSVC debug entry is present, check whether the debug runtime
     // is actually used to detect -release / -force-debug-info builds.
     const MsvcDebugRuntimeResult msvcrt = checkMsvcDebugRuntime();
@@ -246,7 +247,7 @@ template <class ImageNtHeader>
 const IMAGE_SECTION_HEADER *PeHeaderInfo::findSectionHeader(DWORD rva, const ImageNtHeader *nTHeader)
 {
     const IMAGE_SECTION_HEADER *section = IMAGE_FIRST_SECTION(nTHeader);
-    const IMAGE_SECTION_HEADER *sectionEnd = section + mNtHeaders->FileHeader.NumberOfSections;
+    const IMAGE_SECTION_HEADER *sectionEnd = section + nTHeader->FileHeader.NumberOfSections;
     for ( ; section < sectionEnd; ++section)
         if (rva >= section->VirtualAddress && rva < (section->VirtualAddress + section->Misc.VirtualSize))
             return section;

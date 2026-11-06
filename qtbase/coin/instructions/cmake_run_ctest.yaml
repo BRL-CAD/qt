@@ -30,6 +30,13 @@ instructions:
       condition: property
       property: target.osVersion
       in_values: [VxWorks]
+  - type: AppendToEnvironmentVariable
+    variableName: TESTRUNNER
+    variableValue: " {{.SourceDir}}_standalone_tests/coin_imx8_runner.sh"
+    enable_if:
+      condition: property
+      property: target.osVersion
+      equals_value: IMX8
   - type: Group
     enable_if:
       condition: property
@@ -59,7 +66,10 @@ instructions:
       property: host.os
       equals_value: Windows
 
+  - !include "{{qt/qtbase}}/cmake_ctest_results_copy_setup.yaml"
   - !include "{{qt/qtbase}}/vxworks_test_env_setup.yaml"
+  - !include "{{qt/qtbase}}/imx8_test_env_setup.yaml"
+  - !include "{{qt/qtbase}}/ios_test_env_setup.yaml"
 
   # Only output verbose test output for failures, unless
   # the VerboseCTestOutput feature is enabled. The full
@@ -146,7 +156,7 @@ instructions:
   - type: ExecuteCommand
     instructionName: "Copy ctest log"
     command: >
-      cmake -E copy
+      {{.Env.COIN_CTEST_RESULTS_COPY_CMD}}
         Testing{{.Env.CI_PATH_SEP}}Temporary{{.Env.CI_PATH_SEP}}LastTest.log
         {{.Env.COIN_CTEST_RESULTSDIR}}
     executeCommandArgumentSplitingBehavior: SplitAfterVariableSubstitution
@@ -157,7 +167,7 @@ instructions:
     maxTimeBetweenOutput: 60
   - type: ExecuteCommand
     command: >
-      cmake -E copy
+      {{.Env.COIN_CTEST_RESULTS_COPY_CMD}}
         Testing{{.Env.CI_PATH_SEP}}Temporary{{.Env.CI_PATH_SEP}}LastTest.log.tmp
         {{.Env.COIN_CTEST_RESULTSDIR}}
     executeCommandArgumentSplitingBehavior: SplitAfterVariableSubstitution

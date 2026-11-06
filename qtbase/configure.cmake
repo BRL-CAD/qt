@@ -247,14 +247,12 @@ qt_config_compile_test(glibc
 int main() {}"
 )
 
-# glibc 2.34, for _FORTIFY_SOURCE == 3
-qt_config_compile_test(glibc_234
-    LABEL "Using Glibc >= 2.34"
+# glibc 2.34 and gcc >= 12 or clang >= 9, for _FORTIFY_SOURCE=3
+qt_config_compile_test(glibc_fortify_source_3
+    LABEL "_FORTIFY_SOURCE=3 support"
+    COMPILE_OPTIONS "-Werror=cpp -D_FORTIFY_SOURCE=3"
     CODE
 "#include <features.h>
-#if !defined(__GLIBC__) || !__GLIBC_PREREQ(2, 34)
-#error
-#endif
 int main() {}"
 )
 
@@ -588,6 +586,10 @@ qt_feature("optimize_full"
     AUTODETECT OFF
 )
 qt_feature_config("optimize_full" QMAKE_PRIVATE_CONFIG)
+qt_feature("optimized_tools" PRIVATE
+    LABEL "Build optimized tools for the Debug configuration"
+    AUTODETECT OFF
+)
 qt_feature("msvc_obj_debug_info"
     LABEL "Embed debug info in object files (MSVC)"
     ENABLE QT_USE_CCACHE OR CMAKE_CXX_COMPILER_LAUNCHER
@@ -597,7 +599,7 @@ qt_feature("msvc_obj_debug_info"
 qt_feature_config("msvc_obj_debug_info" QMAKE_PRIVATE_CONFIG)
 qt_feature("pkg-config" PUBLIC
     LABEL "Using pkg-config"
-    AUTODETECT NOT APPLE AND NOT WIN32 AND NOT ANDROID
+    AUTODETECT NOT APPLE AND NOT WIN32 AND NOT ANDROID AND NOT OHOS
     CONDITION PKG_CONFIG_FOUND
 )
 qt_feature_config("pkg-config" QMAKE_PUBLIC_QT_CONFIG
@@ -706,7 +708,7 @@ qt_feature_config("framework" QMAKE_PUBLIC_CONFIG
 )
 qt_feature("largefile"
     LABEL "Large file support"
-    CONDITION NOT ANDROID AND NOT INTEGRITY AND NOT rtems
+    CONDITION NOT INTEGRITY AND NOT rtems AND NOT OHOS
 )
 qt_feature_definition("largefile" "QT_LARGEFILE_SUPPORT" VALUE "64")
 qt_feature_config("largefile" QMAKE_PRIVATE_CONFIG)
@@ -1001,6 +1003,7 @@ qt_feature_config("arm_crc32" QMAKE_PRIVATE_CONFIG)
 qt_feature("arm_crypto" PRIVATE
     LABEL "AES"
     CONDITION ( ( TEST_architecture_arch STREQUAL arm ) OR ( TEST_architecture_arch STREQUAL arm64 ) ) AND ( TEST_arch_${TEST_architecture_arch}_subarch_crypto OR TEST_subarch_crypto )
+    AUTODETECT NOT OHOS
 )
 qt_feature_definition("arm_crypto" "QT_COMPILER_SUPPORTS_CRYPTO" VALUE "1")
 qt_feature_definition("arm_crypto" "QT_COMPILER_SUPPORTS_AES" VALUE "1")
@@ -1172,7 +1175,7 @@ qt_feature("xml" PRIVATE
 )
 qt_feature("libudev" PRIVATE
     LABEL "udev"
-    CONDITION Libudev_FOUND AND NOT INTEGRITY
+    CONDITION Libudev_FOUND AND NOT INTEGRITY AND NOT OHOS
 )
 qt_feature("openssl" PRIVATE
     LABEL "OpenSSL"
@@ -1219,6 +1222,11 @@ qt_feature("static_runtime"
 )
 qt_feature_config("static_runtime" QMAKE_PUBLIC_CONFIG)
 qt_feature_config("static_runtime" QMAKE_PUBLIC_QT_CONFIG)
+qt_feature("static_compiler_runtime" PUBLIC
+    LABEL "Statically link the C++ library and compiler runtime, but not the UCRT"
+    AUTODETECT OFF
+    CONDITION NOT QT_FEATURE_static_runtime AND WIN32 AND MSVC
+)
 qt_feature("dlopen" PRIVATE
     LABEL "dlopen()"
     CONDITION UNIX AND NOT INTEGRITY
@@ -1226,7 +1234,7 @@ qt_feature("dlopen" PRIVATE
 qt_feature("relocatable" PRIVATE
     LABEL "Relocatable"
     PURPOSE "Enable the Qt installation to be relocated."
-    AUTODETECT QT_FEATURE_shared
+    AUTODETECT QT_FEATURE_shared OR APPLE
     CONDITION QT_FEATURE_dlopen OR WIN32 OR NOT QT_FEATURE_shared
 )
 # hardening features
@@ -1237,9 +1245,9 @@ qt_feature("intelcet" PRIVATE
 )
 qt_feature_config("intelcet" QMAKE_PUBLIC_CONFIG)
 qt_feature("glibc_fortify_source" PRIVATE
-    LABEL "Using Glibc function fortification"
+    LABEL "Using Glibc function fortification level 3, if it's supported, otherwise level 2"
     AUTODETECT ON
-    CONDITION TEST_glibc
+    CONDITION TEST_glibc_fortify_source_3 OR TEST_glibc
 )
 qt_feature_config("glibc_fortify_source" QMAKE_PUBLIC_CONFIG)
 qt_feature("trivial_auto_var_init_pattern" PRIVATE
@@ -1280,36 +1288,55 @@ qt_feature("relro_now_linker" PRIVATE
 qt_feature_config("relro_now_linker" QMAKE_PUBLIC_CONFIG)
 
 
-if("${INPUT_coverage}" STREQUAL "gcov")
-    qt_config_compile_test(gcov
-        LABEL "gcov compiler flags"
-        COMPILE_OPTIONS "--coverage"
-        CODE
-    "int main(void)
-    {
-        /* BEGIN TEST: */
-        /* END TEST: */
-        return 0;
-    }
-    ")
-endif()
+qt_config_compile_test(gcov
+    LABEL "gcov compiler flags"
+    COMPILE_OPTIONS "--coverage"
+    CODE
+"int main(void)
+{
+    /* BEGIN TEST: */
+    /* END TEST: */
+    return 0;
+}
+")
+
+qt_config_compile_test(llvm_cov_flags
+    LABEL "LLVM source-based coverage flags"
+    COMPILE_OPTIONS "-fprofile-instr-generate" "-fcoverage-mapping"
+    CODE
+"int main(void)
+{
+    /* BEGIN TEST: */
+    /* END TEST: */
+    return 0;
+}
+")
 
 qt_feature("coverage-gcov"
     LABEL "Gcov"
+    AUTODETECT OFF
     ENABLE INPUT_coverage STREQUAL "gcov"
     CONDITION TEST_gcov AND
         ( QT_FEATURE_debug OR QT_FEATURE_debug_and_release )
 )
 
+qt_feature("coverage-llvm"
+    LABEL "LLVM source-based"
+    AUTODETECT OFF
+    ENABLE INPUT_coverage STREQUAL "llvm-cov"
+    CONDITION TEST_llvm_cov_flags
+)
+
 qt_feature("coverage"
     LABEL "Coverage"
-    CONDITION QT_FEATURE_coverage_gcov
+    CONDITION QT_FEATURE_coverage_gcov OR QT_FEATURE_coverage_llvm
 )
 
 # Mark the feature as PRIVATE because we want it to be exported, but we don't want modifications
 # in the public qconfig.h header in a patch release.
 qt_feature("android_16kb_pages" PRIVATE
-    LABEL "Using 16KB page sizes in Android"
+    LABEL "16KB page size"
+    PURPOSE "Build Android binaries aligned to 16KB page size."
     CONDITION ANDROID AND (((CMAKE_ANDROID_NDK_VERSION VERSION_GREATER_EQUAL "25.0.0"))
                           AND ((CMAKE_ANDROID_ARCH_ABI STREQUAL "arm64-v8a") OR
                               (CMAKE_ANDROID_ARCH_ABI STREQUAL "x86_64")))
@@ -1317,6 +1344,17 @@ qt_feature("android_16kb_pages" PRIVATE
 # The feature is saved into the public QT_CONFIG var in the qt_lib_core.pri file, to ensure it's
 # available automatically for testing with qtConfig() in all user projects.
 qt_feature_config("android_16kb_pages" QMAKE_PUBLIC_QT_CONFIG)
+
+qt_feature("clang_module_maps" PRIVATE
+    LABEL "Generate Clang header module maps"
+    AUTODETECT OFF
+    ENABLE QT_FEATURE_swift_interop
+)
+qt_feature("swift_interop" PRIVATE
+    LABEL "Swift/C++ interoperability"
+    PURPOSE "Enable Swift/C++ interoperability for Qt modules."
+    AUTODETECT OFF
+)
 
 qt_configure_add_summary_build_type_and_config()
 qt_configure_add_summary_section(NAME "Build options")
@@ -1434,6 +1472,14 @@ qt_configure_add_summary_entry(
     ARGS "appstore-compliant"
     CONDITION APPLE OR ANDROID OR WIN32
 )
+qt_configure_add_summary_entry(
+    ARGS "clang_module_maps"
+    CONDITION QT_FEATURE_clang_module_maps
+)
+qt_configure_add_summary_entry(
+    ARGS "swift_interop"
+    CONDITION QT_FEATURE_swift_interop
+)
 qt_configure_end_summary_section() # end of "Build options" section
 qt_configure_add_summary_section(NAME "Qt modules and options")
 qt_configure_add_summary_entry(ARGS "concurrent")
@@ -1450,7 +1496,12 @@ qt_configure_end_summary_section() # end of "Qt modules and options" section
 qt_configure_add_summary_section(NAME "Support enabled for")
 qt_configure_add_summary_entry(ARGS "pkg-config")
 
-if(QT_USE_VCPKG AND (DEFINED ENV{VCPKG_ROOT} OR VCPKG_TARGET_TRIPLET))
+if(QT_USE_VCPKG
+        AND (
+            (DEFINED ENV{VCPKG_ROOT} AND EXISTS "$ENV{VCPKG_ROOT}")
+            OR VCPKG_TARGET_TRIPLET
+        )
+    )
     set(_vcpkg_entry_message "yes")
 else()
     set(_vcpkg_entry_message "no")
@@ -1589,10 +1640,27 @@ qt_feature("test_gui" PUBLIC
     LABEL "Build QtGuiTest namespace"
 )
 
-# Run squish based tests
-qt_feature_definition("test_squish" "QT_SQUISH_TEST" VALUE "0")
+# Run squish based tests on Windows, macOS and Linux
 qt_feature("test_squish" PUBLIC
     LABEL "Run Squish based tests"
+    CONDITION WIN32 OR (APPLE AND NOT IOS) OR (CMAKE_SYSTEM_NAME STREQUAL "Linux" AND NOT ANDROID)
+)
+
+qt_configure_add_report_entry(
+    TYPE NOTE
+    MESSAGE "Building Squish Autotests"
+    CONDITION QT_FEATURE_test_squish AND QT_BUILD_TESTS
+)
+
+# Compile autotests
+qt_feature("test_auto" PUBLIC
+    LABEL "Compile auto tests"
+)
+
+# Compile baseline tests
+qt_feature("test_baseline" PUBLIC
+    LABEL "Compile baseline tests"
+    AUTODETECT OFF
 )
 
 qt_configure_add_report_entry(

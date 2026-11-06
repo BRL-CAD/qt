@@ -95,7 +95,12 @@ public:
     static QCoreApplication *instance() noexcept { return self.loadRelaxed(); }
     static bool instanceExists() noexcept { return instance() != nullptr; }
 #else
+#  ifdef __cpp_lib_atomic_ref
+    static QCoreApplication *instance() noexcept
+    { return std::atomic_ref(self).load(std::memory_order_relaxed); }
+#  else
     static QCoreApplication *instance() noexcept { return self; }
+#  endif
     static bool instanceExists() noexcept;
 #endif
 
@@ -281,7 +286,11 @@ Q_CORE_EXPORT QString qAppName();                // get application name
 
 #ifndef QT_NO_QOBJECT
 #if defined(Q_OS_WIN) && !defined(QT_NO_DEBUG_STREAM)
+#if QT_DEPRECATED_SINCE(6, 12)
+QT_DEPRECATED_VERSION_X_6_12("Use qt_decodeMSG() instead.")
 Q_CORE_EXPORT QString decodeMSG(const MSG &);
+#endif
+Q_CORE_EXPORT QString qt_decodeMSG(const MSG &);
 Q_CORE_EXPORT QDebug operator<<(QDebug, const MSG &);
 #endif
 #endif

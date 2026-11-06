@@ -33,6 +33,7 @@ public:
         WatchOS,
         Android,
         VisionOS,
+        HarmonyOS,
     };
 
     constexpr QOperatingSystemVersionBase(OSType osType,
@@ -63,6 +64,8 @@ public:
         return VisionOS;
 #elif defined(Q_OS_ANDROID)
         return Android;
+#elif defined(Q_OS_HARMONY)
+        return HarmonyOS;
 #else
         return Unknown;
 #endif
@@ -146,6 +149,7 @@ public:
     static constexpr QOperatingSystemVersionBase MacOSSonoma { QOperatingSystemVersionBase::MacOS, 14 };
     static constexpr QOperatingSystemVersionBase MacOSSequoia { QOperatingSystemVersionBase::MacOS, 15 };
     static constexpr QOperatingSystemVersionBase MacOSTahoe { QOperatingSystemVersionBase::MacOS, 26 };
+    static constexpr QOperatingSystemVersionBase MacOSGoldenGate { QOperatingSystemVersionBase::MacOS, 27 };
     static constexpr QOperatingSystemVersionBase Android14 { QOperatingSystemVersionBase::Android, 14, 0 };
     static constexpr QOperatingSystemVersionBase Windows11_23H2 { QOperatingSystemVersionBase::Windows, 10, 0, 22631 };
     static constexpr QOperatingSystemVersionBase Windows11_24H2 { QOperatingSystemVersionBase::Windows, 10, 0, 26100 };
@@ -169,6 +173,7 @@ public:
         WatchOS,
         Android,
         VisionOS,
+        HarmonyOS,
     };
 #endif
 

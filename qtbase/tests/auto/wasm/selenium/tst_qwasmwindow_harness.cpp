@@ -28,10 +28,14 @@
 #include <QTextEdit>
 #include <QPlainTextEdit>
 #include <QLabel>
+#include <QGroupBox>
+#include <QComboBox>
 
 #include <QOpenGLWindow>
 #include <QOpenGLFunctions>
 #include <QOpenGLShaderProgram>
+#include <QOpenGLContext>
+#include <QOffscreenSurface>
 
 #include <emscripten.h>
 #include <emscripten/bind.h>
@@ -421,7 +425,21 @@ public:
             return it->second;
         return nullptr;
     }
+    QComboBox *findComboBox(const std::string& name)
+    {
+        auto it = m_comboBoxes.find(name);
+        if (it != m_comboBoxes.end())
+            return it->second;
+        return nullptr;
+    }
+    void setComboBox(const std::string &name)
+    {
+        auto box1 = findComboBox(name + ".1");
+        auto box2 = findComboBox(name + ".2");
 
+        if (box1) box1->setCurrentIndex(1);
+        if (box2) box2->setCurrentIndex(1);
+    }
     void make(const std::string &name)
     {
         auto widget = std::make_shared<TestWidget>();
@@ -599,6 +617,84 @@ public:
         layout->addWidget(labelD1);
     }
 
+    void makeNativeA11yGroupBoxWidgets(const std::string &name)
+    {
+        QWasmAccessibilityEnable();
+        auto widget = std::make_shared<TestWidget>();
+        widget->setWindowTitle("Dialog");
+
+        m_widgets[name] = widget;
+
+        auto *layout = new QHBoxLayout(widget.get());
+
+        auto *groupBox1 = new QGroupBox("Group1");
+        auto *groupBox2 = new QGroupBox("Group2");
+        auto *groupBox1Layout = new QVBoxLayout(groupBox1);
+        auto *groupBox2Layout = new QVBoxLayout(groupBox2);
+        auto *gb1Label = new QLabel("Label1");
+        auto *gb2Label = new QLabel("Label2");
+        auto *gb1Button = new QPushButton("Button1");
+        auto *gb2Button = new QPushButton("Button2");
+
+        groupBox1Layout->addWidget(gb1Label);
+        groupBox1Layout->addWidget(gb1Button);
+
+        groupBox2Layout->addWidget(gb2Label);
+        groupBox2Layout->addWidget(gb2Button);
+
+        groupBox2->setCheckable(true);
+
+        groupBox1->setAccessibleIdentifier("GroupBox1");
+        groupBox2->setAccessibleIdentifier("GroupBox2");
+        gb1Label->setAccessibleIdentifier("Label1");
+        gb2Label->setAccessibleIdentifier("Label2");
+        gb1Button->setAccessibleIdentifier("Button1");
+        gb2Button->setAccessibleIdentifier("Button2");
+
+        groupBox1->setAccessibleDescription("GroupBox1 - Description");
+        groupBox2->setAccessibleDescription("GroupBox2 - Description");
+        gb1Label->setAccessibleDescription("Label1 - Description");
+        gb2Label->setAccessibleDescription("Label2 - Description");
+        gb1Button->setAccessibleDescription("Button1 - Description");
+        gb2Button->setAccessibleDescription("Button2 - Description");
+
+        layout->addWidget(groupBox1);
+        layout->addWidget(groupBox2);
+    }
+
+    void makeNativeA11yComboBoxWidgets(const std::string &name)
+    {
+        QWasmAccessibilityEnable();
+        auto widget = std::make_shared<TestWidget>();
+        widget->setWindowTitle("Dialog");
+
+        m_widgets[name] = widget;
+
+        auto *layout = new QHBoxLayout(widget.get());
+
+        auto *comboBox1 = new QComboBox();
+        auto *comboBox2 = new QComboBox();
+        layout->addWidget(comboBox1);
+        layout->addWidget(comboBox2);
+
+        comboBox1->setEditable(true);
+        comboBox1->addItem(QLatin1String("Box1Item1"));
+        comboBox1->addItem(QLatin1String("Box1Item2"));
+        comboBox2->addItem(QLatin1String("Box2Item1"));
+        comboBox2->addItem(QLatin1String("Box2Item2"));
+
+        comboBox1->findChildren<QWidget *>().back()->setAccessibleIdentifier("ComboBox1LineEdit");
+
+        comboBox1->setAccessibleIdentifier("ComboBox1");
+        comboBox2->setAccessibleIdentifier("ComboBox2");
+
+        comboBox1->setAccessibleDescription("ComboBox1 - Description");
+        comboBox2->setAccessibleDescription("ComboBox2 - Description");
+
+        m_comboBoxes[name + ".1"] = comboBox1;
+        m_comboBoxes[name + ".2"] = comboBox2;
+    }
+
     bool closeWidget(const std::string &name)
     {
         TestWidget *widget = findWidget(name);
@@ -615,6 +711,7 @@ private:
     static WidgetStorage                 *s_instance;
     std::map<std::string, TestWidgetPtr>  m_widgets;
     std::map<std::string, TestSpinBox *>  m_spinBoxes;
+    std::map<std::string, QComboBox   *>  m_comboBoxes;
     int                                   m_widgetY = 0;
 };
 
@@ -731,6 +828,16 @@ void showContextMenuWidget(const std::string &name)
     WidgetStorage::getInstance()->showContextMenu(name);
 }
 
+void createNativeA11yGroupBoxWidgets(const std::string &name)
+{
+    WidgetStorage::getInstance()->makeNativeA11yGroupBoxWidgets(name);
+}
+
+void createNativeA11yComboBoxWidgets(const std::string &name)
+{
+    WidgetStorage::getInstance()->makeNativeA11yComboBoxWidgets(name);
+}
+
 void showToolTipWidget(const std::string &name)
 {
     WidgetStorage::getInstance()->showToolTip(name);
@@ -766,6 +873,11 @@ void activateWidget(const std::string &name)
     auto w = WidgetStorage::getInstance()->findWidget(name);
     if (w)
         w->activateWindow();
+}
+
+void setWidgetComboMenu(const std::string &name)
+{
+    WidgetStorage::getInstance()->setComboBox(name);
 }
 
 bool closeWidget(const std::string &name)
@@ -907,6 +1019,50 @@ void getOpenGLColorAt_0_0(const std::string &windowTitle)
                                                  emscripten::val(colorToJs(r, g, b)));
 }
 
+// Reproduces QTBUG-145723: a QOpenGLContext must stay valid and reusable after
+// doneCurrent(). The sequence makeCurrent() -> doneCurrent() -> makeCurrent()
+// must succeed, and isValid() must report true after each step (in particular
+// doneCurrent() must not invalidate the context). Returns a JS object with the
+// outcome of each step so the test driver can assert on it.
+void testContextReuse()
+{
+    QSurfaceFormat format;
+    format.setVersion(3, 0);
+
+    QOpenGLContext context;
+    context.setFormat(format);
+    const bool created = context.create();
+
+    QOffscreenSurface surface;
+    surface.setFormat(context.format());
+    surface.create();
+
+    const bool makeCurrent1 = context.makeCurrent(&surface);
+    const bool validAfterMakeCurrent1 = context.isValid();
+
+    context.doneCurrent();
+    const bool validAfterDoneCurrent = context.isValid();
+
+    const bool makeCurrent2 = context.makeCurrent(&surface);
+    const bool validAfterMakeCurrent2 = context.isValid();
+
+    context.doneCurrent();
+
+    auto boolStr = [](bool value) { return value ? "true" : "false"; };
+    std::ostringstream out;
+    out << "({"
+        << "created:" << boolStr(created) << ","
+        << "makeCurrent1:" << boolStr(makeCurrent1) << ","
+        << "validAfterMakeCurrent1:" << boolStr(validAfterMakeCurrent1) << ","
+        << "validAfterDoneCurrent:" << boolStr(validAfterDoneCurrent) << ","
+        << "makeCurrent2:" << boolStr(makeCurrent2) << ","
+        << "validAfterMakeCurrent2:" << boolStr(validAfterMakeCurrent2)
+        << "})";
+
+    emscripten::val::global("window").call<void>("testContextReuseCallback",
+                                                 emscripten::val(out.str()));
+}
+
 #if QT_CONFIG(wasm_jspi)
 #  define EMSC_BIND_FUNC(name, afunction) \
       emscripten::function(name, afunction, emscripten::async())
@@ -927,15 +1083,19 @@ EMSCRIPTEN_BINDINGS(qwasmwindow)
     EMSC_BIND_FUNC("setWindowBackgroundColor", &setWindowBackgroundColor);
 
     EMSC_BIND_FUNC("getOpenGLColorAt_0_0", &getOpenGLColorAt_0_0);
+    EMSC_BIND_FUNC("testContextReuse", &testContextReuse);
 
     EMSC_BIND_FUNC("createWidget", &createWidget);
     EMSC_BIND_FUNC("createNativeWidget", &createNativeWidget);
     EMSC_BIND_FUNC("createNativeA11yButtonWidgets", &createNativeA11yButtonWidgets);
     EMSC_BIND_FUNC("createNativeA11yTextWidgets", &createNativeA11yTextWidgets);
+    EMSC_BIND_FUNC("createNativeA11yGroupBoxWidgets", &createNativeA11yGroupBoxWidgets);
+    EMSC_BIND_FUNC("createNativeA11yComboBoxWidgets", &createNativeA11yComboBoxWidgets);
     EMSC_BIND_FUNC("showContextMenuWidget", &showContextMenuWidget);
     EMSC_BIND_FUNC("showToolTipWidget", &showToolTipWidget);
     EMSC_BIND_FUNC("setWidgetNoFocusShow", &setWidgetNoFocusShow);
     EMSC_BIND_FUNC("showWidget", &showWidget);
+    EMSC_BIND_FUNC("setWidgetComboMenu", &setWidgetComboMenu);
     EMSC_BIND_FUNC("closeWidget", &closeWidget);
     EMSC_BIND_FUNC("activateWidget", &activateWidget);
     EMSC_BIND_FUNC("hasWidgetFocus", &hasWidgetFocus);

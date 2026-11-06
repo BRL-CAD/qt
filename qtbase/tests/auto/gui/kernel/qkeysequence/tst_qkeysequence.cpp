@@ -10,7 +10,7 @@
 #include <QTranslator>
 #include <QLibraryInfo>
 
-#ifdef Q_OS_MAC
+#ifdef Q_OS_APPLE
 struct MacSpecialKey {
     int key;
     ushort macSymbol;
@@ -119,7 +119,7 @@ private:
     int m_keyboardScheme;
     QTranslator *ourTranslator;
     QTranslator *qtTranslator;
-#ifdef Q_OS_MAC
+#ifdef Q_OS_APPLE
     static const QString MacCtrl;
     static const QString MacMeta;
     static const QString MacAlt;
@@ -129,7 +129,7 @@ private:
 
 };
 
-#ifdef Q_OS_MAC
+#ifdef Q_OS_APPLE
 const QString tst_QKeySequence::MacCtrl = QString(QChar(0x2318));
 const QString tst_QKeySequence::MacMeta = QString(QChar(0x2303));
 const QString tst_QKeySequence::MacAlt = QString(QChar(0x2325));
@@ -173,7 +173,7 @@ void tst_QKeySequence::operatorQString_data()
 
     QTest::newRow( "No modifier" ) << 0 << int(Qt::Key_Aring) << QString::fromLatin1( "\x0c5" );
 
-#ifndef Q_OS_MAC
+#ifndef Q_OS_APPLE
     QTest::newRow( "Ctrl+Left" ) << int(Qt::CTRL) << int(Qt::Key_Left) << QString( "Ctrl+Left" );
     QTest::newRow( "Ctrl+," ) << int(Qt::CTRL) << int(Qt::Key_Comma) << QString( "Ctrl+," );
     QTest::newRow( "Alt+Left" ) << int(Qt::ALT) << int(Qt::Key_Left) << QString( "Alt+Left" );
@@ -316,7 +316,7 @@ void tst_QKeySequence::standardKeys_data()
     QTest::newRow("zoomOut") << (int)QKeySequence::ZoomOut<< QString("CTRL+-");
     QTest::newRow("whatsthis") << (int)QKeySequence::WhatsThis<< QString("SHIFT+F1");
 
-#if defined(Q_OS_MAC)
+#if defined(Q_OS_APPLE)
     QTest::newRow("help") << (int)QKeySequence::HelpContents<< QString("Ctrl+?");
     QTest::newRow("nextChild") << (int)QKeySequence::NextChild << QString("CTRL+}");
     QTest::newRow("previousChild") << (int)QKeySequence::PreviousChild << QString("CTRL+{");
@@ -348,25 +348,64 @@ void tst_QKeySequence::standardKeys()
 
 void tst_QKeySequence::keyBindings()
 {
-    const QList<QKeySequence> bindings =
-          QKeySequence::keyBindings(QKeySequence::Copy);
+    {
+        const QList<QKeySequence> bindings =
+              QKeySequence::keyBindings(QKeySequence::Copy);
 
-    QList<QKeySequence> expected;
-    const QKeySequence copy = QKeySequence(QStringLiteral("Copy"));
-    const QKeySequence ctrlC = QKeySequence(QStringLiteral("CTRL+C"));
-    const QKeySequence ctrlInsert = QKeySequence(QStringLiteral("CTRL+INSERT"));
-    switch (m_keyboardScheme) {
-    case QPlatformTheme::MacKeyboardScheme:
-        expected  << ctrlC << copy;
-        break;
-    case QPlatformTheme::WindowsKeyboardScheme:
-        expected  << ctrlC << ctrlInsert << copy;
-        break;
-    default: // X11
-        expected  << ctrlC << ctrlInsert << QKeySequence(QStringLiteral("F16")) << copy;
-        break;
+        QList<QKeySequence> expected;
+        const QKeySequence copy = QKeySequence(QStringLiteral("Copy"));
+        const QKeySequence ctrlC = QKeySequence(QStringLiteral("CTRL+C"));
+        const QKeySequence ctrlInsert = QKeySequence(QStringLiteral("CTRL+INSERT"));
+        switch (m_keyboardScheme) {
+        case QPlatformTheme::MacKeyboardScheme:
+            expected  << ctrlC << copy;
+            break;
+        case QPlatformTheme::WindowsKeyboardScheme:
+            expected  << ctrlC << ctrlInsert << copy;
+            break;
+        default: // X11
+            expected  << ctrlC << ctrlInsert << QKeySequence(QStringLiteral("F16")) << copy;
+            break;
+        }
+        QCOMPARE(bindings, expected);
     }
-    QCOMPARE(bindings, expected);
+
+    // QTBUG-138383: Quit must be empty on Windows (no platform default there);
+    // the Key_Exit action key is added only on platforms that already have Ctrl+Q.
+    {
+        const QList<QKeySequence> quitBindings =
+              QKeySequence::keyBindings(QKeySequence::Quit);
+
+        QList<QKeySequence> expected;
+        if (m_keyboardScheme != QPlatformTheme::WindowsKeyboardScheme) {
+            expected << QKeySequence(QStringLiteral("CTRL+Q"))
+                     << QKeySequence(QStringLiteral("Exit"));
+        }
+        QCOMPARE(quitBindings, expected);
+        QCOMPARE(QKeySequence(QKeySequence::Quit).isEmpty(),
+                 m_keyboardScheme == QPlatformTheme::WindowsKeyboardScheme);
+    }
+
+    // QTBUG-138383: Preferences is empty on Windows/Gnome/plain-X11/CDE;
+    // Key_Settings is added only where a platform default already exists (KDE, Mac).
+    {
+        const QList<QKeySequence> prefBindings =
+              QKeySequence::keyBindings(QKeySequence::Preferences);
+
+        QList<QKeySequence> expected;
+        const QKeySequence settings = QKeySequence(QStringLiteral("Settings"));
+        switch (m_keyboardScheme) {
+        case QPlatformTheme::MacKeyboardScheme:
+            expected << QKeySequence(QStringLiteral("CTRL+,")) << settings;
+            break;
+        case QPlatformTheme::KdeKeyboardScheme:
+            expected << QKeySequence(QStringLiteral("CTRL+SHIFT+,")) << settings;
+            break;
+        default: // Windows, Gnome, plain X11, CDE
+            break;
+        }
+        QCOMPARE(prefBindings, expected);
+    }
 }
 
 void tst_QKeySequence::mnemonic_data()
@@ -391,7 +430,7 @@ void tst_QKeySequence::mnemonic_data()
 void tst_QKeySequence::mnemonic()
 {
     const auto resetAutoMnemonic = qScopeGuard([] {
-#ifndef Q_OS_MAC
+#ifndef Q_OS_APPLE
         qt_set_sequence_auto_mnemonic(true);
 #else
         qt_set_sequence_auto_mnemonic(false);
@@ -426,7 +465,7 @@ void tst_QKeySequence::toString_data()
     QTest::addColumn<QString>("platformString");
 
 
-#ifndef Q_OS_MAC
+#ifndef Q_OS_APPLE
     QTest::newRow("Ctrl+Left") << QString("Ctrl+Left") << QString("Ctrl+Left") << QString("Ctrl+Left");
     QTest::newRow("Alt+Left") << QString("Alt+Left") << QString("Alt+Left") << QString("Alt+Left");
     QTest::newRow("Alt+Shift+Left") << QString("Alt+Shift+Left") << QString("Alt+Shift+Left") << QString("Alt+Shift+Left");

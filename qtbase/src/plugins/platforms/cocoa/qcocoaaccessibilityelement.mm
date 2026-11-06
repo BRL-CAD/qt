@@ -833,6 +833,49 @@ static void convertLineOffset(QAccessibleTextInterface *text, int *line, int *of
     return 0;
 }
 
+- (NSArray *)accessibilityAttributeNames {
+    NSMutableArray *attributes = [[NSMutableArray new] autorelease];
+
+#if QT_APPLE_SDK_EQUAL_OR_ABOVE(MACOS(26))
+    if (@available(macOS 26, *))
+        [attributes addObject:NSAccessibilityLanguageAttribute];
+#endif
+
+    QAccessibleInterface *iface = self.qtInterface;
+    if (iface && iface->state().expandable)
+        [attributes addObject:NSAccessibilityExpandedAttribute];
+
+    return attributes;
+}
+
+- (id)accessibilityAttributeValue:(NSString *)attribute {
+    QAccessibleInterface *iface = self.qtInterface;
+    if (!iface) {
+        qWarning() << "Called attribute on invalid object: " << axid;
+        return nil;
+    }
+
+#if QT_APPLE_SDK_EQUAL_OR_ABOVE(MACOS(26))
+    if (@available(macOS 26, *)) {
+        if ([attribute isEqualToString:NSAccessibilityLanguageAttribute]) {
+            QAccessibleAttributesInterface *attributesIface = iface->attributesInterface();
+            if (!attributesIface
+                || !attributesIface->attributeKeys().contains(QAccessible::Attribute::Locale))
+                return nil;
+
+            const auto &localeVariant =
+                    attributesIface->attributeValue(QAccessible::Attribute::Locale);
+            return localeVariant.toLocale().bcp47Name().toNSString();
+        }
+    }
+#endif
+
+    if ([attribute isEqualToString:NSAccessibilityExpandedAttribute])
+        return iface->state().expanded ? @YES : @NO;
+
+    return nil;
+}
+
 - (NSArray *)accessibilityParameterizedAttributeNames {
 
     QAccessibleInterface *iface = self.qtInterface;

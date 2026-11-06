@@ -1,6 +1,8 @@
 # Copyright (C) 2022 The Qt Company Ltd.
 # SPDX-License-Identifier: BSD-3-Clause
 
+__qt_internal_cmake_include_guard(GLOBAL GUARD_KEY "QtPublicTargetHelpers")
+
 function(__qt_internal_strip_target_directory_scope_token target out_var)
     # In CMake versions earlier than CMake 3.18, a subdirectory scope id is appended to the
     # target name if the target is referenced in a target_link_libraries command from a
@@ -475,6 +477,26 @@ function(_qt_internal_set_up_static_runtime_library target)
                 target_link_options(${target} ${link_option} "LINKER:-Bstatic")
             else()
                 target_link_options(${target} ${link_option} "-static")
+            endif()
+        endif()
+    elseif(QT_FEATURE_static_compiler_runtime)
+        get_target_property(target_type ${target} TYPE)
+        if(NOT target_type STREQUAL "INTERFACE_LIBRARY")
+            if(MSVC)
+                # This is the "Hybrid CRT" method of linking, see: https://aka.ms/hybridcrt
+                # This is the rules from HybridCRT.props ported to CMake. It's supported by
+                # Microsoft, and the default linking method in the Windows App SDK.
+                # With this enabled the binaries will not depend on the VC++ redistributable.
+                set_property(TARGET ${target} PROPERTY
+                    MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
+                target_link_options(${target} PRIVATE
+                    "LINKER:/DEFAULTLIB:ucrt$<$<CONFIG:Debug>:d>.lib" # include the dynamic UCRT
+                    "LINKER:/NODEFAULTLIB:libucrt$<$<CONFIG:Debug>:d>.lib" # ignore the static UCRT
+                )
+            else()
+                message(FATAL_ERROR
+                    "FEATURE_static_compiler_runtime is not supported on this compiler/platform."
+                )
             endif()
         endif()
     endif()

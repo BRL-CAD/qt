@@ -12,6 +12,7 @@
 #include <QtCore/qiterator.h>
 #include <QtCore/qlist.h>
 #include <QtCore/qrefcount.h>
+#include <QtCore/qscopeguard.h>
 #include <QtCore/qttypetraits.h>
 
 #include <initializer_list>
@@ -880,7 +881,7 @@ public:
             delete d;
     }
 
-    QHash &operator=(const QHash &other) noexcept(std::is_nothrow_destructible<Node>::value)
+    QHash &operator=(const QHash &other) noexcept
     {
         if (d != other.d) {
             Data *o = other.d;
@@ -1037,11 +1038,9 @@ private:
 
         if (it.isUnused())
             return T();
-        return [&] {
-            T value = it.node()->takeValue();
-            d->erase(it);
-            return value;
-        }();
+
+        const auto eraser = qScopeGuard([&] { d->erase(it); });
+        return it.node()->takeValue();
     }
 
 public:

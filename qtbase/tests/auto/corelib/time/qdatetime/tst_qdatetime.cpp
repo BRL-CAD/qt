@@ -102,6 +102,11 @@ private Q_SLOTS:
     void addSecs();
     void addMSecs_data();
     void addMSecs();
+    void durationArithmetic_data() { addMSecs_data(); }
+    // Tests seconds as well as milliseconds, but doesn't get the
+    // seconds-only data because they have to go via milliseconds because that's
+    // the operand of the arithmetic operators and addDuration().
+    void durationArithmetic();
 #if QT_DEPRECATED_SINCE(6, 9)
     void toTimeSpec_data();
     void toTimeSpec();
@@ -232,6 +237,25 @@ private:
 
 Q_DECLARE_METATYPE(Qt::TimeSpec)
 Q_DECLARE_METATYPE(Qt::DateFormat)
+
+// Beyond equality as "same instant in time" - require same representation.
+// Can add extra check code after required parameters.
+#define QDTCOMPARE(actual, expect, ...) \
+    do { \
+        const QDateTime actual_QDT_C = (actual); \
+        const QDateTime expect_QDT_C = (expect); \
+        if (expect_QDT_C.isValid()) { \
+            QCOMPARE(actual_QDT_C, expect_QDT_C); \
+            QCOMPARE(actual_QDT_C.timeRepresentation(), expect_QDT_C.timeRepresentation()); \
+            QCOMPARE(actual_QDT_C.offsetFromUtc(), expect_QDT_C.offsetFromUtc()); \
+            QCOMPARE(actual_QDT_C.toMSecsSinceEpoch(), expect_QDT_C.toMSecsSinceEpoch()); \
+            QCOMPARE(actual_QDT_C.date(), expect_QDT_C.date()); \
+            QCOMPARE(actual_QDT_C.time(), expect_QDT_C.time()); \
+            __VA_ARGS__ \
+        } else { \
+            QVERIFY(!actual_QDT_C.isValid()); \
+        } \
+    } while (false) // end QDTCOMPARE()
 
 tst_QDateTime::tst_QDateTime() :
     // UTC starts of January and July in the commented years:
@@ -797,33 +821,11 @@ void tst_QDateTime::setMSecsSinceEpoch()
     dt.setTimeZone(UTC);
     dt.setMSecsSinceEpoch(msecs);
 
-    QCOMPARE(dt, utc);
-    QCOMPARE(dt.date(), utc.date());
-    QCOMPARE(dt.time(), utc.time());
-    QCOMPARE(dt.timeSpec(), Qt::UTC);
-
-    {
-        QDateTime dt1 = QDateTime::fromMSecsSinceEpoch(msecs, UTC);
-        QCOMPARE(dt1, utc);
-        QCOMPARE(dt1.date(), utc.date());
-        QCOMPARE(dt1.time(), utc.time());
-        QCOMPARE(dt1.timeSpec(), Qt::UTC);
-    }
-    {
-        QDateTime dt1(utc.date(), utc.time(), UTC);
-        QCOMPARE(dt1, utc);
-        QCOMPARE(dt1.date(), utc.date());
-        QCOMPARE(dt1.time(), utc.time());
-        QCOMPARE(dt1.timeSpec(), Qt::UTC);
-    }
-    {
-        // used to fail to clear the ShortData bit, causing corruption
-        QDateTime dt1 = dt.addDays(0);
-        QCOMPARE(dt1, utc);
-        QCOMPARE(dt1.date(), utc.date());
-        QCOMPARE(dt1.time(), utc.time());
-        QCOMPARE(dt1.timeSpec(), Qt::UTC);
-    }
+    QDTCOMPARE(dt, utc);
+    QDTCOMPARE(QDateTime::fromMSecsSinceEpoch(msecs, UTC), utc);
+    QCOMPARE(QDateTime(utc.date(), utc.time(), UTC), utc);
+    // Used to fail to clear the ShortData bit, causing corruption:
+    QDTCOMPARE(dt.addDays(0), utc);
 
     if (zoneIsCET && (msecs == Bound::max()
                       // LocalTime will also overflow for min in a CET zone west
@@ -1071,20 +1073,13 @@ void tst_QDateTime::toString_isoDate()
     const QString result = datetime.toString(format);
     QCOMPARE(result, expected);
 
-    const QDateTime resultDatetime = QDateTime::fromString(result, format);
-    if (QByteArrayView(QTest::currentDataTag()) == "invalid") {
-        QCOMPARE(resultDatetime, QDateTime());
-    } else {
-        const QDateTime when =
-            QByteArrayView(QTest::currentDataTag()) == "without-ms"
-            ? datetime.addMSecs(-datetime.time().msec()) : datetime;
-        QCOMPARE(resultDatetime.toMSecsSinceEpoch(), when.toMSecsSinceEpoch());
-        QCOMPARE(resultDatetime, when);
-        QCOMPARE(resultDatetime.date(), when.date());
-        QCOMPARE(resultDatetime.time(), when.time());
-        QCOMPARE(resultDatetime.timeSpec(), when.timeSpec());
-        QCOMPARE(resultDatetime.offsetFromUtc(), when.offsetFromUtc());
-    }
+    QByteArrayView tag = QByteArrayView(QTest::currentDataTag());
+    QDTCOMPARE(QDateTime::fromString(result, format),
+               tag == "invalid"
+                   ? QDateTime()
+                   : tag == "without-ms"
+                       ? datetime.addMSecs(-datetime.time().msec())
+                       : datetime);
 }
 
 void tst_QDateTime::toString_isoDate_extra()
@@ -1141,12 +1136,7 @@ void tst_QDateTime::toString_textDate()
     QCOMPARE(result, expected);
 
 #if QT_CONFIG(datetimeparser)
-    QDateTime resultDatetime = QDateTime::fromString(result, Qt::TextDate);
-    QCOMPARE(resultDatetime, datetime);
-    QCOMPARE(resultDatetime.date(), datetime.date());
-    QCOMPARE(resultDatetime.time(), datetime.time());
-    QCOMPARE(resultDatetime.timeSpec(), datetime.timeSpec());
-    QCOMPARE(resultDatetime.offsetFromUtc(), datetime.offsetFromUtc());
+    QDTCOMPARE(QDateTime::fromString(result, Qt::TextDate), datetime);
 #endif
 }
 
@@ -1568,8 +1558,8 @@ void tst_QDateTime::addYears()
 void tst_QDateTime::addMSecs_data()
 {
     QTest::addColumn<QDateTime>("dt");
-    QTest::addColumn<qint64>("nsecs");
-    QTest::addColumn<QDateTime>("result");
+    QTest::addColumn<qint64>("secondCount");
+    QTest::addColumn<QDateTime>("expect");
 
     const QTime standardTime(12, 34, 56);
     const QTime daylightTime(13, 34, 56);
@@ -1677,6 +1667,18 @@ void tst_QDateTime::addMSecs_data()
     QTest::newRow("to-first")
         << QDateTime::fromSecsSinceEpoch(1 - maxSeconds, UTC) << qint64(-1)
         << QDateTime::fromSecsSinceEpoch(-maxSeconds, UTC);
+    // Same four cases, but with the extreme value in secondCount (the rhs of the
+    // addition) instead of in dt (the lhs):
+    QTest::newRow("after-last-rhs")
+        << QDateTime::fromSecsSinceEpoch(1, UTC) << maxSeconds << QDateTime();
+    QTest::newRow("to-last-rhs")
+        << QDateTime::fromSecsSinceEpoch(1, UTC) << (maxSeconds - 1)
+        << QDateTime::fromSecsSinceEpoch(maxSeconds, UTC);
+    QTest::newRow("before-first-rhs")
+        << QDateTime::fromSecsSinceEpoch(-1, UTC) << -maxSeconds << QDateTime();
+    QTest::newRow("to-first-rhs")
+        << QDateTime::fromSecsSinceEpoch(-1, UTC) << (1 - maxSeconds)
+        << QDateTime::fromSecsSinceEpoch(-maxSeconds, UTC);
 
 #if QT_CONFIG(timezone)
     if (const QTimeZone cet("Europe/Oslo"); cet.isValid()) {
@@ -1731,61 +1733,49 @@ void tst_QDateTime::addSecs_data()
 void tst_QDateTime::addSecs()
 {
     QFETCH(const QDateTime, dt);
-    QFETCH(const qint64, nsecs);
-    QFETCH(const QDateTime, result);
-    QDateTime test = dt.addSecs(nsecs);
-    QDateTime test2 = dt + std::chrono::seconds(nsecs);
-    QDateTime test3 = dt;
-    test3 += std::chrono::seconds(nsecs);
-    if (!result.isValid()) {
-        QVERIFY(!test.isValid());
-        QVERIFY(!test2.isValid());
-        QVERIFY(!test3.isValid());
-    } else {
-        QCOMPARE(test, result);
-        QCOMPARE(test2, result);
-        QCOMPARE(test3, result);
-        QCOMPARE(test.timeSpec(), dt.timeSpec());
-        QCOMPARE(test2.timeSpec(), dt.timeSpec());
-        QCOMPARE(test3.timeSpec(), dt.timeSpec());
-        if (test.timeSpec() == Qt::OffsetFromUTC) {
-            QCOMPARE(test.offsetFromUtc(), dt.offsetFromUtc());
-            QCOMPARE(test2.offsetFromUtc(), dt.offsetFromUtc());
-            QCOMPARE(test3.offsetFromUtc(), dt.offsetFromUtc());
-        }
-        QCOMPARE(result.addSecs(-nsecs), dt);
-        QCOMPARE(result - std::chrono::seconds(nsecs), dt);
-        test3 -= std::chrono::seconds(nsecs);
-        QCOMPARE(test3, dt);
-        QCOMPARE(dt.secsTo(result), nsecs);
-    }
+    QFETCH(const qint64, secondCount);
+    QFETCH(const QDateTime, expect);
+
+    QDTCOMPARE(dt.addSecs(secondCount), expect,
+               QCOMPARE(expect.addSecs(-secondCount), dt););
 }
 
 void tst_QDateTime::addMSecs()
 {
     QFETCH(const QDateTime, dt);
-    QFETCH(const qint64, nsecs);
-    QFETCH(const QDateTime, result);
+    QFETCH(const qint64, secondCount);
+    QFETCH(const QDateTime, expect);
 
-    const auto verify = [&](const QDateTime &test) {
-        if (!result.isValid()) {
-            QVERIFY(!test.isValid());
-        } else {
-            QCOMPARE(test, result);
-            QCOMPARE(test.timeSpec(), dt.timeSpec());
-            if (test.timeSpec() == Qt::OffsetFromUTC)
-                QCOMPARE(test.offsetFromUtc(), dt.offsetFromUtc());
-            QCOMPARE(result.addMSecs(qint64(-nsecs) * 1000), dt);
+    QDTCOMPARE(dt.addMSecs(secondCount * 1000), expect,
+               QCOMPARE(expect.addMSecs(-secondCount * 1000), dt););
+}
+
+void tst_QDateTime::durationArithmetic()
+{
+    QFETCH(const QDateTime, dt);
+    QFETCH(const qint64, secondCount);
+    QFETCH(const QDateTime, expect);
+
+    const auto verify = [&](const auto step) {
+        QDTCOMPARE(dt + step, expect, QCOMPARE(expect - step, dt););
+        QDTCOMPARE(dt.addDuration(step), expect,
+                   QCOMPARE(expect.addDuration(-step), dt););
+
+        {
+            QDateTime test = dt;
+            test += step;
+            QDTCOMPARE(test, expect,
+                       test -= step;
+                       QCOMPARE(test, dt););
         }
     };
-#define VERIFY(datum) \
-    verify(datum); \
+#define VERIFY(step) \
+    verify(step); \
     if (QTest::currentTestFailed()) \
         return
 
-    VERIFY(dt.addMSecs(qint64(nsecs) * 1000));
-    VERIFY(dt.addDuration(std::chrono::seconds(nsecs)));
-    VERIFY(dt.addDuration(std::chrono::milliseconds(nsecs * 1000)));
+    VERIFY(std::chrono::seconds(secondCount));
+    VERIFY(std::chrono::milliseconds(secondCount * 1000));
 #undef VERIFY
 }
 
@@ -1864,6 +1854,11 @@ void tst_QDateTime::toTimeSpec()
 {
     QFETCH(QDateTime, fromUtc);
     QFETCH(QDateTime, fromLocal);
+    // Precondition on well-formed data row: they represent the same instant in
+    // time, one in UTC, the other in local time:
+    QCOMPARE(fromLocal, fromUtc);
+    QCOMPARE(fromUtc.timeSpec(), Qt::UTC);
+    QCOMPARE(fromLocal.timeSpec(), Qt::LocalTime);
 
     QDateTime utcToUtc = fromUtc.toTimeSpec(Qt::UTC);
     QDateTime localToLocal = fromLocal.toTimeSpec(Qt::LocalTime);
@@ -1872,49 +1867,19 @@ void tst_QDateTime::toTimeSpec()
     QDateTime utcToOffset = fromUtc.toTimeSpec(Qt::OffsetFromUTC);
     QDateTime localToOffset = fromLocal.toTimeSpec(Qt::OffsetFromUTC);
 
-    QCOMPARE(utcToUtc, fromUtc);
-    QCOMPARE(utcToUtc.date(), fromUtc.date());
-    QCOMPARE(utcToUtc.time(), fromUtc.time());
-    QCOMPARE(utcToUtc.timeSpec(), Qt::UTC);
-
-    QCOMPARE(localToLocal, fromLocal);
-    QCOMPARE(localToLocal.date(), fromLocal.date());
-    QCOMPARE(localToLocal.time(), fromLocal.time());
-    QCOMPARE(localToLocal.timeSpec(), Qt::LocalTime);
-
-    QCOMPARE(utcToLocal, fromLocal);
-    QCOMPARE(utcToLocal.date(), fromLocal.date());
-    QCOMPARE(utcToLocal.time(), fromLocal.time());
-    QCOMPARE(utcToLocal.timeSpec(), Qt::LocalTime);
+    QDTCOMPARE(localToLocal, fromLocal);
+    QDTCOMPARE(utcToLocal, fromLocal);
     QCOMPARE(utcToLocal.toTimeSpec(Qt::UTC), fromUtc);
 
-    QCOMPARE(localToUtc, fromUtc);
-    QCOMPARE(localToUtc.date(), fromUtc.date());
-    QCOMPARE(localToUtc.time(), fromUtc.time());
-    QCOMPARE(localToUtc.timeSpec(), Qt::UTC);
+    QDTCOMPARE(utcToUtc, fromUtc);
+    QDTCOMPARE(localToUtc, fromUtc);
     QCOMPARE(localToUtc.toTimeSpec(Qt::LocalTime), fromLocal);
 
-    QCOMPARE(utcToUtc, localToUtc);
-    QCOMPARE(utcToUtc.date(), localToUtc.date());
-    QCOMPARE(utcToUtc.time(), localToUtc.time());
-    QCOMPARE(utcToUtc.timeSpec(), Qt::UTC);
-
-    QCOMPARE(utcToLocal, localToLocal);
-    QCOMPARE(utcToLocal.date(), localToLocal.date());
-    QCOMPARE(utcToLocal.time(), localToLocal.time());
-    QCOMPARE(utcToLocal.timeSpec(), Qt::LocalTime);
-
-    // OffsetToUTC becomes UTC
-    QCOMPARE(utcToOffset, fromUtc);
-    QCOMPARE(utcToOffset.date(), fromUtc.date());
-    QCOMPARE(utcToOffset.time(), fromUtc.time());
-    QCOMPARE(utcToOffset.timeSpec(), Qt::UTC);
+    // OffsetToUTC is actually just UTC, unchanged (no offset was given):
+    QDTCOMPARE(utcToOffset, fromUtc);
     QCOMPARE(utcToOffset.toTimeSpec(Qt::UTC), fromUtc);
 
-    QCOMPARE(localToOffset, fromUtc);
-    QCOMPARE(localToOffset.date(), fromUtc.date());
-    QCOMPARE(localToOffset.time(), fromUtc.time());
-    QCOMPARE(localToOffset.timeSpec(), Qt::UTC);
+    QDTCOMPARE(localToOffset, fromUtc);
     QCOMPARE(localToOffset.toTimeSpec(Qt::LocalTime), fromLocal);
 }
 
@@ -1991,46 +1956,46 @@ void tst_QDateTime::secsTo_data()
 void tst_QDateTime::secsTo()
 {
     QFETCH(const QDateTime, dt);
-    QFETCH(const qint64, nsecs);
-    QFETCH(const QDateTime, result);
+    QFETCH(const qint64, secondCount);
+    QFETCH(const QDateTime, expect);
 
-    if (result.isValid()) {
-        QCOMPARE(dt.secsTo(result), (qint64)nsecs);
-        QCOMPARE(result.secsTo(dt), (qint64)-nsecs);
-        QCOMPARE(dt == result, 0 == nsecs);
-        QCOMPARE(dt != result, 0 != nsecs);
-        QCOMPARE(dt < result, 0 < nsecs);
-        QCOMPARE(dt <= result, 0 <= nsecs);
-        QCOMPARE(dt > result, 0 > nsecs);
-        QCOMPARE(dt >= result, 0 >= nsecs);
+    if (expect.isValid()) {
+        QCOMPARE(dt.secsTo(expect), secondCount);
+        QCOMPARE(expect.secsTo(dt), -secondCount);
+        QCOMPARE(dt == expect, 0 == secondCount);
+        QCOMPARE(dt != expect, 0 != secondCount);
+        QCOMPARE(dt < expect, 0 < secondCount);
+        QCOMPARE(dt <= expect, 0 <= secondCount);
+        QCOMPARE(dt > expect, 0 > secondCount);
+        QCOMPARE(dt >= expect, 0 >= secondCount);
     } else {
-        QCOMPARE(dt.secsTo(result), 0);
-        QCOMPARE(result.secsTo(dt), 0);
+        QCOMPARE(dt.secsTo(expect), 0);
+        QCOMPARE(expect.secsTo(dt), 0);
     }
 }
 
 void tst_QDateTime::msecsTo()
 {
     QFETCH(const QDateTime, dt);
-    QFETCH(const qint64, nsecs);
-    QFETCH(const QDateTime, result);
+    QFETCH(const qint64, secondCount);
+    QFETCH(const QDateTime, expect);
 
-    if (result.isValid()) {
-        QCOMPARE(dt.msecsTo(result), qint64(nsecs) * 1000);
-        QCOMPARE(result - dt, std::chrono::milliseconds(nsecs * 1000));
-        QCOMPARE(result.msecsTo(dt), -qint64(nsecs) * 1000);
-        QCOMPARE(dt - result, -std::chrono::milliseconds(nsecs * 1000));
-        QCOMPARE(dt == result, 0 == nsecs);
-        QCOMPARE(dt != result, 0 != nsecs);
-        QCOMPARE(dt < result, 0 < nsecs);
-        QCOMPARE(dt <= result, 0 <= nsecs);
-        QCOMPARE(dt > result, 0 > nsecs);
-        QCOMPARE(dt >= result, 0 >= nsecs);
+    if (expect.isValid()) {
+        QCOMPARE(dt.msecsTo(expect), secondCount * 1000);
+        QCOMPARE(expect - dt, std::chrono::milliseconds(secondCount * 1000));
+        QCOMPARE(expect.msecsTo(dt), -secondCount * 1000);
+        QCOMPARE(dt - expect, -std::chrono::milliseconds(secondCount * 1000));
+        QCOMPARE(dt == expect, 0 == secondCount);
+        QCOMPARE(dt != expect, 0 != secondCount);
+        QCOMPARE(dt < expect, 0 < secondCount);
+        QCOMPARE(dt <= expect, 0 <= secondCount);
+        QCOMPARE(dt > expect, 0 > secondCount);
+        QCOMPARE(dt >= expect, 0 >= secondCount);
     } else {
-        QCOMPARE(dt.msecsTo(result), 0);
-        QCOMPARE(result - dt, std::chrono::milliseconds(0));
-        QCOMPARE(result.msecsTo(dt), 0);
-        QCOMPARE(dt - result, std::chrono::milliseconds(0));
+        QCOMPARE(dt.msecsTo(expect), 0);
+        QCOMPARE(expect - dt, std::chrono::milliseconds(0));
+        QCOMPARE(expect.msecsTo(dt), 0);
+        QCOMPARE(dt - expect, std::chrono::milliseconds(0));
     }
 }
 
@@ -2416,7 +2381,23 @@ void tst_QDateTime::springForward_data()
         QTest::newRow("ET from day after")
             << eastern << QDate(2015, 3, 8) << QTime(2, 30) << -1 << -240;
     }
-#endif
+    if (const QTimeZone brt("America/Sao_Paulo"); brt.isValid()) {
+        // A spring forward at midnight, skipping the first hour of the day:
+        QTest::newRow("BRT from before")
+            << brt << QDate(2008, 10, 19) << QTime(0, 30) << 1 << -180;
+        QTest::newRow("BRT from after")
+            << brt << QDate(2008, 10, 19) << QTime(0, 30) << -1 << -120;
+    }
+    // Test-case depends on 2022g or later of the IANA DB (and our source of
+    // truth caring about zone changes as long ago as 1981):
+    if (const QTimeZone sgt("Asia/Singapore"); sgt.isValid()) {
+        // A non-DST adjustment to standard time, skipping the last half hour of the day:
+        QTest::newRow("SGT from before +00:30")
+            << sgt << QDate(1981, 12, 31) << QTime(23, 45) << 1 << 450;
+        QTest::newRow("SGT from after +00:30")
+            << sgt << QDate(1981, 12, 31) << QTime(23, 45) << -1 << 480;
+    }
+#endif // timezone
 }
 
 void tst_QDateTime::springForward()
@@ -2425,17 +2406,50 @@ void tst_QDateTime::springForward()
     QFETCH(QDate, day);
     QFETCH(QTime, time);
     QFETCH(int, step);
+    // adjust is the offset on the other side of the gap, in minutes:
     QFETCH(int, adjust);
 
     QDateTime direct = QDateTime(day.addDays(-step), time, zone).addDays(step);
     QVERIFY(direct.isValid());
-    QCOMPARE(direct.date(), day);
-    QCOMPARE(direct.time().minute(), time.minute());
-    QCOMPARE(direct.time().second(), time.second());
+    const auto maybeExpectFail = [&zone](const char *rowId) {
+# ifdef Q_OS_QNX
+        // QNX 7.1 and 8.0 both ship outdated zone data, but either can be given
+        // a newer IANA release, so key off the data, not the OS: Singapore is
+        // +08:00 at this instant once the 1981 transition is known.
+        if (zone.offsetFromUtc(QDateTime(QDate(1981, 12, 31), QTime(16, 0), UTC)) != 8 * 3600)
+            QEXPECT_FAIL(rowId, "QTBUG-145768: zone data lacks the 1981 transition", Abort);
+# elif defined(USING_WIN_TZ)
+        QEXPECT_FAIL(rowId, "QTBUG-145768: system historical zone data is limited", Abort);
+# elif defined(INADEQUATE_TZ_DATA) && Q_PROCESSOR_WORDSIZE < 8
+        // It seems CI has better data on 64-bit Android than on 32-bit.
+        QEXPECT_FAIL(rowId, "QTBUG-145768: system historical zone data is limited", Abort);
+# else
+        Q_UNUSED(rowId);
+# endif // Support for 2022g IANA DB's knowledge of a 1981 transition.
+    };
+
+    if (time.hour() >= 23 && step > 0) {
+        // When it's the last hour (or half hour) of the day that's skipped,
+        // stepping from before lands us on the next day:
+        maybeExpectFail("SGT from before +00:30");
+        QCOMPARE(direct.date(), day.addDays(1));
+    } else if (time.hour() < 1 && step < 0) {
+        // Likewise, skipping the first hour lands the day before when stepping
+        // from after.
+        QCOMPARE(direct.date(), day.addDays(-1));
+    } else {
+        QCOMPARE(direct.date(), day);
+    }
+
     const int off = step < 0 ? -1 : 1;
-    QCOMPARE(direct.time().hour() - time.hour(), off);
-    // adjust is the offset on the other side of the gap:
-    QCOMPARE(direct.offsetFromUtc(), (adjust + off * 60) * 60);
+    int offsetChange = off * 60 * 60; // In seconds; assume 1 hour change, by default.
+    if (const auto tag = QByteArrayView(QTest::currentDataTag());
+            tag.startsWith("SGT from ") && tag.endsWith(" +00:30")) {
+        offsetChange /= 2; // Half-hour change in offset
+    }
+    maybeExpectFail("SGT from after +00:30");
+    QCOMPARE(direct.time(), time.addSecs(offsetChange));
+    QCOMPARE(direct.offsetFromUtc(), adjust * 60 + offsetChange);
 
     // Repeat, but getting there via .toTimeZone(). Apply adjust to datetime,
     // not time, as the time wraps round if the adjustment crosses midnight.
@@ -3171,300 +3185,433 @@ void tst_QDateTime::fromStringStringFormat_data()
     QTest::addColumn<QString>("string");
     QTest::addColumn<QString>("format");
     QTest::addColumn<int>("baseYear");
+    QTest::addColumn<QCalendar>("calendar");
     QTest::addColumn<QDateTime>("expected");
+    using Sys = QCalendar::System;
+    const QCalendar greg;
 
     // Indian/Cocos had a transition at the start of 1900, so its Jan 1st starts
     // at 00:02:20 on that day; this leads to perverse results. QTBUG-77948.
     if (const QDate defDate(1900, 1, 1); defDate.startOfDay().time() == QTime(0, 0)) {
         QTest::newRow("dMyy-only:19")
-                << u"101010"_s << u"dMyy"_s << 1900 << QDate(1910, 10, 10).startOfDay();
+                << u"101010"_s << u"dMyy"_s << 1900 << greg << QDate(1910, 10, 10).startOfDay();
         QTest::newRow("dMyy-only:20")
-                << u"101010"_s << u"dMyy"_s << 1911 << QDate(2010, 10, 10).startOfDay();
+                << u"101010"_s << u"dMyy"_s << 1911 << greg << QDate(2010, 10, 10).startOfDay();
         QTest::newRow("secs-repeat-valid")
-                << u"1010"_s << u"sss"_s << 1900 << QDateTime(defDate, QTime(0, 0, 10));
+                << u"1010"_s << u"sss"_s << 1900 << greg << QDateTime(defDate, QTime(0, 0, 10));
         QTest::newRow("pm-only")
-                << u"pm"_s << u"ap"_s << 1900 << QDateTime(defDate, QTime(12, 0));
+                << u"pm"_s << u"ap"_s << 1900 << greg << QDateTime(defDate, QTime(12, 0));
         QTest::newRow("date-only:19")
-                << u"10 Oct 10"_s << u"dd MMM yy"_s << 1900 << QDate(1910, 10, 10).startOfDay();
+                << u"10 Oct 10"_s << u"dd MMM yy"_s << 1900 << greg
+                << QDate(1910, 10, 10).startOfDay();
         QTest::newRow("date-only:20")
-                << u"10 Oct 10"_s << u"dd MMM yy"_s << 1950 << QDate(2010, 10, 10).startOfDay();
+                << u"10 Oct 10"_s << u"dd MMM yy"_s << 1950 << greg
+                << QDate(2010, 10, 10).startOfDay();
         QTest::newRow("dow-date-only")
-                << u"Fri December 3 2004"_s << u"ddd MMMM d yyyy"_s << 1900
+                << u"Fri December 3 2004"_s << u"ddd MMMM d yyyy"_s << 1900 << greg
                 << QDate(2004, 12, 3).startOfDay();
         QTest::newRow("dow-mon-yr-only")
-                << u"Thu January 2004"_s << u"ddd MMMM yyyy"_s << 1900
+                << u"Thu January 2004"_s << u"ddd MMMM yyyy"_s << 1900 << greg
                 << QDate(2004, 1, 1).startOfDay();
     }
     QTest::newRow("yy=24/Mar/20") // QTBUG-123579
-            << u"Wed, 20 Mar 24 16:17:00"_s << u"ddd, dd MMM yy HH:mm:ss"_s << 1900
+            << u"Wed, 20 Mar 24 16:17:00"_s << u"ddd, dd MMM yy HH:mm:ss"_s << 1900 << greg
             << QDateTime(QDate(2024, 3, 20), QTime(16, 17));
-    QTest::newRow("secs-conflict") << u"1020"_s << u"sss"_s << 1900 << QDateTime();
+    QTest::newRow("secs-conflict") << u"1020"_s << u"sss"_s << 1900 << greg << QDateTime();
     QTest::newRow("secs-split-conflict")
-            << u"10hello20"_s << u"ss'hello'ss"_s << 1900 << QDateTime();
-    QTest::newRow("nomatch-quote-twice") << u"10"_s << u"''"_s << 1900 << QDateTime();
-    QTest::newRow("momatch-quote") << u"10"_s << u"'"_s << 1900 << QDateTime();
-    QTest::newRow("nomatch-am-pm") << u"foo"_s << u"ap"_s << 1900 << QDateTime();
+            << u"10hello20"_s << u"ss'hello'ss"_s << 1900 << greg << QDateTime();
+    QTest::newRow("nomatch-quote-twice") << u"10"_s << u"''"_s << 1900 << greg << QDateTime();
+    QTest::newRow("nomatch-quote") << u"10"_s << u"'"_s << 1900 << greg << QDateTime();
+    QTest::newRow("nomatch-am-pm") << u"foo"_s << u"ap"_s << 1900 << greg << QDateTime();
     // Day non-conflict should not hide earlier year conflict (1963-03-01 was a
     // Friday; asking for Thursday moves this, without conflict, to the 7th):
     QTest::newRow("year-conflict")
-            << u"77 03 1963 Thu"_s << u"yy MM yyyy ddd"_s << 1900 << QDateTime();
-    QTest::newRow("Feb-overflow") << u"30.02.2004"_s << u"dd.MM.yyyy"_s << 1900 << QDateTime();
-    QTest::newRow("Jan-overflow") << u"32.01.2004"_s << u"dd.MM.yyyy"_s << 1900 << QDateTime();
+            << u"77 03 1963 Thu"_s << u"yy MM yyyy ddd"_s << 1900 << greg << QDateTime();
+    QTest::newRow("Feb-overflow")
+            << u"30.02.2004"_s << u"dd.MM.yyyy"_s << 1900 << greg << QDateTime();
+    QTest::newRow("Jan-overflow")
+            << u"32.01.2004"_s << u"dd.MM.yyyy"_s << 1900 << greg << QDateTime();
     QTest::newRow("zulu-time-with-z-centisec")
-            << u"2005-06-28T07:57:30.01Z"_s << u"yyyy-MM-ddThh:mm:ss.zt"_s << 1900
+            << u"2005-06-28T07:57:30.01Z"_s << u"yyyy-MM-ddThh:mm:ss.zt"_s << 1900 << greg
             << QDateTime(QDate(2005, 06, 28), QTime(07, 57, 30, 10), UTC);
     QTest::newRow("zulu-time-with-zz-decisec")
-            << u"2005-06-28T07:57:30.1Z"_s << u"yyyy-MM-ddThh:mm:ss.zzt"_s << 1900
+            << u"2005-06-28T07:57:30.1Z"_s << u"yyyy-MM-ddThh:mm:ss.zzt"_s << 1900 << greg
             << QDateTime(QDate(2005, 06, 28), QTime(07, 57, 30, 100), UTC);
     QTest::newRow("zulu-time-with-zzz-centisec")
-            << u"2005-06-28T07:57:30.01Z"_s << u"yyyy-MM-ddThh:mm:ss.zzzt"_s << 1900
+            << u"2005-06-28T07:57:30.01Z"_s << u"yyyy-MM-ddThh:mm:ss.zzzt"_s << 1900 << greg
             << QDateTime(); // Invalid because too few digits for zzz
+    QTest::newRow("zulu-time-with-zzz-decimillisec")
+            << u"2005-06-28T07:57:30.0123Z"_s << u"yyyy-MM-ddThh:mm:ss.zzzt"_s << 1900 << greg
+            << QDateTime(); // Invalid because too many digits for zzz
     QTest::newRow("zulu-time-with-z-millisec")
-            << u"2005-06-28T07:57:30.001Z"_s << u"yyyy-MM-ddThh:mm:ss.zt"_s << 1900
+            << u"2005-06-28T07:57:30.001Z"_s << u"yyyy-MM-ddThh:mm:ss.zt"_s << 1900 << greg
             << QDateTime(QDate(2005, 06, 28), QTime(07, 57, 30, 1), UTC);
     QTest::newRow("utc-time-spec-as:UTC+0")
-            << u"2005-06-28T07:57:30.001UTC+0"_s << u"yyyy-MM-ddThh:mm:ss.zt"_s << 1900
+            << u"2005-06-28T07:57:30.001UTC+0"_s << u"yyyy-MM-ddThh:mm:ss.zt"_s << 1900 << greg
             << QDateTime(QDate(2005, 6, 28), QTime(7, 57, 30, 1), UTC);
     QTest::newRow("utc-time-spec-as:UTC-0")
-            << u"2005-06-28T07:57:30.001UTC-0"_s << u"yyyy-MM-ddThh:mm:ss.zt"_s << 1900
+            << u"2005-06-28T07:57:30.001UTC-0"_s << u"yyyy-MM-ddThh:mm:ss.zt"_s << 1900 << greg
             << QDateTime(QDate(2005, 6, 28), QTime(7, 57, 30, 1), UTC);
     QTest::newRow("offset-from-utc:UTC+1")
-            << u"2001-09-13T07:33:01.001 UTC+1"_s << u"yyyy-MM-ddThh:mm:ss.z t"_s << 1900
+            << u"2001-09-13T07:33:01.001 UTC+1"_s << u"yyyy-MM-ddThh:mm:ss.z t"_s << 1900 << greg
             << QDateTime(QDate(2001, 9, 13), QTime(7, 33, 1, 1),
                          QTimeZone::fromSecondsAheadOfUtc(3600));
     QTest::newRow("offset-from-utc:UTC-11:01")
-            << u"2008-09-13T07:33:01.001 UTC-11:01"_s << u"yyyy-MM-ddThh:mm:ss.z t"_s << 1900
+            << u"2008-09-13T07:33:01.001 UTC-11:01"_s
+            << u"yyyy-MM-ddThh:mm:ss.z t"_s << 1900 << greg
             << QDateTime(QDate(2008, 9, 13), QTime(7, 33, 1, 1),
                          QTimeZone::fromSecondsAheadOfUtc(-39660));
     QTest::newRow("offset-from-utc:UTC+02:57")
-            << u"2001-09-15T09:33:01.001UTC+02:57"_s << u"yyyy-MM-ddThh:mm:ss.zt"_s << 1900
+            << u"2001-09-15T09:33:01.001UTC+02:57"_s << u"yyyy-MM-ddThh:mm:ss.zt"_s << 1900 << greg
             << QDateTime(QDate(2001, 9, 15), QTime(9, 33, 1, 1),
                          QTimeZone::fromSecondsAheadOfUtc(10620));
-    QTest::newRow("offset-from-utc:-03:00")  // RFC 3339 offset format
-            << u"2001-09-15T09:33:01.001-03:00"_s << u"yyyy-MM-ddThh:mm:ss.zt"_s << 1900
+    QTest::newRow("offset-from-utc:-03:00")  // ISO 8601 extended format (used by RFC 3339 &c.)
+            << u"2001-09-15T09:33:01.001-03:00"_s << u"yyyy-MM-ddThh:mm:ss.zt"_s << 1900 << greg
             << QDateTime(QDate(2001, 9, 15), QTime(9, 33, 1, 1),
                          QTimeZone::fromSecondsAheadOfUtc(-10800));
     QTest::newRow("offset-from-utc:+0205")  // ISO 8601 basic offset format
-            << u"2001-09-15T09:33:01.001+0205"_s << u"yyyy-MM-ddThh:mm:ss.zt"_s << 1900
+            << u"2001-09-15T09:33:01.001+0205"_s << u"yyyy-MM-ddThh:mm:ss.zt"_s << 1900 << greg
             << QDateTime(QDate(2001, 9, 15), QTime(9, 33, 1, 1),
                          QTimeZone::fromSecondsAheadOfUtc(7500));
     QTest::newRow("offset-from-utc:-0401")  // ISO 8601 basic offset format
-            << u"2001-09-15T09:33:01.001-0401"_s << u"yyyy-MM-ddThh:mm:ss.zt"_s << 1900
+            << u"2001-09-15T09:33:01.001-0401"_s << u"yyyy-MM-ddThh:mm:ss.zt"_s << 1900 << greg
             << QDateTime(QDate(2001, 9, 15), QTime(9, 33, 1, 1),
                          QTimeZone::fromSecondsAheadOfUtc(-14460));
     QTest::newRow("offset-from-utc:+10")  // ISO 8601 basic (hour-only) offset format
-            << u"2001-09-15T09:33:01.001 +10"_s << u"yyyy-MM-ddThh:mm:ss.z t"_s << 1900
+            << u"2001-09-15T09:33:01.001 +10"_s << u"yyyy-MM-ddThh:mm:ss.z t"_s << 1900 << greg
             << QDateTime(QDate(2001, 9, 15), QTime(9, 33, 1, 1),
                          QTimeZone::fromSecondsAheadOfUtc(36000));
     QTest::newRow("offset-from-utc:UTC+10:00")  // Time-spec specifier at the beginning
-            << u"UTC+10:00 2008-10-13T07:33"_s << u"t yyyy-MM-ddThh:mm"_s << 1900
+            << u"UTC+10:00 2008-10-13T07:33"_s << u"t yyyy-MM-ddThh:mm"_s << 1900 << greg
             << QDateTime(QDate(2008, 10, 13), QTime(7, 33),
                          QTimeZone::fromSecondsAheadOfUtc(36000));
     QTest::newRow("offset-from-utc:UTC-03:30")  // Time-spec specifier in the middle
-            << u"2008-10-13 UTC-03:30 11.50"_s << u"yyyy-MM-dd t hh.mm"_s << 1900
+            << u"2008-10-13 UTC-03:30 11.50"_s << u"yyyy-MM-dd t hh.mm"_s << 1900 << greg
             << QDateTime(QDate(2008, 10, 13), QTime(11, 50),
                          QTimeZone::fromSecondsAheadOfUtc(-12600));
     QTest::newRow("offset-from-utc:UTC-2")  // Time-spec specifier joined with text/time
-            << u"2008-10-13 UTC-2Z11.50"_s << u"yyyy-MM-dd tZhh.mm"_s << 1900
+            << u"2008-10-13 UTC-2Z11.50"_s << u"yyyy-MM-dd tZhh.mm"_s << 1900 << greg
             << QDateTime(QDate(2008, 10, 13), QTime(11, 50),
                          QTimeZone::fromSecondsAheadOfUtc(-7200));
     QTest::newRow("offset-from-utc:followed-by-colon")
-            << u"2008-10-13 UTC-0100:11.50"_s << u"yyyy-MM-dd t:hh.mm"_s << 1900
+            << u"2008-10-13 UTC-0100:11.50"_s << u"yyyy-MM-dd t:hh.mm"_s << 1900 << greg
             << QDateTime(QDate(2008, 10, 13), QTime(11, 50),
                          QTimeZone::fromSecondsAheadOfUtc(-3600));
     QTest::newRow("offset-from-utc:late-colon")
-            << u"2008-10-13 UTC+05T:11.50"_s << u"yyyy-MM-dd tT:hh.mm"_s << 1900
+            << u"2008-10-13 UTC+05T:11.50"_s << u"yyyy-MM-dd tT:hh.mm"_s << 1900 << greg
             << QDateTime(QDate(2008, 10, 13), QTime(11, 50),
                          QTimeZone::fromSecondsAheadOfUtc(18000));
     QTest::newRow("offset-from-utc:merged-with-time")
-            << u"2008-10-13 UTC+010011.50"_s << u"yyyy-MM-dd thh.mm"_s << 1900
+            << u"2008-10-13 UTC+010011.50"_s << u"yyyy-MM-dd thh.mm"_s << 1900 << greg
             << QDateTime(QDate(2008, 10, 13), QTime(11, 50),
                          QTimeZone::fromSecondsAheadOfUtc(3600));
     QTest::newRow("offset-from-utc:double-colon-delimiter")
-            << u"2008-10-13 UTC+12::11.50"_s << u"yyyy-MM-dd t::hh.mm"_s << 1900
+            << u"2008-10-13 UTC+12::11.50"_s << u"yyyy-MM-dd t::hh.mm"_s << 1900 << greg
             << QDateTime(QDate(2008, 10, 13), QTime(11, 50),
                          QTimeZone::fromSecondsAheadOfUtc(43200));
     QTest::newRow("offset-from-utc:3-digit-with-colon")
-            << u"2008-10-13 -4:30 11.50"_s << u"yyyy-MM-dd t hh.mm"_s << 1900
+            << u"2008-10-13 -4:30 11.50"_s << u"yyyy-MM-dd t hh.mm"_s << 1900 << greg
             << QDateTime(QDate(2008, 10, 13), QTime(11, 50),
                          QTimeZone::fromSecondsAheadOfUtc(-16200));
     QTest::newRow("offset-from-utc:with-colon-merged-with-time")
-            << u"2008-10-13 UTC+01:0011.50"_s << u"yyyy-MM-dd thh.mm"_s << 1900
+            << u"2008-10-13 UTC+01:0011.50"_s << u"yyyy-MM-dd thh.mm"_s << 1900 << greg
             << QDateTime(QDate(2008, 10, 13), QTime(11, 50),
                          QTimeZone::fromSecondsAheadOfUtc(3600));
     QTest::newRow("invalid-offset-from-utc:out-of-range")
-            << u"2001-09-15T09:33:01.001-50"_s << u"yyyy-MM-ddThh:mm:ss.zt"_s << 1900
+            << u"2001-09-15T09:33:01.001-50"_s << u"yyyy-MM-ddThh:mm:ss.zt"_s << 1900 << greg
             << QDateTime();
-    QTest::newRow("invalid-offset-from-utc:single-digit-format")
-            << u"2001-09-15T09:33:01.001+5"_s << u"yyyy-MM-ddThh:mm:ss.zt"_s << 1900 << QDateTime();
+    QTest::newRow("single-digit-offset-from-utc")
+            << u"2001-09-15T09:33:01.001+5"_s << u"yyyy-MM-ddThh:mm:ss.zt"_s << 1900 << greg
+            << QDateTime(QDate(2001, 9, 15), QTime(9, 33, 1, 1),
+                         QTimeZone::fromSecondsAheadOfUtc(18000));
     QTest::newRow("invalid-offset-from-utc:three-digit-format")
-            << u"2001-09-15T09:33:01.001-701"_s << u"yyyy-MM-ddThh:mm:ss.zt"_s << 1900
+            << u"2001-09-15T09:33:01.001-701"_s << u"yyyy-MM-ddThh:mm:ss.zt"_s << 1900 << greg
             << QDateTime();
     QTest::newRow("invalid-offset-from-utc:three-digit-minutes")
-            << u"2001-09-15T09:33:01.001+11:570"_s << u"yyyy-MM-ddThh:mm:ss.zt"_s << 1900
+            << u"2001-09-15T09:33:01.001+11:570"_s << u"yyyy-MM-ddThh:mm:ss.zt"_s << 1900 << greg
             << QDateTime();
     QTest::newRow("invalid-offset-from-utc:single-digit-minutes")
-            << u"2001-09-15T09:33:01.001+11:5"_s << u"yyyy-MM-ddThh:mm:ss.zt"_s << 1900
+            << u"2001-09-15T09:33:01.001+11:5"_s << u"yyyy-MM-ddThh:mm:ss.zt"_s << 1900 << greg
             << QDateTime();
     QTest::newRow("invalid-offset-from-utc:invalid-sign-symbol")
-            << u"2001-09-15T09:33:01.001 ~11:30"_s << u"yyyy-MM-ddThh:mm:ss.z t"_s << 1900
+            << u"2001-09-15T09:33:01.001 ~11:30"_s << u"yyyy-MM-ddThh:mm:ss.z t"_s << 1900 << greg
             << QDateTime();
     QTest::newRow("invalid-offset-from-utc:symbol-in-hours")
-            << u"2001-09-15T09:33:01.001 UTC+o8:30"_s << u"yyyy-MM-ddThh:mm:ss.z t"_s << 1900
+            << u"2001-09-15T09:33:01.001 UTC+o8:30"_s
+            << u"yyyy-MM-ddThh:mm:ss.z t"_s << 1900 << greg
             << QDateTime();
     QTest::newRow("invalid-offset-from-utc:symbol-in-minutes")
-            << u"2001-09-15T09:33:01.001 UTC+08:3i"_s << u"yyyy-MM-ddThh:mm:ss.z t"_s << 1900
-            << QDateTime();
+            << u"2001-09-15T09:33:01.001 UTC+08:3i"_s
+            << u"yyyy-MM-ddThh:mm:ss.z t"_s << 1900 << greg << QDateTime();
     QTest::newRow("invalid-offset-from-utc:UTC+123")  // Invalid offset (UTC and 3 digit format)
-            << u"2001-09-15T09:33:01.001 UTC+123"_s << u"yyyy-MM-ddThh:mm:ss.z t"_s << 1900
+            << u"2001-09-15T09:33:01.001 UTC+123"_s << u"yyyy-MM-ddThh:mm:ss.z t"_s << 1900 << greg
             << QDateTime();
     QTest::newRow("invalid-offset-from-utc:UTC+00005")  // Invalid offset with leading zeroes
-            << u"2001-09-15T09:33:01.001 UTC+00005"_s << u"yyyy-MM-ddThh:mm:ss.z t"_s << 1900
-            << QDateTime();
+            << u"2001-09-15T09:33:01.001 UTC+00005"_s
+            << u"yyyy-MM-ddThh:mm:ss.z t"_s << 1900 << greg << QDateTime();
     QTest::newRow("invalid-offset-from-utc:three-digit-with-colon-delimiter")
-            << u"2008-10-13 +123:11.50"_s << u"yyyy-MM-dd t:hh.mm"_s << 1900 << QDateTime();
+            << u"2008-10-13 +123:11.50"_s << u"yyyy-MM-dd t:hh.mm"_s << 1900 << greg << QDateTime();
     QTest::newRow("invalid-offset-from-utc:double-colon-as-part-of-offset")
-            << u"2008-10-13 UTC+12::11.50"_s << u"yyyy-MM-dd thh.mm"_s << 1900 << QDateTime();
+            << u"2008-10-13 UTC+12::11.50"_s
+            << u"yyyy-MM-dd thh.mm"_s << 1900 << greg << QDateTime();
     QTest::newRow("invalid-offset-from-utc:single-colon-as-part-of-offset")
-            << u"2008-10-13 UTC+12::11.50"_s << u"yyyy-MM-dd t:hh.mm"_s << 1900 << QDateTime();
+            << u"2008-10-13 UTC+12::11.50"_s
+            << u"yyyy-MM-dd t:hh.mm"_s << 1900 << greg << QDateTime();
     QTest::newRow("invalid-offset-from-utc:starts-with-colon")
-            << u"2008-10-13 UTC+:59 11.50"_s << u"yyyy-MM-dd t hh.mm"_s << 1900 << QDateTime();
+            << u"2008-10-13 UTC+:59 11.50"_s
+            << u"yyyy-MM-dd t hh.mm"_s << 1900 << greg << QDateTime();
     QTest::newRow("invalid-offset-from-utc:empty-offset")
-            << u"2008-10-13 UTC+ 11.50"_s << u"yyyy-MM-dd t hh.mm"_s << 1900 << QDateTime();
+            << u"2008-10-13 UTC+ 11.50"_s << u"yyyy-MM-dd t hh.mm"_s << 1900 << greg << QDateTime();
     QTest::newRow("invalid-offset-from-utc:time-section-instead-of-offset")
-            << u"2008-10-13 UTC+11.50"_s << u"yyyy-MM-dd thh.mm"_s << 1900 << QDateTime();
+            << u"2008-10-13 UTC+11.50"_s
+            << u"yyyy-MM-dd thh.mm"_s << 1900 << greg << QDateTime();
     QTest::newRow("invalid-offset-from-utc:missing-minutes-if-colon")
-            << u"2008-10-13 +05: 11.50"_s << u"yyyy-MM-dd t hh.mm"_s << 1900 << QDateTime();
+            << u"2008-10-13 +05: 11.50"_s << u"yyyy-MM-dd t hh.mm"_s << 1900 << greg << QDateTime();
     QTest::newRow("invalid-offset-from-utc:1-digit-minutes-if-colon")
-            << u"2008-10-13 UTC+05:1 11.50"_s << u"yyyy-MM-dd t hh.mm"_s << 1900 << QDateTime();
+            << u"2008-10-13 UTC+05:1 11.50"_s
+            << u"yyyy-MM-dd t hh.mm"_s << 1900 << greg << QDateTime();
     QTest::newRow("invalid-time-spec:random-symbol")
-            << u"2001-09-15T09:33:01.001 $"_s << u"yyyy-MM-ddThh:mm:ss.z t"_s << 1900
+            << u"2001-09-15T09:33:01.001 $"_s << u"yyyy-MM-ddThh:mm:ss.z t"_s << 1900 << greg
             << QDateTime();
     QTest::newRow("invalid-time-spec:random-digit")
-            << u"2001-09-15T09:33:01.001 1"_s << u"yyyy-MM-ddThh:mm:ss.z t"_s << 1900
+            << u"2001-09-15T09:33:01.001 1"_s << u"yyyy-MM-ddThh:mm:ss.z t"_s << 1900 << greg
             << QDateTime();
-    QTest::newRow("invalid-offset-from-utc:merged-with-time")
-            << u"2008-10-13 UTC+0111.50"_s << u"yyyy-MM-dd thh.mm"_s << 1900 << QDateTime();
+    QTest::newRow("restrained-greed-in-offset-from-utc:merged-with-time")
+            << u"2008-10-13 UTC+0111.50"_s << u"yyyy-MM-dd thh.mm"_s << 1900 << greg
+            << QDateTime(QDate(2008, 10, 13), QTime(11, 50),
+                         QTimeZone::fromSecondsAheadOfUtc(3600));
     QTest::newRow("invalid-offset-from-utc:with-colon-3-digit-merged-with-time")
-            << u"2008-10-13 UTC+01:011.50"_s << u"yyyy-MM-dd thh.mm"_s << 1900 << QDateTime();
+            << u"2008-10-13 UTC+01:011.50"_s
+            << u"yyyy-MM-dd thh.mm"_s << 1900 << greg << QDateTime();
     QTest::newRow("invalid-time-spec:empty")
-            << u"2001-09-15T09:33:01.001 "_s << u"yyyy-MM-ddThh:mm:ss.z t"_s << 1900 << QDateTime();
+            << u"2001-09-15T09:33:01.001 "_s
+            << u"yyyy-MM-ddThh:mm:ss.z t"_s << 1900 << greg << QDateTime();
     QTest::newRow("invalid-month-year<min") // This used to fail an unfounded assertion.
-            << u"0024:91:06 08:52:20"_s << u"yyyy:MM:dd HH:mm:ss"_s << 1900 << QDateTime();
+            << u"0024:91:06 08:52:20"_s << u"yyyy:MM:dd HH:mm:ss"_s << 1900 << greg << QDateTime();
     QTest::newRow("invalid-year")
-            << u"0000:11:06 08:51:20"_s << u"yyyy:MM:dd HH:mm:ss"_s << 1900 << QDateTime();
+            << u"0000:11:06 08:51:20"_s << u"yyyy:MM:dd HH:mm:ss"_s << 1900 << greg << QDateTime();
 #if QT_CONFIG(timezone)
     QTimeZone southBrazil("America/Sao_Paulo");
     if (southBrazil.isValid()) {
         QTest::newRow("spring-forward-midnight")
                 // NB: no hour field, so hour takes its default, 0, so that
                 // default can be over-ridden:
-                << u"2008-10-19 23:45.678 America/Sao_Paulo"_s << u"yyyy-MM-dd mm:ss.zzz t"_s << 1900
+                << u"2008-10-19 23:45.678 America/Sao_Paulo"_s
+                << u"yyyy-MM-dd mm:ss.zzz t"_s << 1900 << greg
                 // That's in the hour skipped - expect the matching time after
                 // the spring-forward, in DST:
                 << QDateTime(QDate(2008, 10, 19), QTime(1, 23, 45, 678), southBrazil);
     }
 #endif
     QTest::newRow("late")
-            << u"9999-12-31T23:59:59.999Z"_s << u"yyyy-MM-ddThh:mm:ss.zZ"_s << 1900
+            << u"9999-12-31T23:59:59.999Z"_s << u"yyyy-MM-ddThh:mm:ss.zZ"_s << 1900 << greg
             << QDateTime(QDate(9999, 12, 31), QTime(23, 59, 59, 999));
     // Separators match /([^aAdhHMmstyz]*)/
     QTest::newRow("oddly-separated") // To show broken-separator's format is valid.
             << u"2018 wilful long working block relief 12-19T21:09 cruel blurb encore flux"_s
             << u"yyyy wilful long working block relief MM-ddThh:mm cruel blurb encore flux"_s
-            << 1900 << QDateTime(QDate(2018, 12, 19), QTime(21, 9));
+            << 1900 << greg << QDateTime(QDate(2018, 12, 19), QTime(21, 9));
     QTest::newRow("broken-separator")
             << u"2018 wilful"_s
             << u"yyyy wilful long working block relief MM-ddThh:mm cruel blurb encore flux"_s
-            << 1900 << QDateTime();
+            << 1900 << greg << QDateTime();
     QTest::newRow("broken-terminator")
             << u"2018 wilful long working block relief 12-19T21:09 cruel"_s
             << u"yyyy wilful long working block relief MM-ddThh:mm cruel blurb encore flux"_s
-            << 1900 << QDateTime();
+            << 1900 << greg << QDateTime();
     QTest::newRow("fix-century-Mon")
-            << u"Monday, 23 April 12 22:51:41"_s << u"dddd, d MMMM yy hh:mm:ss"_s << 1900
+            << u"Monday, 23 April 12 22:51:41"_s << u"dddd, d MMMM yy hh:mm:ss"_s << 1900 << greg
             << QDateTime(QDate(2012, 4, 23), QTime(22, 51, 41));
     QTest::newRow("fix-century-Tue")
-            << u"Tuesday, 23 April 12 22:51:41"_s << u"dddd, d MMMM yy hh:mm:ss"_s << 2000
+            << u"Tuesday, 23 April 12 22:51:41"_s << u"dddd, d MMMM yy hh:mm:ss"_s << 2000 << greg
             << QDateTime(QDate(1912, 4, 23), QTime(22, 51, 41));
 
     // test unicode
     QTest::newRow("unicode handling")
             << u"2005🤣06🤣28T07🤣57🤣30.001Z"_s
-            << u"yyyy🤣MM🤣ddThh🤣mm🤣ss.zt"_s << 1900
+            << u"yyyy🤣MM🤣ddThh🤣mm🤣ss.zt"_s << 1900 << greg
             << QDateTime(QDate(2005, 6, 28), QTime(7, 57, 30, 1), UTC);
 
     // Two tests derived from malformed ASN.1 strings (QTBUG-84349):
     QTest::newRow("curft+ASN.1:UTC")
-            << u"22+221102233Z"_s << u"yyMMddHHmmsst"_s << 1900 << QDateTime();
+            << u"22+221102233Z"_s << u"yyMMddHHmmsst"_s << 1900 << greg << QDateTime();
     QTest::newRow("curft+ASN.1:Generalized")
-            << u"9922+221102233Z"_s << u"yyyyMMddHHmmsst"_s << 1900 << QDateTime();
+            << u"9922+221102233Z"_s << u"yyyyMMddHHmmsst"_s << 1900 << greg << QDateTime();
     // Verify baseYear needed by plain ASN.1 works:
     QTest::newRow("ASN.1:UTC-start")
-            << u"500101000000Z"_s << u"yyMMddHHmmsst"_s << 1950
+            << u"500101000000Z"_s << u"yyMMddHHmmsst"_s << 1950 << greg
             << QDate(1950, 1, 1).startOfDay(QTimeZone::UTC);
     QTest::newRow("ASN.1:UTC-end")
-            << u"491231235959Z"_s << u"yyMMddHHmmsst"_s << 1950
+            << u"491231235959Z"_s << u"yyMMddHHmmsst"_s << 1950 << greg
             << QDate(2049, 12, 31).endOfDay(QTimeZone::UTC).addMSecs(-999);
     // Reproducer for QTBUG-129287
     QTest::newRow("ASN.1:max")
-            << u"99991231235959Z"_s << u"yyyyMMddHHmmsst"_s << 1950
+            << u"99991231235959Z"_s << u"yyyyMMddHHmmsst"_s << 1950 << greg
             << QDate(9999, 12, 31).endOfDay(QTimeZone::UTC).addMSecs(-999);
     // Can also be reproduced with more legible formats:
     QTest::newRow("UTC:max")
-            << u"9999 Dec 31 23:59:59 +00:00"_s << u"yyyy MMM dd HH:mm:ss t"_s << 9900
+            << u"9999 Dec 31 23:59:59 +00:00"_s << u"yyyy MMM dd HH:mm:ss t"_s << 9900 << greg
             << QDate(9999, 12, 31).endOfDay(QTimeZone::UTC).addMSecs(-999);
     QTest::newRow("UTC:min")
-            << u"0100 Jan 1 00:00:00 +00:00"_s << u"yyyy MMM d HH:mm:ss t"_s << 100
+            << u"0100 Jan 1 00:00:00 +00:00"_s << u"yyyy MMM d HH:mm:ss t"_s << 100 << greg
             << QDate(100, 1, 1).startOfDay(QTimeZone::UTC);
     // Reproducer for QTBUG-135382:
     QTest::newRow("year-zero")
-            << u"0000-01-01T00:00:00.000"_s << u"yyyy-MM-ddThh:mm:ss.zzz"_s << 1900
+            << u"0000-01-01T00:00:00.000"_s << u"yyyy-MM-ddThh:mm:ss.zzz"_s << 1900 << greg
             << QDateTime();
+    // The new parser can fix a two-digit year's century, if need be:
+    QTest::newRow("leap-next-century")
+            << u"29/02/00 00:00:00"_s << u"dd/MM/yy HH:mm:ss"_s << 1900 << greg
+            << QDateTime(QDate(2000, 2, 29), QTime(0, 0));
+#if QT_CONFIG(timezone) // Reproducer for QTBUG-148356 (MST = America/Phoenix in 2026b)
+    if (const QTimeZone mst("MST"); mst.isValid()) {
+        QTest::newRow("asn.1-like-MST")
+                << u"20170601102132MST"_s << u"yyyyMMddhhmmsst"_s << 1900 << greg
+                << QDateTime(QDate(2017, 6, 1), QTime(10, 21, 32), mst);
+    } else {
+        qDebug("Skipping MST test as zone ID is not supported");
+    }
+#endif
 
     // fuzzer test
     QTest::newRow("integer overflow found by fuzzer")
-                << u"EEE1200000MUB"_s << u"t"_s << 1900 << QDateTime();
+                << u"EEE1200000MUB"_s << u"t"_s << 1900 << greg << QDateTime();
 
     // Rich time-zone specifiers (QTBUG-95966):
     const auto east3hours = QTimeZone::fromSecondsAheadOfUtc(10800);
     QTest::newRow("timezone-tt-with-offset:+0300")
             << u"2008-10-13 +0300 11.50"_s << u"yyyy-MM-dd tt hh.mm"_s
-            << 1900 << QDateTime(QDate(2008, 10, 13), QTime(11, 50), east3hours);
+            << 1900 << greg << QDateTime(QDate(2008, 10, 13), QTime(11, 50), east3hours);
     QTest::newRow("timezone-ttt-with-offset:+03:00")
             << u"2008-10-13 +03:00 11.50"_s << u"yyyy-MM-dd ttt hh.mm"_s
-            << 1900 << QDateTime(QDate(2008, 10, 13), QTime(11, 50), east3hours);
+            << 1900 << greg << QDateTime(QDate(2008, 10, 13), QTime(11, 50), east3hours);
     QTest::newRow("timezone-tttt-with-offset:+03:00")
             << u"2008-10-13 +03:00 11.50"_s << u"yyyy-MM-dd tttt hh.mm"_s
-            << 1900 << QDateTime(); // Offset not valid when zone name expected.
+            << 1900 << greg << QDateTime(); // Offset not valid when zone name expected.
+
+    if (zoneIsCET) {
+        QTest::newRow("CET-by-name")
+            << u"2024-01-01 12:00 CET"_s << u"yyyy-MM-dd HH:mm t"_s
+            << 2000 << greg << QDateTime(QDate(2024, 1, 1), QTime(12, 0), QTimeZone::LocalTime);
+#if QT_CONFIG(timezone)
+    } else if (QTimeZone cet("CET"); cet.isValid()) {
+        QTest::newRow("CET-by-name") // Uses LocalTime when that's CET, otherwise cet.
+            << u"2024-01-01 12:00 CET"_s << u"yyyy-MM-dd HH:mm t"_s
+            << 2000 << greg << QDateTime(QDate(2024, 1, 1), QTime(12, 0), cet);
+#endif
+    }
+    QTest::newRow("UTC-by-name") // QTBUG-149288: got QUtcTZP backend zone
+        << u"2024-01-01 12:00 UTC"_s << u"yyyy-MM-dd HH:mm t"_s
+        << 2000 << greg << QDateTime(QDate(2024, 1, 1), QTime(12, 0), UTC);
+    QTest::newRow("offset-is+5") // New in 6.12
+        << u"2001-09-15T09:33:01+5"_s << u"yyyy-MM-ddTHH:mm:sst"_s
+        << 2000 << greg << QDateTime(QDate(2001, 9, 15), QTime(9, 33, 1),
+                                     QTimeZone::fromSecondsAheadOfUtc(18000));
+
+    // Found to fail in some benchmarks, when first added:
+    QTest::newRow("H:m:s.zz ddd d-MMM-yyyy/Gregorian")
+            << u"7:1:4.78 Sun 1-Sep-2024"_s << u"H:m:s.zz ddd d-MMM-yyyy"_s
+            << 2000 << greg << QDateTime(QDate(2024, 9, 1), QTime(7, 1, 4, 780));
+    QTest::newRow("hh:mm:ss.zzz dd.MMM.yyyy/Gregorian")
+            << u"07:01:04.783 01.Sep.2024"_s << u"hh:mm:ss.zzz dd.MMM.yyyy"_s
+            << 2000 << greg << QDateTime(QDate(2024, 9, 1), QTime(7, 1, 4, 783));
+    QTest::newRow("hh:mm AP ddd dd MMM yyyy/Gregorian")
+            << u"07:01 AM Sun 01 Sep 2024"_s << u"hh:mm AP ddd dd MMM yyyy"_s
+            << 2000 << greg << QDateTime(QDate(2024, 9, 1), QTime(7, 1));
+    QTest::newRow("ddd dd MMM yy hh:mm:ss.zzz(Gregorian)")
+            << u"Sun 01 Sep 24 07:01:04.783"_s << u"ddd dd MMM yy hh:mm:ss.zzz"_s
+            << 2000 << greg << QDateTime(QDate(2024, 9, 1), QTime(7, 1, 4, 783));
+    QTest::newRow("hh:mm:ss.zz ddd, dd MMM yyyy/Gregorian")
+            << u"07:01:04.78 Sun, 01 Sep 2024"_s << u"hh:mm:ss.zz ddd, dd MMM yyyy"_s
+            << 2000 << greg << QDateTime(QDate(2024, 9, 1), QTime(7, 1, 4, 780));
+#if QT_CONFIG(islamiccivilcalendar)
+    const QCalendar islam(Sys::IslamicCivil);
+    QTest::newRow("H:m:s.zz ddd d-MMM-yyyy/IslamicCivil")
+            << u"7:1:4.78 Wed 1-Ram.-2024"_s << u"H:m:s.zz ddd d-MMM-yyyy"_s
+            << 2000 << islam << QDateTime(QDate(2024, 9, 1, islam), QTime(7, 1, 4, 780));
+    QTest::newRow("hh:mm:ss.zzz dd.MMM.yyyy/IslamicCivil")
+            << u"07:01:04.783 01.Ram..2024"_s << u"hh:mm:ss.zzz dd.MMM.yyyy"_s
+            << 2000 << islam << QDateTime(QDate(2024, 9, 1, islam), QTime(7, 1, 4, 783));
+    QTest::newRow("hh:mm AP ddd dd MMM yyyy/IslamicCivil")
+            << u"07:01 AM Wed 01 Ram. 2024"_s << u"hh:mm Ap ddd dd MMM yyyy"_s
+            << 2000 << islam << QDateTime(QDate(2024, 9, 1, islam), QTime(7, 1));
+    QTest::newRow("ddd dd MMM yy hh:mm:ss.zzz/IslamicCivil")
+            << u"Wed 01 Ram. 24 07:01:04.783"_s << u"ddd dd MMM yy hh:mm:ss.zzz"_s
+            << 2000 << islam << QDateTime(QDate(2024, 9, 1, islam), QTime(7, 1, 4, 783));
+    QTest::newRow("hh:mm:ss.zz ddd, dd MMM yyyy/IslamicCivil")
+            << u"07:01:04.78 Wed, 01 Ram. 2024"_s << u"hh:mm:ss.zz ddd, dd MMM yyyy"_s
+            << 2000 << islam << QDateTime(QDate(2024, 9, 1, islam), QTime(7, 1, 4, 780));
+    // Found by OSS-Fuzz - tripped overflows:
+    QTest::newRow("12/3/-922337202/IslamicCivil") // QTBUG-148792
+            << u"12/3/-922337202"_s << u"M/d/yyyy"_s << 1900 << islam << QDateTime();
+    QTest::newRow("12/3/-92233720/IslamicCivil") // Longest parseable substring of that:
+            << u"12/3/-92233720"_s << u"M/d/yyyy"_s << 1900 << islam
+            << QDate(-92233720, 12, 3, islam).startOfDay();
+    QTest::newRow("12/3/-9223372036854775809/IslamicCivil") // Year too long - rejected.
+            << u"12/3/-9223372036854775809"_s << u"M/d/yyyy"_s << 1900 << islam << QDateTime();
+#endif
+#if QT_CONFIG(jalalicalendar)
+    const QCalendar farsi(Sys::Jalali);
+    QTest::newRow("H:m:s.zz ddd d-MMM-yyyy/Jalali")
+            << u"7:1:4.78 Sat 1-Aza-2024"_s << u"H:m:s.zz ddd d-MMM-yyyy"_s
+            << 2000 << farsi << QDateTime(QDate(2024, 9, 1, farsi), QTime(7, 1, 4, 780));
+    QTest::newRow("hh:mm:ss.zzz dd.MMM.yyyy/Jalali")
+            << u"07:01:04.783 01.Aza.2024"_s << u"hh:mm:ss.zzz dd.MMM.yyyy"_s
+            << 2000 << farsi << QDateTime(QDate(2024, 9, 1, farsi), QTime(7, 1, 4, 783));
+    QTest::newRow("hh:mm AP ddd dd MMM yyyy/Jalali")
+            << u"07:01 AM Sat 01 Aza 2024"_s << u"hh:mm Ap ddd dd MMM yyyy"_s
+            << 2000 << farsi << QDateTime(QDate(2024, 9, 1, farsi), QTime(7, 1));
+    QTest::newRow("ddd dd MMM yy hh:mm:ss.zzz/Jalali")
+            << u"Sat 01 Aza 24 07:01:04.783"_s << u"ddd dd MMM yy hh:mm:ss.zzz"_s
+            << 2000 << farsi << QDateTime(QDate(2024, 9, 1, farsi), QTime(7, 1, 4, 783));
+    QTest::newRow("hh:mm:ss.zz ddd, dd MMM yyyy/Jalali")
+            << u"07:01:04.78 Sat, 01 Aza 2024"_s << u"hh:mm:ss.zz ddd, dd MMM yyyy"_s
+            << 2000 << farsi << QDateTime(QDate(2024, 9, 1, farsi), QTime(7, 1, 4, 780));
+    // Found by OSS-Fuzz - tripped overflows:
+    QTest::newRow("12/3/-92233720/Jalali") // QTBUG-147418
+            << u"12/3/-92233720"_s << u"M/d/yyyy"_s
+            << 1900 << farsi << QDate(-92233720, 12, 3, farsi).startOfDay();
+    QTest::newRow("12/3/-9223372036854775809/Jalali") // Year too long - rejected.
+            << u"12/3/-9223372036854775809"_s << u"M/d/yyyy"_s << 1900 << farsi << QDateTime();
+    QTest::newRow("2/2/-2147483296/Jalali") // QTBUG-147419
+            << u"2/2/-2147483296"_s << u"M/d/yyyy"_s << 1900 << farsi << QDateTime();
+    QTest::newRow("2/2/-214748329/Jalali") // Longest parseable sustring of that:
+            << u"2/2/-214748329"_s << u"M/d/yyyy"_s
+            << 1900 << farsi << QDate(-214748329, 2, 2, farsi).startOfDay();
+#endif
+    // Invalid because the sign is not followed by any digits
+    QTest::newRow("offset-from-utc:bare+")
+            << u"2001-09-13T07:33:01.001 +"_s << u"yyyy-MM-ddThh:mm:ss.z t"_s << 1900 << greg
+            << QDateTime();
+    QTest::newRow("offset-from-utc:bare-")
+            << u"2001-09-13T07:33:01.001 -"_s << u"yyyy-MM-ddThh:mm:ss.z t"_s << 1900 << greg
+            << QDateTime();
+    QTest::newRow("offset-from-utc:bare-UTC+")
+            << u"2001-09-13T07:33:01.001 UTC+"_s << u"yyyy-MM-ddThh:mm:ss.z t"_s << 1900 << greg
+            << QDateTime();
+    QTest::newRow("offset-from-utc:bare-UTC-")
+            << u"2001-09-13T07:33:01.001 UTC-"_s << u"yyyy-MM-ddThh:mm:ss.z t"_s << 1900 << greg
+            << QDateTime();
 }
 
 void tst_QDateTime::fromStringStringFormat()
 {
-    QFETCH(QString, string);
-    QFETCH(QString, format);
-    QFETCH(int, baseYear);
-    QFETCH(QDateTime, expected);
+    QFETCH(const QString, string);
+    QFETCH(const QString, format);
+    QFETCH(const int, baseYear);
+    QFETCH(const QCalendar, calendar);
+    QFETCH(const QDateTime, expected);
 
-    if (futureTimeType == LocalTimeAheadOfUtc) {
-        // The new parser should remove the bounds, removing this limitation.
-        QEXPECT_FAIL("ASN.1:max", "QTBUG-77948: min/max are local times", Abort);
-        QEXPECT_FAIL("UTC:max", "QTBUG-77948: min/max are local times", Abort);
-    }
-    // For contrast, UTC::min gets away with it, which probably means there are
-    // genuinely out-of-range cases the old parser gets wrong.
-
-    QDateTime dt = QDateTime::fromString(string, format, baseYear);
+    const QDateTime dt = QDateTime::fromString(string, format, baseYear, calendar);
 #ifdef USING_MS_TZDB
     QEXPECT_FAIL("spring-forward-midnight", "MS misreads the IANA DB", Continue);
 #endif
     QCOMPARE(dt, expected);
 
     if (expected.isValid()) {
-        QCOMPARE(dt.timeSpec(), expected.timeSpec());
-        QCOMPARE(dt.timeRepresentation(), dt.timeRepresentation());
+        QCOMPARE(dt.timeRepresentation(), expected.timeRepresentation());
     } else {
-        QCOMPARE(dt.isValid(), expected.isValid());
+        QVERIFY(!dt.isValid());
         QCOMPARE(dt.toMSecsSinceEpoch(), expected.toMSecsSinceEpoch());
     }
 }
@@ -3475,52 +3622,56 @@ void tst_QDateTime::fromStringStringFormat_localTimeZone_data()
     QTest::addColumn<QString>("string");
     QTest::addColumn<QString>("format");
     QTest::addColumn<int>("baseYear");
+    QTest::addColumn<QCalendar>("calendar");
     QTest::addColumn<QDateTime>("expected");
+    const QCalendar greg;
 
 #if QT_CONFIG(timezone)
-    bool lacksRows = true;
     // Note that the localTimeZone needn't match the zone used in the string and
     // expected date-time; indeed, having them different is probably best.
     // Both zones need to be valid; GMT always is, so is a safe one to use for
     // whichever the test-case doesn't care about (if that applies to either).
     QTimeZone etcGmtWithOffset("Etc/GMT+3");
     if (etcGmtWithOffset.isValid()) {
-        lacksRows = false;
         QTest::newRow("local-timezone-t-with-zone:Etc/GMT+3")
-                << "GMT"_ba << u"2008-10-13 Etc/GMT+3 11.50"_s << u"yyyy-MM-dd t hh.mm"_s << 1900
+                << "GMT"_ba << u"2008-10-13 Etc/GMT+3 11.50"_s
+                << u"yyyy-MM-dd t hh.mm"_s << 1900 << greg
                 << QDateTime(QDate(2008, 10, 13), QTime(11, 50), etcGmtWithOffset);
         QTest::newRow("local-timezone-tttt-with-zone:Etc/GMT+3")
-                << "GMT"_ba << u"2008-10-13 Etc/GMT+3 11.50"_s << u"yyyy-MM-dd tttt hh.mm"_s << 1900
+                << "GMT"_ba << u"2008-10-13 Etc/GMT+3 11.50"_s
+                << u"yyyy-MM-dd tttt hh.mm"_s << 1900 << greg
                 << QDateTime(QDate(2008, 10, 13), QTime(11, 50), etcGmtWithOffset);
     }
     QTest::newRow("local-timezone-tt-with-zone:Etc/GMT+3")
-            << "GMT"_ba << u"2008-10-13 Etc/GMT+3 11.50"_s << u"yyyy-MM-dd tt hh.mm"_s << 1900
+            << "GMT"_ba << u"2008-10-13 Etc/GMT+3 11.50"_s
+            << u"yyyy-MM-dd tt hh.mm"_s << 1900 << greg
             << QDateTime(); // Zone name not valid when offset expected
     QTest::newRow("local-timezone-ttt-with-zone:Etc/GMT+3")
-            << "GMT"_ba << u"2008-10-13 Etc/GMT+3 11.50"_s << u"yyyy-MM-dd ttt hh.mm"_s << 1900
+            << "GMT"_ba << u"2008-10-13 Etc/GMT+3 11.50"_s
+            << u"yyyy-MM-dd ttt hh.mm"_s << 1900 << greg
             << QDateTime(); // Zone name not valid when offset expected
     QTimeZone gmtWithOffset("GMT-0");
-    if (gmtWithOffset.isValid()) {
-        lacksRows = false;
+    // That may be an alias for "Etc/GMT" on some systems, in which case it
+    // won't be parsed as itself.
+    if (gmtWithOffset.isValid() && gmtWithOffset.id() == "GMT-0") {
         QTest::newRow("local-timezone-with-offset:GMT-0")
-                << "GMT"_ba << u"2008-10-13 GMT-0 11.50"_s << u"yyyy-MM-dd t hh.mm"_s << 1900
+                << "GMT"_ba << u"2008-10-13 GMT-0 11.50"_s
+                << u"yyyy-MM-dd t hh.mm"_s << 1900 << greg
                 << QDateTime(QDate(2008, 10, 13), QTime(11, 50), gmtWithOffset);
     }
     QTimeZone gmt("GMT");
     if (gmt.isValid()) {
-        lacksRows = false;
         const bool fullyLocal = ([]() {
             TimeZoneRollback useZone("GMT");
             return qTzName(0) == u"GMT"_s;
         })();
         QTest::newRow("local-timezone-with-offset:GMT")
-                << "GMT"_ba << u"2008-10-13 GMT 11.50"_s << u"yyyy-MM-dd t hh.mm"_s << 1900
+                << "GMT"_ba << u"2008-10-13 GMT 11.50"_s << u"yyyy-MM-dd t hh.mm"_s << 1900 << greg
                 << QDateTime(QDate(2008, 10, 13), QTime(11, 50),
                              fullyLocal ? QTimeZone(QTimeZone::LocalTime) : gmt);
     }
     QTimeZone helsinki("Europe/Helsinki");
     if (helsinki.isValid()) {
-        lacksRows = false;
         // QTBUG-96861: QAsn1Element::toDateTime() tripped over an assert due to
         // the first 20m 11s of 1921-05-01 being skipped, so the parser's
         // attempt to construct a local time after scanning yyMM tripped up on
@@ -3529,16 +3680,14 @@ void tst_QDateTime::fromStringStringFormat_localTimeZone_data()
         // field, constructing a new QDT after reading each field, hence
         // transiently wanting 1921-05-01 00:00:00 before reading the dd field.)
         QTest::newRow("Helsinki-joins-EET:19")
-                << "Europe/Helsinki"_ba << u"210506000000Z"_s << u"yyMMddHHmmsst"_s << 1900
+                << "Europe/Helsinki"_ba << u"210506000000Z"_s << u"yyMMddHHmmsst"_s << 1900 << greg
                 << QDateTime(QDate(1921, 5, 6), QTime(0, 0), UTC);
         // Strictly, ASN.1 wants us to parse that with a different baseYear, so
         // check that, too, but tweak to match the 1921 transition's mid-point:
         QTest::newRow("Helsinki-joins-EET:20")
-                << "Europe/Helsinki"_ba << u"210501001006Z"_s << u"yyMMddHHmmsst"_s << 1950
+                << "Europe/Helsinki"_ba << u"210501001006Z"_s << u"yyMMddHHmmsst"_s << 1950 << greg
                 << QDateTime(QDate(2021, 5, 1), QTime(0, 10, 6), UTC);
     }
-    if (lacksRows)
-        QSKIP("Testcases all use zones unsupported on this platform");
 #else
     QSKIP("Test only possible with timezone support enabled");
 #endif

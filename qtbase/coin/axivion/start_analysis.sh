@@ -29,7 +29,7 @@ EOF
 
 export INCLUDE_FILES
 
-for MODULE in qtconcurrent qtcore qtdbus qtgui qtnetwork qtopengl qtopenglwidgets qtsql qttest qtwidgets qtprintsupport qtxml; do
+for MODULE in qtconcurrent qtcore qtdbus qtgui qtnetwork qtopengl qtopenglwidgets qtsql qttest qtwaylandclient qtwidgets qtprintsupport qtxml; do
     export MODULE
     export PLUGINS=""
     export IRNAME=build/$MODULE.ir
@@ -57,7 +57,7 @@ for MODULE in qtconcurrent qtcore qtdbus qtgui qtnetwork qtopengl qtopenglwidget
     elif [ "$MODULE" == "qtnetwork" ]
     then
         export TARGET_NAME="build/lib/libQt6Network.so.*.ir"
-        export PLUGINS="build/plugins/networkinformation/*.so.ir:build/plugins/tracing/*.so.ir:build/plugins/tls/*.so.ir"
+        export PLUGINS="build/plugins/networkinformation/*.so.ir:build/plugins/tls/*.so.ir"
         export EXCLUDE_FILES="build/*:src/3rdparty/*:src/testlib/*:src/corelib/*:src/dbus/*"
         export PACKAGE="Essentials"
     elif [ "$MODULE" == "qtopengl" ]
@@ -81,6 +81,12 @@ for MODULE in qtconcurrent qtcore qtdbus qtgui qtnetwork qtopengl qtopenglwidget
         export TARGET_NAME="build/lib/libQt6Test.so.*.ir"
         export EXCLUDE_FILES="build/*:src/3rdparty/*:src/corelib/*:src/gui/*:src/widgets/*:src/testlib/3rdparty/*"
         export PACKAGE="Essentials"
+    elif [ "$MODULE" == "qtwaylandclient" ]
+    then
+        export TARGET_NAME="build/libexec/qtwaylandscanner.ir:build/lib/libQt6WaylandClient.so.*.ir:build/lib/libQt6WlShellIntegration.so.*.ir"
+        export PLUGINS="build/plugins/platforms/libqwayland.so.ir:build/plugins/wayland*/*.so.ir"
+        export EXCLUDE_FILES="build/*:src/3rdparty/*:src/corelib/*:src/dbus/*:src/gui/*:src/tools/*"
+        export PACKAGE="Add-ons"
     elif [ "$MODULE" == "qtwidgets" ]
     then
         export TARGET_NAME="build/lib/libQt6Widgets.so.*.ir"

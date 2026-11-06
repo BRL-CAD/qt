@@ -28,6 +28,8 @@
 #ifdef Q_OS_MACOS
 #include <qpa/qplatformnativeinterface.h>
 #endif
+#include "qmainwindow.h"
+#include "private/qmainwindowlayout_p.h"
 
 #include "qdebug.h"
 #include "private/qapplication_p.h"
@@ -85,10 +87,15 @@ void QTabBarPrivate::updateMacBorderMetrics()
 {
 #if defined(Q_OS_MACOS)
     Q_Q(QTabBar);
+
+    auto *mainWindow = qobject_cast<const QMainWindow*>(q->window());
+    if (!mainWindow)
+        return;
+
     // Extend the unified title and toolbar area to cover the tab bar iff
     // 1) the tab bar is in document mode
     // 2) the tab bar is directly below an "unified" area.
-    // The extending itself is done in the Cocoa platform plugin and Mac style,
+    // The extending itself is done in the Mac style,
     // this function registers geometry and visibility state for the tab bar.
 
     // Calculate geometry
@@ -104,27 +111,10 @@ void QTabBarPrivate::updateMacBorderMetrics()
         lower = 0;
     }
 
-    QPlatformNativeInterface *nativeInterface = QGuiApplication::platformNativeInterface();
-    if (!nativeInterface)
-        return;
-    quintptr identifier = reinterpret_cast<quintptr>(q);
-
-    // Set geometry
-    QPlatformNativeInterface::NativeResourceForIntegrationFunction function =
-        nativeInterface->nativeResourceFunctionForIntegration("registerContentBorderArea");
-    if (!function)
-        return; // Not Cocoa platform plugin.
-    typedef void (*RegisterContentBorderAreaFunction)(QWindow *window, quintptr identifier, int upper, int lower);
-    (reinterpret_cast<RegisterContentBorderAreaFunction>(QFunctionPointer(function)))(
-        q->window()->windowHandle(), identifier, upper, lower);
-
-    // Set visibility state
-    function = nativeInterface->nativeResourceFunctionForIntegration("setContentBorderAreaEnabled");
-    if (!function)
-        return;
-    typedef void (*SetContentBorderAreaEnabledFunction)(QWindow *window, quintptr identifier, bool enable);
-    (reinterpret_cast<SetContentBorderAreaEnabledFunction>(QFunctionPointer(function)))(
-        q->window()->windowHandle(), identifier, q->isVisible());
+    extern QMainWindowLayout *qt_mainwindow_layout(const QMainWindow *window);
+    auto *mainWindowLayout = qt_mainwindow_layout(mainWindow);
+    mainWindowLayout->registerUnifiedToolBarArea(q, upper, lower);
+    mainWindowLayout->setUnifiedToolBarAreaEnabled(q, q->isVisible());
 #endif
 }
 
@@ -389,14 +379,7 @@ void QTabBarPrivate::init()
     QObjectPrivate::connect(rightB, &QToolButton::clicked,
                             this, &QTabBarPrivate::scrollTabs);
     rightB->hide();
-#ifdef QT_KEYPAD_NAVIGATION
-    if (QApplicationPrivate::keypadNavigationEnabled()) {
-        leftB->setFocusPolicy(Qt::NoFocus);
-        rightB->setFocusPolicy(Qt::NoFocus);
-        q->setFocusPolicy(Qt::NoFocus);
-    } else
-#endif
-        q->setFocusPolicy(Qt::TabFocus);
+    q->setFocusPolicy(Qt::TabFocus);
 
 #if QT_CONFIG(accessibility)
     leftB->setAccessibleName(QTabBar::tr("Scroll Left"));
@@ -428,8 +411,9 @@ void QTabBarPrivate::layoutTabs()
     bool vertTabs = verticalTabs(shape);
     int tabChainIndex = 0;
     int hiddenTabs = 0;
+    const auto *style = q->style();
 
-    Qt::Alignment tabAlignment = Qt::Alignment(q->style()->styleHint(QStyle::SH_TabBar_Alignment, nullptr, q));
+    Qt::Alignment tabAlignment = Qt::Alignment(style->styleHint(QStyle::SH_TabBar_Alignment, nullptr, q));
     QList<QLayoutStruct> tabChain(tabList.size() + 2);
 
     // We put an empty item at the front and back and set its expansive attribute
@@ -546,10 +530,16 @@ void QTabBarPrivate::layoutTabs()
         Q_Q(QTabBar);
         QStyleOption opt;
         opt.initFrom(q);
-        QRect scrollButtonLeftRect = q->style()->subElementRect(QStyle::SE_TabBarScrollLeftButton, &opt, q);
-        QRect scrollButtonRightRect = q->style()->subElementRect(QStyle::SE_TabBarScrollRightButton, &opt, q);
-        int scrollButtonWidth = q->style()->pixelMetric(QStyle::PM_TabBarScrollButtonWidth, &opt, q);
+        QRect scrollButtonLeftRect = style->subElementRect(QStyle::SE_TabBarScrollLeftButton, &opt, q);
+        QRect scrollButtonRightRect = style->subElementRect(QStyle::SE_TabBarScrollRightButton, &opt, q);
+        int scrollButtonWidth = style->pixelMetric(QStyle::PM_TabBarScrollButtonWidth, &opt, q);
 
+        const auto setIconOr = [](QToolButton *tb, const QIcon &icon, Qt::ArrowType arrowType) {
+            if (icon.isNull())
+                tb->setArrowType(arrowType);
+            else
+                tb->setIcon(icon);
+        };
         // Normally SE_TabBarScrollLeftButton should have the same width as PM_TabBarScrollButtonWidth.
         // But if that is not the case, we set the actual button width to PM_TabBarScrollButtonWidth, and
         // use the extra space from SE_TabBarScrollLeftButton as margins towards the tabs.
@@ -557,20 +547,26 @@ void QTabBarPrivate::layoutTabs()
             scrollButtonLeftRect.setHeight(scrollButtonWidth);
             scrollButtonRightRect.setY(scrollButtonRightRect.bottom() + 1 - scrollButtonWidth);
             scrollButtonRightRect.setHeight(scrollButtonWidth);
-            leftB->setArrowType(Qt::UpArrow);
-            rightB->setArrowType(Qt::DownArrow);
+            const auto upIcon = style->standardIcon(QStyle::SP_TabScrollUpButton, &opt, q);
+            const auto downIcon = style->standardIcon(QStyle::SP_TabScrollDownButton, &opt, q);
+            setIconOr(leftB, upIcon, Qt::UpArrow);
+            setIconOr(rightB, downIcon, Qt::DownArrow);
         } else if (q->layoutDirection() == Qt::RightToLeft) {
             scrollButtonRightRect.setWidth(scrollButtonWidth);
             scrollButtonLeftRect.setX(scrollButtonLeftRect.right() + 1 - scrollButtonWidth);
             scrollButtonLeftRect.setWidth(scrollButtonWidth);
-            leftB->setArrowType(Qt::RightArrow);
-            rightB->setArrowType(Qt::LeftArrow);
+            const auto leftIcon = style->standardIcon(QStyle::SP_TabScrollLeftButton, &opt, q);
+            const auto rightIcon = style->standardIcon(QStyle::SP_TabScrollRightButton, &opt, q);
+            setIconOr(leftB, rightIcon, Qt::RightArrow);
+            setIconOr(rightB, leftIcon, Qt::LeftArrow);
         } else {
             scrollButtonLeftRect.setWidth(scrollButtonWidth);
             scrollButtonRightRect.setX(scrollButtonRightRect.right() + 1 - scrollButtonWidth);
             scrollButtonRightRect.setWidth(scrollButtonWidth);
-            leftB->setArrowType(Qt::LeftArrow);
-            rightB->setArrowType(Qt::RightArrow);
+            const auto leftIcon = style->standardIcon(QStyle::SP_TabScrollLeftButton, &opt, q);
+            const auto rightIcon = style->standardIcon(QStyle::SP_TabScrollRightButton, &opt, q);
+            setIconOr(leftB, leftIcon, Qt::LeftArrow);
+            setIconOr(rightB, rightIcon, Qt::RightArrow);
         }
 
         leftB->setGeometry(scrollButtonLeftRect);
@@ -589,14 +585,20 @@ void QTabBarPrivate::layoutTabs()
     q->tabLayoutChange();
 }
 
-QRect QTabBarPrivate::normalizedScrollRect(int index)
+QRect QTabBarPrivate::scrollRect(int index) const
+{
+    const QRect r = normalizedScrollRect(index);
+    return verticalTabs(shape) ? QRect(QPoint(r.y(), r.x()), r.size().transposed()) : r;
+}
+
+QRect QTabBarPrivate::normalizedScrollRect(int index) const
 {
     // "Normalized scroll rect" means return the free space on the tab bar
     // that doesn't overlap with scroll buttons or tear indicators, and
     // always return the rect as horizontal Qt::LeftToRight, even if the
     // tab bar itself is in a different orientation.
 
-    Q_Q(QTabBar);
+    Q_Q(const QTabBar);
     // If scrollbuttons are not visible, then there's no tear either, and
     // the entire widget is the scroll rect.
     if (leftB->isHidden())
@@ -1013,7 +1015,7 @@ int QTabBar::insertTab(int index, const QIcon& icon, const QString &text)
     }
 
     if (isVisible() && tabAt(d->mousePosition) == index) {
-        if (d->normalizedScrollRect(index).contains(d->mousePosition)) {
+        if (d->scrollRect(index).contains(d->mousePosition)) {
             d->hoverIndex = index;
             d->hoverRect = tabRect(index);
         } else {
@@ -1111,7 +1113,7 @@ void QTabBar::removeTab(int index)
             update(d->hoverRect);
             d->hoverIndex = tabAt(d->mousePosition);
             if (d->validIndex(d->hoverIndex)
-                && d->normalizedScrollRect(d->hoverIndex).contains(d->mousePosition)) {
+                && d->scrollRect(d->hoverIndex).contains(d->mousePosition)) {
                 d->hoverRect = tabRect(d->hoverIndex);
                 update(d->hoverRect);
             } else {
@@ -1708,7 +1710,7 @@ bool QTabBar::event(QEvent *event)
     case QEvent::HoverEnter: {
         QHoverEvent *he = static_cast<QHoverEvent *>(event);
         d->mousePosition = he->position().toPoint();
-        const auto sr = d->normalizedScrollRect();
+        const auto sr = d->scrollRect();
         const auto oldHoverRect = d->hoverRect & sr;
         if (!oldHoverRect.contains(d->mousePosition)) {
             if (d->hoverRect.isValid())
@@ -1848,7 +1850,8 @@ void QTabBar::paintEvent(QPaintEvent *)
     selected = d->currentIndex;
     if (d->dragInProgress)
         selected = d->pressedIndex;
-    const QRect scrollRect = d->normalizedScrollRect();
+    const QRect scrollRect = d->scrollRect();
+    const QRect normalizedScrollRect = d->normalizedScrollRect();
 
     for (int i = 0; i < d->tabList.size(); ++i)
          optTabBase.tabBarRect |= tabRect(i);
@@ -1902,10 +1905,10 @@ void QTabBar::paintEvent(QPaintEvent *)
         QRect tabRect = tab->rect;
         int tabStart = vertical ? tabRect.top() : tabRect.left();
         int tabEnd = vertical ? tabRect.bottom() : tabRect.right();
-        if (tabStart < scrollRect.left() + d->scrollOffset) {
+        if (tabStart < normalizedScrollRect.left() + d->scrollOffset) {
             cutLeft = i;
             cutTabLeft = tabOption;
-        } else if (tabEnd > scrollRect.right() + d->scrollOffset) {
+        } else if (tabEnd > normalizedScrollRect.right() + d->scrollOffset) {
             cutRight = i;
             cutTabRight = tabOption;
         }

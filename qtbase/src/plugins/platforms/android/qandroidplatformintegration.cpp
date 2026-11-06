@@ -15,6 +15,9 @@
 #include "qandroidplatformaccessibility.h"
 #endif
 #include "qandroidplatformclipboard.h"
+#if QT_CONFIG(draganddrop)
+#include "qandroidplatformdrag.h"
+#endif
 #include "qandroidplatformfontdatabase.h"
 #include "qandroidplatformforeignwindow.h"
 #include "qandroidplatformoffscreensurface.h"
@@ -25,7 +28,6 @@
 #include "qandroidplatformscreen.h"
 #include "qandroidplatformservices.h"
 #include "qandroidplatformtheme.h"
-#include "qandroidsystemlocale.h"
 
 #include <QGuiApplication>
 #include <QOffscreenSurface>
@@ -234,7 +236,9 @@ QAndroidPlatformIntegration::QAndroidPlatformIntegration(const QStringList &para
     m_androidPlatformClipboard = new QAndroidPlatformClipboard();
 #endif
 
-    m_androidSystemLocale = new QAndroidSystemLocale;
+#if QT_CONFIG(draganddrop)
+    m_androidPlatformDrag = new QAndroidPlatformDrag();
+#endif
 
 #if QT_CONFIG(accessibility)
         m_accessibility = new QAndroidPlatformAccessibility();
@@ -277,8 +281,7 @@ QAndroidPlatformIntegration::QAndroidPlatformIntegration(const QStringList &para
                                                 QPointingDevice::PointerType::Finger,
                                                 QPointingDevice::Capability::Position
                                                     | QPointingDevice::Capability::Area
-                                                    | QPointingDevice::Capability::Pressure
-                                                    | QPointingDevice::Capability::NormalizedPosition,
+                                                    | QPointingDevice::Capability::Pressure,
                                                 maxTouchPoints,
                                                 0);
             QWindowSystemInterface::registerInputDevice(m_touchDevice);
@@ -440,10 +443,13 @@ QAndroidPlatformIntegration::~QAndroidPlatformIntegration()
 
     delete m_androidPlatformNativeInterface;
     delete m_androidFDB;
-    delete m_androidSystemLocale;
 
 #ifndef QT_NO_CLIPBOARD
     delete m_androidPlatformClipboard;
+#endif
+
+#if QT_CONFIG(draganddrop)
+    delete m_androidPlatformDrag;
 #endif
 
     QtAndroid::setAndroidPlatformIntegration(NULL);
@@ -458,6 +464,13 @@ QPlatformFontDatabase *QAndroidPlatformIntegration::fontDatabase() const
 QPlatformClipboard *QAndroidPlatformIntegration::clipboard() const
 {
     return m_androidPlatformClipboard;
+}
+#endif
+
+#if QT_CONFIG(draganddrop)
+QPlatformDrag *QAndroidPlatformIntegration::drag() const
+{
+    return m_androidPlatformDrag;
 }
 #endif
 
@@ -606,7 +619,6 @@ void QAndroidPlatformIntegration::handleScreenChanged(int displayId)
     if (QAndroidPlatformScreen *screen = it->second) {
         QSize size = QAndroidPlatformScreen::sizeForDisplayId(displayId);
         if (screen->geometry().size() != size) {
-            screen->setPhysicalSizeFromPixels(size);
             screen->setSize(size);
         }
     }

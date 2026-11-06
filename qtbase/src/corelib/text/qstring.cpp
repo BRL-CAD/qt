@@ -45,7 +45,6 @@
 #include "qstringmatcher.cpp"
 #include "qstringiterator_p.h"
 #include "qstringalgorithms_p.h"
-#include "qthreadstorage.h"
 
 #include <algorithm>
 #include <functional>
@@ -2614,7 +2613,8 @@ QString::QString(QChar ch)
 
 /*! \fn void QString::detach()
 
-    \internal
+    Ensures that this string's data is no longer
+    \l{Implicit Sharing}{shared} with other instances.
 */
 
 /*! \fn bool QString::isDetached() const
@@ -2676,10 +2676,10 @@ void QString::resize(qsizetype size)
     if (size < 0)
         size = 0;
 
-    if (d->needsDetach() || needsReallocate(*this, size))
+    if (d.needsDetach() || needsReallocate(*this, size))
         reallocData(size, QArrayData::Grow);
     d.size = size;
-    if (d->allocatedCapacity())
+    if (d.allocatedCapacity())
         d.data()[size] = u'\0';
 }
 
@@ -2799,7 +2799,7 @@ void QString::reallocData(qsizetype alloc, QArrayData::AllocationOption option)
     // at the beginning: might shift data pointer outside of allocated space
     const bool cannotUseReallocate = d.freeSpaceAtBegin() > 0;
 
-    if (d->needsDetach() || cannotUseReallocate) {
+    if (d.needsDetach() || cannotUseReallocate) {
         DataPointer dd(alloc, qMin(alloc, d.size), option);
         Q_CHECK_PTR(dd.data());
         if (dd.size > 0)
@@ -2816,7 +2816,7 @@ void QString::reallocGrowData(qsizetype n)
     if (!n)  // expected to always allocate
         n = 1;
 
-    if (d->needsDetach()) {
+    if (d.needsDetach()) {
         DataPointer dd(DataPointer::allocateGrow(d, n, QArrayData::GrowsAtEnd));
         Q_CHECK_PTR(dd.data());
         dd->copyAppend(d.data(), d.data() + d.size);
@@ -2863,7 +2863,7 @@ QString &QString::operator=(const QString &other) noexcept
 QString &QString::operator=(QLatin1StringView other)
 {
     const qsizetype capacityAtEnd = capacity() - d.freeSpaceAtBegin();
-    if (isDetached() && other.size() <= capacityAtEnd) { // assumes d->alloc == 0 -> !isDetached() (sharedNull)
+    if (isDetached() && other.size() <= capacityAtEnd) { // assumes d.alloc == 0 -> !isDetached() (sharedNull)
         d.size = other.size();
         d.data()[other.size()] = 0;
         qt_from_latin1(d.data(), other.latin1(), other.size());
@@ -3114,7 +3114,7 @@ QString& QString::insert(qsizetype i, const QChar *unicode, qsizetype size)
         return *this;
 
     // In case when data points into "this"
-    if (!d->needsDetach() && QtPrivate::q_points_into_range(unicode, *this)) {
+    if (!d.needsDetach() && QtPrivate::q_points_into_range(unicode, *this)) {
         QVarLengthArray copy(unicode, unicode + size);
         insert(i, copy.data(), size);
     } else {
@@ -3479,7 +3479,7 @@ QString &QString::remove(qsizetype pos, qsizetype len)
 
     len = std::min(len, size() - pos);
 
-    if (!d->isShared()) {
+    if (!d.isShared()) {
         d->erase(d.begin() + pos, len);
         d.data()[d.size] = u'\0';
     } else {
@@ -3524,7 +3524,7 @@ static void removeStringImpl(QString &s, const T &needle, Qt::CaseSensitivity cs
         return dst;
     };
 
-    if (!dptr->needsDetach()) {
+    if (!dptr.needsDetach()) {
         auto dst = begin + i;
         dst = copyFunc(dst);
         s.truncate(std::distance(begin, dst));
@@ -3646,7 +3646,7 @@ QString &QString::remove(QChar ch, Qt::CaseSensitivity cs)
     auto begin = d.begin();
     auto first_match = begin + idx;
     auto end = d.end();
-    if (!d->isShared()) {
+    if (!d.isShared()) {
         auto it = std::remove_if(first_match, end, match);
         d->erase(it, std::distance(it, end));
         d.data()[d.size] = u'\0';
@@ -4422,6 +4422,7 @@ QString &QString::replace(QChar c, QLatin1StringView after, Qt::CaseSensitivity 
 */
 
 /*!
+  \fn qsizetype QString::indexOf(const QString &str, qsizetype from, Qt::CaseSensitivity cs) const
   \include qstring.qdocinc {qstring-first-index-of} {string} {str}
 
   \include qstring.qdocinc {search-comparison-case-sensitivity} {search}
@@ -4434,10 +4435,6 @@ QString &QString::replace(QChar c, QLatin1StringView after, Qt::CaseSensitivity 
 
   \sa lastIndexOf(), contains(), count()
 */
-qsizetype QString::indexOf(const QString &str, qsizetype from, Qt::CaseSensitivity cs) const
-{
-    return QtPrivate::findString(QStringView(unicode(), size()), from, QStringView(str.unicode(), str.size()), cs);
-}
 
 /*!
     \fn qsizetype QString::indexOf(QStringView str, qsizetype from, Qt::CaseSensitivity cs) const
@@ -4454,6 +4451,7 @@ qsizetype QString::indexOf(const QString &str, qsizetype from, Qt::CaseSensitivi
 */
 
 /*!
+  \fn qsizetype QString::indexOf(QLatin1StringView str, qsizetype from, Qt::CaseSensitivity cs) const
   \since 4.5
 
   \include {qstring.qdocinc} {qstring-first-index-of} {Latin-1 string viewed by} {str}
@@ -4469,11 +4467,6 @@ qsizetype QString::indexOf(const QString &str, qsizetype from, Qt::CaseSensitivi
   \sa lastIndexOf(), contains(), count()
 */
 
-qsizetype QString::indexOf(QLatin1StringView str, qsizetype from, Qt::CaseSensitivity cs) const
-{
-    return QtPrivate::findString(QStringView(unicode(), size()), from, str, cs);
-}
-
 /*!
     \fn qsizetype QString::indexOf(QChar ch, qsizetype from, Qt::CaseSensitivity cs) const
     \overload indexOf()
@@ -4482,6 +4475,7 @@ qsizetype QString::indexOf(QLatin1StringView str, qsizetype from, Qt::CaseSensit
 */
 
 /*!
+  \fn qsizetype QString::lastIndexOf(const QString &str, qsizetype from, Qt::CaseSensitivity cs) const
   \include qstring.qdocinc {qstring-last-index-of} {string} {str}
 
   \include qstring.qdocinc negative-index-start-search-from-end
@@ -4503,10 +4497,6 @@ qsizetype QString::indexOf(QLatin1StringView str, qsizetype from, Qt::CaseSensit
 
   \sa indexOf(), contains(), count()
 */
-qsizetype QString::lastIndexOf(const QString &str, qsizetype from, Qt::CaseSensitivity cs) const
-{
-    return QtPrivate::lastIndexOf(QStringView(*this), from, str, cs);
-}
 
 /*!
   \fn qsizetype QString::lastIndexOf(const QString &str, Qt::CaseSensitivity cs = Qt::CaseSensitive) const
@@ -4527,6 +4517,7 @@ qsizetype QString::lastIndexOf(const QString &str, qsizetype from, Qt::CaseSensi
 
 
 /*!
+  \fn qsizetype QString::lastIndexOf(QLatin1StringView str, qsizetype from, Qt::CaseSensitivity cs) const
   \since 4.5
   \overload lastIndexOf()
 
@@ -4551,10 +4542,6 @@ qsizetype QString::lastIndexOf(const QString &str, qsizetype from, Qt::CaseSensi
 
   \sa indexOf(), contains(), count()
 */
-qsizetype QString::lastIndexOf(QLatin1StringView str, qsizetype from, Qt::CaseSensitivity cs) const
-{
-    return QtPrivate::lastIndexOf(*this, from, str, cs);
-}
 
 /*!
   \fn qsizetype QString::lastIndexOf(QLatin1StringView str, Qt::CaseSensitivity cs = Qt::CaseSensitive) const
@@ -5624,7 +5611,7 @@ QByteArray QString::toLatin1_helper_inplace(QString &s)
     // First, do the in-place conversion. Since isDetached() == true, the data
     // was allocated by QArrayData, so the null terminator must be there.
     qsizetype length = s.size();
-    char16_t *sdata = s.d->data();
+    char16_t *sdata = s.d.data();
     Q_ASSERT(sdata[length] == u'\0');
     qt_to_latin1(reinterpret_cast<uchar *>(sdata), sdata, length + 1);
 
@@ -6110,7 +6097,7 @@ QString& QString::setUnicode(const QChar *unicode, qsizetype size)
 
 /*!
     \fn QString &QString::setUtf16(const ushort *unicode, qsizetype size)
-    \obsolete Use the \c char16_t overload instead.
+    \obsolete [6.10] Use the \c char16_t overload instead.
 */
 
 /*!
@@ -6987,6 +6974,7 @@ int QString::localeAwareCompare_helper(const QChar *data1, qsizetype length1,
 
 /*!
     \fn const ushort *QString::utf16() const
+    \obsolete [6.11] Use nullTerminate() and cast data() to \c{const char16_t *}.
 
     Returns the QString as a '\\0\'-terminated array of unsigned
     shorts. The result remains valid until the string is modified.
@@ -6998,7 +6986,7 @@ int QString::localeAwareCompare_helper(const QChar *data1, qsizetype length1,
 
 const ushort *QString::utf16() const
 {
-    if (!d->isMutable()) {
+    if (!d.isMutable()) {
         // ensure '\0'-termination for ::fromRawData strings
         const_cast<QString*>(this)->reallocData(d.size, QArrayData::KeepSize);
     }
@@ -7022,7 +7010,7 @@ const ushort *QString::utf16() const
 QString &QString::nullTerminate()
 {
     // ensure '\0'-termination for ::fromRawData strings
-    if (!d->isMutable())
+    if (!d.isMutable())
         *this = QString{constData(), size()};
     return *this;
 }
@@ -7039,7 +7027,7 @@ QString &QString::nullTerminate()
 QString QString::nullTerminated() const &
 {
     // ensure '\0'-termination for ::fromRawData strings
-    if (!d->isMutable())
+    if (!d.isMutable())
         return QString{constData(), size()};
     return *this;
 }

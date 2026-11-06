@@ -28,7 +28,9 @@ QT_BEGIN_NAMESPACE
 class Q_SVG_EXPORT QSvgCssEasing : public QSvgEasingInterface
 {
 public:
-    QSvgCssEasing(QSvgCssValues::EasingFunction easingFunction);
+    explicit QSvgCssEasing(QSvgCssValues::EasingFunction easingFunction);
+    ~QSvgCssEasing() override;
+
     QSvgCssValues::EasingFunction easingFunction() const;
 
 private:
@@ -38,8 +40,10 @@ private:
 class Q_SVG_EXPORT QSvgCssCubicBezierEasing : public QSvgCssEasing
 {
 public:
-    QSvgCssCubicBezierEasing(QSvgCssValues::EasingFunction easingFunction, const QPointF &c1, const QPointF &c2);
-    virtual qreal progress(qreal t) override;
+    explicit QSvgCssCubicBezierEasing(QSvgCssValues::EasingFunction easingFunction, QPointF c1, QPointF c2);
+    ~QSvgCssCubicBezierEasing() override;
+
+    virtual qreal progress(qreal t) const override;
     QPointF c1() const;
     QPointF c2() const;
 
@@ -51,10 +55,12 @@ private:
 class Q_SVG_EXPORT QSvgCssStepsEasing : public QSvgCssEasing
 {
 public:
-    QSvgCssStepsEasing(quint32 stops, QSvgCssValues::StepPosition position);
-    virtual qreal progress(qreal t) override;
+    explicit QSvgCssStepsEasing(quint32 stops, QSvgCssValues::StepPosition position);
+    ~QSvgCssStepsEasing() override;
+
+    virtual qreal progress(qreal t) const override;
     quint32 stops() const;
-    QSvgCssValues::StepPosition stepPosition();
+    QSvgCssValues::StepPosition stepPosition() const;
 
 private:
     quint32 m_stops;

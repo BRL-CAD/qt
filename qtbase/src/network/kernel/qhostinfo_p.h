@@ -36,6 +36,7 @@
 #include <QCache>
 
 #include <atomic>
+#include <memory>
 
 QT_BEGIN_NAMESPACE
 
@@ -112,6 +113,8 @@ void Q_AUTOTEST_EXPORT qt_qhostinfo_cache_inject(const QString &hostname, const 
 class QHostInfoCache
 {
 public:
+#if defined(QT_BUILD_INTERNAL) || QT_CONFIG(hostinfocache)
+    // unit tests require the ability to manipulate the cache
     QHostInfoCache();
     const int max_age; // seconds
 
@@ -131,6 +134,13 @@ private:
     };
     QCache<QString,QHostInfoCacheElement> cache;
     QMutex mutex;
+#else
+    QHostInfo get(const QString &, bool *valid) { *valid = false; return QHostInfo(); }
+    void put(const QString &, const QHostInfo &) { }
+    void clear() {}
+    bool isEnabled() { return false; }
+    void setEnabled(bool) { }
+#endif
 };
 
 // the following classes are used for the (normal) case: We use multiple threads to lookup DNS
@@ -146,7 +156,7 @@ public:
 
     QString toBeLookedUp;
     int id;
-    QHostInfoResult resultEmitter;
+    std::unique_ptr<QHostInfoResult> resultEmitter;
 };
 
 
@@ -166,6 +176,9 @@ public:
     void lookupFinished(QHostInfoRunnable *r);
     bool wasAborted(int id);
 
+#if __has_attribute(no_unique_address) && __cplusplus >= 201803L
+    [[no_unique_address]]
+#endif
     QHostInfoCache cache;
 
     friend class QHostInfoRunnable;

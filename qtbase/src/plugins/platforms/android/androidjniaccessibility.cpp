@@ -6,6 +6,7 @@
 #include "androidjnimain.h"
 #include "qandroidplatformintegration.h"
 #include "qandroidplatformwindow.h"
+#include "qandroidinputcontext.h"
 #include "qpa/qplatformaccessibility.h"
 #include <QtGui/private/qaccessiblebridgeutils_p.h>
 #include "qguiapplication.h"
@@ -19,6 +20,7 @@
 
 #include <QtCore/QObject>
 #include <QtCore/qpointer.h>
+#include <QtCore/qscopeguard.h>
 #include <QtCore/qvarlengtharray.h>
 
 static const char m_qtTag[] = "Qt A11Y";
@@ -33,8 +35,12 @@ namespace QtAndroidAccessibility
     static jmethodID m_addActionMethodID = 0;
     static jmethodID m_setCheckableMethodID = 0;
     static jmethodID m_setCheckedMethodID = 0;
+    static jmethodID m_setExpandedStateMethodID = 0;
     static jmethodID m_setClickableMethodID = 0;
     static jmethodID m_setContentDescriptionMethodID = 0;
+    static jmethodID m_setTextMethodID = 0;
+    static jmethodID m_setInputTypeMethodID = 0;
+    static jmethodID m_setHintTextMethodID = 0;
     static jmethodID m_setEditableMethodID = 0;
     static jmethodID m_setEnabledMethodID = 0;
     static jmethodID m_setFocusableMethodID = 0;
@@ -44,11 +50,25 @@ namespace QtAndroidAccessibility
     static jmethodID m_setTextSelectionMethodID = 0;
     static jmethodID m_setRangeInfoMethodID = 0;
     static jmethodID m_setVisibleToUserMethodID = 0;
+    static jmethodID m_setMaxScrollXMethodID = 0;
+    static jmethodID m_setScrollXMethodID = 0;
+    static jmethodID m_setMaxScrollYMethodID = 0;
+    static jmethodID m_setScrollYMethodID = 0;
+    static jmethodID m_setItemCountMethodID = 0;
+    static jmethodID m_setFromIndexMethodID = 0;
+    static jmethodID m_setToIndexMethodID = 0;
 
     static int RANGE_TYPE_INT = 0;
     static int RANGE_TYPE_FLOAT = 0;
     static int RANGE_TYPE_PERCENT = 0;
     static int RANGE_TYPE_INDETERMINATE = 0;
+
+    static int EXPANDED_STATE_UNDEFINED = 0;
+    static int EXPANDED_STATE_COLLAPSED = 0;
+    static int EXPANDED_STATE_FULL = 0;
+
+    static int ACTION_COLLAPSE = 0;
+    static int ACTION_EXPAND = 0;
 
     static bool m_accessibilityActivated = false;
 
@@ -334,8 +354,18 @@ namespace QtAndroidAccessibility
         const auto& actionNames = iface->actionInterface()->actionNames();
 
         if (actionNames.contains(QAccessibleActionInterface::setFocusAction())) {
-            invokeActionOnInterfaceInMainThread(iface->actionInterface(),
-                                                QAccessibleActionInterface::setFocusAction());
+            QAccessibleActionInterface *actionInterface = iface->actionInterface();
+            // Suppress keyboard activation during accessibility focus navigation.
+            QMetaObject::invokeMethod(qApp, [actionInterface]() {
+                auto *inputContext = QAndroidInputContext::androidInputContext();
+                if (inputContext)
+                    inputContext->setAccessibilityFocusInProgress(true);
+                const auto resetGuard = qScopeGuard([inputContext] {
+                    if (inputContext)
+                        inputContext->setAccessibilityFocusInProgress(false);
+                });
+                actionInterface->doAction(QAccessibleActionInterface::setFocusAction());
+            }, Qt::QueuedConnection);
             return true;
         }
         return false;
@@ -411,6 +441,54 @@ namespace QtAndroidAccessibility
 
         // Don't check for position change if the call was not successful
         return result && oldPosition != screenRect_helper(firstChildId, false);
+    }
+
+    static bool showOnScreen_helper(int objectId)
+    {
+        QAccessibleInterface *iface = interfaceFromId(objectId);
+        if (!iface || !iface->isValid() || !iface->actionInterface())
+            return false;
+
+        const auto actionNames = iface->actionInterface()->actionNames();
+
+        if (actionNames.contains(QAccessibleActionInterface::showOnScreenAction())) {
+            invokeActionOnInterfaceInMainThread(iface->actionInterface(), QAccessibleActionInterface::showOnScreenAction());
+            return true;
+        }
+        return false;
+    }
+
+    static jboolean showOnScreen(JNIEnv */*env*/, jobject /*thiz*/, jint objectId)
+    {
+        bool result = false;
+        if (m_accessibilityContext) {
+            runInObjectContext(m_accessibilityContext, [objectId]() {
+                return showOnScreen_helper(objectId);
+            }, &result);
+        }
+        return result;
+    }
+
+    static jboolean expand(JNIEnv * /*env*/, jobject /*thiz*/, jint objectId)
+    {
+        bool result = false;
+        if (m_accessibilityContext) {
+            runInObjectContext(
+                    m_accessibilityContext, [objectId]() { return clickAction_helper(objectId); },
+                    &result);
+        }
+        return result;
+    }
+
+    static jboolean collapse(JNIEnv * /*env*/, jobject /*thiz*/, jint objectId)
+    {
+        bool result = false;
+        if (m_accessibilityContext) {
+            runInObjectContext(
+                    m_accessibilityContext, [objectId]() { return clickAction_helper(objectId); },
+                    &result);
+        }
+        return result;
     }
 
     static QString textFromValue(QAccessibleInterface *iface)
@@ -495,6 +573,7 @@ namespace QtAndroidAccessibility
         case QAccessible::Role::Clock:
             return QStringLiteral("android.widget.TextClock");
         case QAccessible::Role::ComboBox:
+        case QAccessible::Role::ButtonDropDown:
             return QStringLiteral("android.widget.Spinner");
         case QAccessible::Role::Graphic:
             // QQuickImage does not provide this role it inherits Client from QQuickItem
@@ -536,7 +615,7 @@ namespace QtAndroidAccessibility
         case QAccessible::Role::ScrollBar:
             return QStringLiteral("android.widget.Scroller");
         case QAccessible::Role::Slider:
-            return QStringLiteral("com.google.android.material.slider.Slider");
+            return QStringLiteral("android.widget.SeekBar");
         case QAccessible::Role::Table:
             // #TODO Evaluate the usage of AccessibleNodeInfo.setCollectionItemInfo() to provide
             // infos about colums, rows und items.
@@ -551,7 +630,6 @@ namespace QtAndroidAccessibility
         case QAccessible::Role::BlockQuote:
         case QAccessible::Role::Border:
         case QAccessible::Role::ButtonDropGrid:
-        case QAccessible::Role::ButtonDropDown:
         case QAccessible::Role::ButtonMenu:
         case QAccessible::Role::Canvas:
         case QAccessible::Role::Caret:
@@ -600,6 +678,14 @@ namespace QtAndroidAccessibility
             // Android itself does a similar thing e.g. in its Settings-App.
             return QStringLiteral("android.view.TextView");
         }
+    }
+
+    static int expandedStateFromState(QAccessible::State state)
+    {
+        if (!state.expandable)
+            return EXPANDED_STATE_UNDEFINED;
+
+        return state.expanded ? EXPANDED_STATE_FULL : EXPANDED_STATE_COLLAPSED;
     }
 
     static QString descriptionForInterface(QAccessibleInterface *iface)
@@ -678,6 +764,8 @@ namespace QtAndroidAccessibility
         QAccessible::Role role;
         QStringList actions;
         QString description;
+        QString text;
+        QString hint;
         QString identifier;
         bool hasTextSelection = false;
         int selectionStart = 0;
@@ -704,6 +792,15 @@ namespace QtAndroidAccessibility
             if (textIface && (textIface->selectionCount() > 0)) {
                 info.hasTextSelection = true;
                 textIface->selection(0, &info.selectionStart, &info.selectionEnd);
+            }
+            // For editable nodes, capture the text (exposed via setText(), which
+            // a screen reader reads to track the caret and echo edits) and the
+            // accessible name (exposed via setHintText(), the label channel a
+            // screen reader reads for a text input).
+            if (info.state.editable) {
+                if (textIface)
+                    info.text = textIface->text(0, textIface->characterCount());
+                info.hint = iface->text(QAccessible::Name);
             }
             QAccessibleValueInterface *valueInterface = iface->valueInterface();
             if (valueInterface) {
@@ -742,6 +839,8 @@ namespace QtAndroidAccessibility
                 info.actions.contains(QAccessibleActionInterface::increaseAction());
         const bool hasDecreaseAction =
                 info.actions.contains(QAccessibleActionInterface::decreaseAction());
+        const bool scrollableRole =
+                info.role == QAccessible::ScrollBar || info.role == QAccessible::List;
 
         if (info.hasTextSelection && m_setTextSelectionMethodID) {
             env->CallVoidMethod(node, m_setTextSelectionMethodID, info.selectionStart,
@@ -781,6 +880,10 @@ namespace QtAndroidAccessibility
 
         env->CallVoidMethod(node, m_setCheckableMethodID, (bool)info.state.checkable);
         env->CallVoidMethod(node, m_setCheckedMethodID, (bool)info.state.checked);
+        if (QtAndroidPrivate::androidSdkVersion() >= 36) {
+            env->CallVoidMethod(node, m_setExpandedStateMethodID,
+                                expandedStateFromState(info.state));
+        }
         env->CallVoidMethod(node, m_setEditableMethodID, info.state.editable);
         env->CallVoidMethod(node, m_setEnabledMethodID, !info.state.disabled);
         env->CallVoidMethod(node, m_setFocusableMethodID, (bool)info.state.focusable);
@@ -788,7 +891,8 @@ namespace QtAndroidAccessibility
         if (m_setHeadingMethodID)
             env->CallVoidMethod(node, m_setHeadingMethodID, info.role == QAccessible::Heading);
         env->CallVoidMethod(node, m_setVisibleToUserMethodID, !info.state.invisible);
-        env->CallVoidMethod(node, m_setScrollableMethodID, hasIncreaseAction || hasDecreaseAction);
+        env->CallVoidMethod(node, m_setScrollableMethodID,
+                            hasIncreaseAction || hasDecreaseAction || scrollableRole);
         env->CallVoidMethod(node, m_setClickableMethodID, hasClickableAction || info.role == QAccessible::Link);
 
         // Add ACTION_CLICK
@@ -803,13 +907,106 @@ namespace QtAndroidAccessibility
         if (hasDecreaseAction)
             env->CallVoidMethod(node, m_addActionMethodID, (int)0x00002000);    // ACTION_SCROLL_BACKWARD defined in AccessibilityNodeInfo
 
+        // Add ACTION_EXPAND / ACTION_COLLAPSE
+        if (info.state.expandable) {
+            if (info.state.expanded) {
+                env->CallVoidMethod(node, m_addActionMethodID, ACTION_COLLAPSE);
+            } else {
+                env->CallVoidMethod(node, m_addActionMethodID, ACTION_EXPAND);
+            }
+        }
+
         // try to fill in the text property, this is what the screen reader reads
         jstring jdesc = env->NewString((jchar*)info.description.constData(),
                                        (jsize)info.description.size());
         //CALL_METHOD(node, "setText", "(Ljava/lang/CharSequence;)V", jdesc)
         env->CallVoidMethod(node, m_setContentDescriptionMethodID, jdesc);
 
+        // An editable node exposes its content via setText() (read to track the
+        // caret and echo edits), its label via setHintText() (the label channel
+        // for a text input), and an inputType so it is treated as a real text
+        // field. contentDescription is kept above for readers that use it instead.
+        if (info.state.editable) {
+            if (m_setTextMethodID) {
+                jstring jtext = env->NewString((jchar*)info.text.constData(),
+                                               (jsize)info.text.size());
+                env->CallVoidMethod(node, m_setTextMethodID, jtext);
+                env->DeleteLocalRef(jtext);
+            }
+            // 0x1 == android.text.InputType.TYPE_CLASS_TEXT.
+            if (m_setInputTypeMethodID)
+                env->CallVoidMethod(node, m_setInputTypeMethodID, (jint)0x00000001);
+            if (m_setHintTextMethodID) {
+                jstring jhint = env->NewString((jchar*)info.hint.constData(),
+                                               (jsize)info.hint.size());
+                env->CallVoidMethod(node, m_setHintTextMethodID, jhint);
+                env->DeleteLocalRef(jhint);
+            }
+        }
+
         QJniObject(node).callMethod<void>("setViewIdResourceName", info.identifier);
+
+        return true;
+    }
+
+    struct ScrollEventInfo
+    {
+        bool isValid = false;
+        bool isIndexed;
+        QSizeF contentSize;
+        QPointF position;
+        QSizeF viewportSize;
+    };
+
+    static ScrollEventInfo populateScrollEvent_helper(int objectId)
+    {
+        QAccessibleInterface *iface = interfaceFromId(objectId);
+        if (!iface || !iface->isValid())
+            return { };
+
+        auto *viewportIface = iface->viewportInterface();
+        if (!viewportIface)
+            return { };
+
+        ScrollEventInfo info;
+        info.isValid = true;
+        info.isIndexed = viewportIface->isIndexed();
+        info.contentSize = viewportIface->contentSize();
+        info.position = viewportIface->position();
+        info.viewportSize = viewportIface->viewportSize();
+
+        return info;
+    }
+
+    static jboolean populateScrollEvent(JNIEnv *env, jobject /*thiz*/, jint objectId, jobject event)
+    {
+        ScrollEventInfo info;
+        if (m_accessibilityContext) {
+            runInObjectContext(
+                    m_accessibilityContext,
+                    [objectId]() { return populateScrollEvent_helper(objectId); }, &info);
+        }
+
+        if (!info.isValid)
+            return false;
+
+        if (info.isIndexed) {
+            const int itemCount = std::max(info.contentSize.width(), info.contentSize.height());
+            env->CallVoidMethod(event, m_setItemCountMethodID, itemCount);
+            const int fromIndex = std::max(info.position.x(), info.position.y()) * itemCount;
+            env->CallVoidMethod(event, m_setFromIndexMethodID, fromIndex);
+            const int toIndex = fromIndex
+                    + std::min(info.viewportSize.width(), info.viewportSize.height() * itemCount);
+            env->CallVoidMethod(event, m_setToIndexMethodID, toIndex);
+
+        } else {
+            env->CallVoidMethod(event, m_setScrollXMethodID,
+                                (int)(info.position.x() * info.contentSize.width()));
+            env->CallVoidMethod(event, m_setMaxScrollXMethodID, (int)info.contentSize.width());
+            env->CallVoidMethod(event, m_setScrollYMethodID,
+                                (int)(info.position.y() * info.contentSize.height()));
+            env->CallVoidMethod(event, m_setMaxScrollYMethodID, (int)info.contentSize.height());
+        }
 
         return true;
     }
@@ -823,10 +1020,14 @@ namespace QtAndroidAccessibility
         {"screenRect", "(I)Landroid/graphics/Rect;", (jobject)screenRect},
         {"hitTest", "(FF)I", (void*)hitTest},
         {"populateNode", "(ILandroid/view/accessibility/AccessibilityNodeInfo;)Z", (void*)populateNode},
+        {"populateScrollEvent", "(ILandroid/view/accessibility/AccessibilityEvent;)Z", (void*)populateScrollEvent},
         {"clickAction", "(I)Z", (void*)clickAction},
         {"focusAction", "(I)Z", (void*)focusAction},
         {"scrollForward", "(I)Z", (void*)scrollForward},
         {"scrollBackward", "(I)Z", (void*)scrollBackward},
+        {"showOnScreen", "(I)Z", (void *)showOnScreen},
+        {"expand", "(I)Z", (void *)expand},
+        {"collapse", "(I)Z", (void *)collapse}
     };
 
 #define GET_AND_CHECK_STATIC_METHOD(VAR, CLASS, METHOD_NAME, METHOD_SIGNATURE) \
@@ -857,8 +1058,16 @@ namespace QtAndroidAccessibility
         GET_AND_CHECK_STATIC_METHOD(m_addActionMethodID, nodeInfoClass, "addAction", "(I)V");
         GET_AND_CHECK_STATIC_METHOD(m_setCheckableMethodID, nodeInfoClass, "setCheckable", "(Z)V");
         GET_AND_CHECK_STATIC_METHOD(m_setCheckedMethodID, nodeInfoClass, "setChecked", "(Z)V");
+        if (QtAndroidPrivate::androidSdkVersion() >= 36) {
+            GET_AND_CHECK_STATIC_METHOD(m_setExpandedStateMethodID, nodeInfoClass,
+                                        "setExpandedState", "(I)V");
+        }
         GET_AND_CHECK_STATIC_METHOD(m_setClickableMethodID, nodeInfoClass, "setClickable", "(Z)V");
         GET_AND_CHECK_STATIC_METHOD(m_setContentDescriptionMethodID, nodeInfoClass, "setContentDescription", "(Ljava/lang/CharSequence;)V");
+        GET_AND_CHECK_STATIC_METHOD(m_setTextMethodID, nodeInfoClass, "setText", "(Ljava/lang/CharSequence;)V");
+        GET_AND_CHECK_STATIC_METHOD(m_setInputTypeMethodID, nodeInfoClass, "setInputType", "(I)V");
+        // setHintText is API 26+, below Qt's API-28 floor, so no SDK guard needed.
+        GET_AND_CHECK_STATIC_METHOD(m_setHintTextMethodID, nodeInfoClass, "setHintText", "(Ljava/lang/CharSequence;)V");
         GET_AND_CHECK_STATIC_METHOD(m_setEditableMethodID, nodeInfoClass, "setEditable", "(Z)V");
         GET_AND_CHECK_STATIC_METHOD(m_setEnabledMethodID, nodeInfoClass, "setEnabled", "(Z)V");
         GET_AND_CHECK_STATIC_METHOD(m_setFocusableMethodID, nodeInfoClass, "setFocusable", "(Z)V");
@@ -873,6 +1082,15 @@ namespace QtAndroidAccessibility
                 m_setRangeInfoMethodID, nodeInfoClass, "setRangeInfo",
                 "(Landroid/view/accessibility/AccessibilityNodeInfo$RangeInfo;)V");
 
+        jclass eventClass = env->FindClass("android/view/accessibility/AccessibilityEvent");
+        GET_AND_CHECK_STATIC_METHOD(m_setMaxScrollXMethodID, eventClass, "setMaxScrollX", "(I)V");
+        GET_AND_CHECK_STATIC_METHOD(m_setScrollXMethodID, eventClass, "setScrollX", "(I)V");
+        GET_AND_CHECK_STATIC_METHOD(m_setMaxScrollYMethodID, eventClass, "setMaxScrollY", "(I)V");
+        GET_AND_CHECK_STATIC_METHOD(m_setScrollYMethodID, eventClass, "setScrollY", "(I)V");
+        GET_AND_CHECK_STATIC_METHOD(m_setItemCountMethodID, eventClass, "setItemCount", "(I)V");
+        GET_AND_CHECK_STATIC_METHOD(m_setFromIndexMethodID, eventClass, "setFromIndex", "(I)V");
+        GET_AND_CHECK_STATIC_METHOD(m_setToIndexMethodID, eventClass, "setToIndex", "(I)V");
+
         jclass rangeInfoClass =
                 env->FindClass("android/view/accessibility/AccessibilityNodeInfo$RangeInfo");
         CHECK_AND_INIT_STATIC_FIELD(int, RANGE_TYPE_INT, rangeInfoClass, "RANGE_TYPE_INT");
@@ -884,6 +1102,18 @@ namespace QtAndroidAccessibility
         } else {
             RANGE_TYPE_INDETERMINATE = RANGE_TYPE_FLOAT;
         }
+
+        if (QtAndroidPrivate::androidSdkVersion() >= 36) {
+            CHECK_AND_INIT_STATIC_FIELD(int, EXPANDED_STATE_UNDEFINED, nodeInfoClass,
+                                        "EXPANDED_STATE_UNDEFINED");
+            CHECK_AND_INIT_STATIC_FIELD(int, EXPANDED_STATE_COLLAPSED, nodeInfoClass,
+                                        "EXPANDED_STATE_COLLAPSED");
+            CHECK_AND_INIT_STATIC_FIELD(int, EXPANDED_STATE_FULL, nodeInfoClass,
+                                        "EXPANDED_STATE_FULL");
+        }
+
+        CHECK_AND_INIT_STATIC_FIELD(int, ACTION_COLLAPSE, nodeInfoClass, "ACTION_COLLAPSE");
+        CHECK_AND_INIT_STATIC_FIELD(int, ACTION_EXPAND, nodeInfoClass, "ACTION_EXPAND");
 
         return true;
     }

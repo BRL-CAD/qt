@@ -324,7 +324,7 @@ static QFontEngine::HintStyle parseXftHintStyle(const QByteArray& stringValue)
     else if (stringValue == "hintslight")
         return QFontEngine::HintLight;
 
-    return QFontEngine::HintStyle(-1);
+    return QFontEngine::HintUnset;
 }
 
 static QFontEngine::SubpixelAntialiasingType parseXftRgba(const QByteArray& stringValue)
@@ -340,7 +340,7 @@ static QFontEngine::SubpixelAntialiasingType parseXftRgba(const QByteArray& stri
     else if (stringValue == "vbgr")
         return QFontEngine::Subpixel_VBGR;
 
-    return QFontEngine::SubpixelAntialiasingType(-1);
+    return QFontEngine::Subpixel_Unset;
 }
 
 void QXcbVirtualDesktop::readXResources()
@@ -888,6 +888,7 @@ void QXcbScreen::setOutput(xcb_randr_output_t outputId,
     m_crtc = outputInfo ? outputInfo->crtc : XCB_NONE;
     m_mode = XCB_NONE;
     m_outputName = getOutputName(outputInfo);
+    m_outputSizeMillimeters = outputInfo ? QSizeF(outputInfo->mm_width, outputInfo->mm_height) : QSizeF();
     // TODO: Send an event to the QScreen instance that the screen changed its name
 }
 

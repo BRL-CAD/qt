@@ -17,6 +17,8 @@
 #include <qthread.h>
 #include <qurl.h>
 
+#include <private/qobject_p.h>
+
 #include <algorithm>
 
 #ifdef Q_OS_UNIX
@@ -195,6 +197,7 @@ static int nextId()
 }
 
 /*!
+    \threadsafe
     Looks up the IP address(es) associated with host name \a name, and
     returns an ID for the lookup. When the result of the lookup is
     ready, the slot or signal \a member in \a receiver is called with
@@ -255,6 +258,7 @@ int QHostInfo::lookupHost(const QString &name, const QObject *receiver, const ch
 
 /*!
     \fn template<typename Functor> int QHostInfo::lookupHost(const QString &name, Functor &&functor)
+    \threadsafe
 
     \since 5.9
 
@@ -277,6 +281,7 @@ int QHostInfo::lookupHost(const QString &name, const QObject *receiver, const ch
 
 /*!
     \fn template<typename Functor> int QHostInfo::lookupHost(const QString &name, const QObject *context, Functor functor)
+    \threadsafe
 
     \since 5.9
 
@@ -310,6 +315,7 @@ int QHostInfo::lookupHost(const QString &name, const QObject *receiver, const ch
 */
 
 /*!
+    \threadsafe
     Aborts the host lookup with the ID \a id, as returned by lookupHost().
 
     \sa lookupHost(), lookupId()
@@ -320,6 +326,7 @@ void QHostInfo::abortHostLookup(int id)
 }
 
 /*!
+    \threadsafe
     Looks up the IP address(es) for the given host \a name. The
     function blocks during the lookup which means that execution of
     the program is suspended until the results of the lookup are
@@ -693,6 +700,7 @@ void QHostInfo::setErrorString(const QString &str)
 
 /*!
     \fn QString QHostInfo::localHostName()
+    \threadsafe
 
     Returns this machine's host name, if one is configured. Note that hostnames
     are not guaranteed to be globally unique, especially if they were
@@ -713,6 +721,7 @@ QString QHostInfo::localHostName()
 
 /*!
     \fn QString QHostInfo::localDomainName()
+    \threadsafe
 
     Returns the DNS domain of this machine.
 
@@ -808,8 +817,8 @@ int QHostInfo::lookupHostImpl(const QString &name,
         // cache is not enabled or it was not in the cache, do normal lookup
         QHostInfoRunnable *runnable = new QHostInfoRunnable(name, id, receiver, std::move(slotObj));
         if (isUsingStringBasedSlot) {
-            QObject::connect(&runnable->resultEmitter, SIGNAL(resultsReady(QHostInfo)),
-                                receiver, member, Qt::QueuedConnection);
+            QObject::connect(runnable->resultEmitter.get(), SIGNAL(resultsReady(QHostInfo)),
+                             receiver, member, Qt::QueuedConnection);
         }
         manager->scheduleLookup(runnable);
     }
@@ -819,13 +828,17 @@ int QHostInfo::lookupHostImpl(const QString &name,
 
 QHostInfoRunnable::QHostInfoRunnable(const QString &hn, int i, const QObject *receiver,
                                      QtPrivate::SlotObjUniquePtr slotObj)
-    : toBeLookedUp{hn}, id{i}, resultEmitter{receiver, std::move(slotObj)}
+    : toBeLookedUp{hn}, id{i}, resultEmitter{new QHostInfoResult(receiver, std::move(slotObj))}
 {
     setAutoDelete(true);
 }
 
 QHostInfoRunnable::~QHostInfoRunnable()
-    = default;
+{
+    // resultEmitter belongs to the receiver's thread, which is rarely the one deleting this
+    // runnable, so it can't be destroyed here directly.
+    QObjectPrivate::deleteInOwnThread(resultEmitter.release());
+}
 
 // the QHostInfoLookupManager will at some point call this via a QThreadPool
 void QHostInfoRunnable::run()
@@ -861,7 +874,7 @@ void QHostInfoRunnable::run()
 
     // signal emission
     hostInfo.setLookupId(id);
-    resultEmitter.postResultsReady(hostInfo);
+    resultEmitter->postResultsReady(hostInfo);
 
 #if QT_CONFIG(thread)
     // now also iterate through the postponed ones
@@ -874,7 +887,7 @@ void QHostInfoRunnable::run()
             QHostInfoRunnable* postponed = *it;
             // we can now emit
             hostInfo.setLookupId(postponed->id);
-            postponed->resultEmitter.postResultsReady(hostInfo);
+            postponed->resultEmitter->postResultsReady(hostInfo);
             delete postponed;
         }
         manager->postponedLookups.erase(partitionBegin, partitionEnd);
@@ -1083,6 +1096,43 @@ void qt_qhostinfo_clear_cache()
     }
 }
 
+/*!
+    \fn void QHostInfo::clearCache()
+    \threadsafe
+
+    Clears the internal DNS cache used by lookupHost() and fromName().
+
+    Call this when cached host information may be stale and fresh lookups
+    are needed. Typical use cases include:
+    \list
+        \li The application has detected a network configuration change
+           (e.g. switch between Wi-Fi and Ethernet, or VPN connect/disconnect).
+        \li A server's address is known to have changed (e.g. dynamic DNS or
+           failover), and the application should resolve the host name again.
+           Note that upstream DNS servers and resolvers have their own TTL,
+           clearing the cache here does not affect them,
+           so the new lookup may still return the previous address until
+           the upstream TTL expires.
+        \li The application uses a cached result for lookups,
+           but it requires a fresh lookup if the cache has expired or is no longer valid.
+    \endlist
+
+    This function only clears the cache. It does not cancel in-progress
+    lookups; those will complete and their results will still be delivered.
+    Use this when you want future lookups to resolve again without
+    affecting ongoing operations.
+
+    \since 6.12
+    \sa lookupHost(), fromName()
+*/
+
+void QHostInfo::clearCache()
+{
+    if (theHostInfoLookupManager.exists()) {
+        theHostInfoLookupManager->cache.clear();
+    }
+}
+
 #ifdef QT_BUILD_INTERNAL
 void Q_AUTOTEST_EXPORT qt_qhostinfo_enable_cache(bool e)
 {
@@ -1102,13 +1152,9 @@ void qt_qhostinfo_cache_inject(const QString &hostname, const QHostInfo &resolut
 }
 #endif
 
-// cache for 60 seconds
-// cache 128 items
+#if defined(QT_BUILD_INTERNAL) || QT_CONFIG(hostinfocache)
 QHostInfoCache::QHostInfoCache() : max_age(60), enabled(true), cache(128)
 {
-#ifdef QT_QHOSTINFO_CACHE_DISABLED_BY_DEFAULT
-    enabled.store(false, std::memory_order_relaxed);
-#endif
 }
 
 QHostInfo QHostInfoCache::get(const QString &name, bool *valid)
@@ -1149,6 +1195,7 @@ void QHostInfoCache::clear()
     QMutexLocker locker(&this->mutex);
     cache.clear();
 }
+#endif // QT_BUILD_INTERNAL || QT_CONFIG(hostinfocache)
 
 QT_END_NAMESPACE
 

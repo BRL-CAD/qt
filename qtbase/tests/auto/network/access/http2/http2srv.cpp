@@ -133,12 +133,18 @@ void Http2Server::setSendTrailingHEADERS(bool enable)
     sendTrailingHEADERS = enable;
 }
 
-void Http2Server::emulateGOAWAY(int code, int timeout)
+void Http2Server::setSendRedundantEndStreamDATA(bool enable)
+{
+    sendRedundantEndStreamDATA = enable;
+}
+
+void Http2Server::emulateGOAWAY(int code, int timeout, bool disconnectAfter)
 {
     Q_ASSERT(timeout >= 0);
     testingGOAWAY = true;
     goawayTimeout = timeout;
     goawayCode = code;
+    goawayDisconnect = disconnectAfter;
 }
 
 void Http2Server::redirectOpenStream(quint16 port)
@@ -287,6 +293,14 @@ void Http2Server::sendDATA(quint32 streamID, quint32 windowSize)
             writer.start(FrameType::DATA, FrameFlag::END_STREAM, streamID);
             writer.setPayloadSize(0);
             writer.write(*socket);
+
+            if (sendRedundantEndStreamDATA) {
+                // Emulate a non-conformant server: send a stray empty DATA
+                // frame with END_STREAM on the now-closed stream.
+                writer.start(FrameType::DATA, FrameFlag::END_STREAM, streamID);
+                writer.setPayloadSize(0);
+                writer.write(*socket);
+            }
         }
         suspendedStreams.erase(it);
         activeRequests.erase(streamID);
@@ -336,12 +350,17 @@ void Http2Server::incomingConnection(qintptr socketDescriptor)
         sslSocket->setProtocol(QSsl::TlsV1_2OrLater);
         connect(sslSocket, SIGNAL(sslErrors(QList<QSslError>)),
                 this, SLOT(ignoreErrorSlot()));
-        QFile file(QT_TESTCASE_SOURCEDIR "/certs/fluke.key");
+#ifdef BUILTIN_TESTDATA
+        const QString certDir = QStringLiteral(":/");
+#else
+        const QString certDir = QStringLiteral(QT_TESTCASE_SOURCEDIR "/");
+#endif
+        QFile file(certDir + "certs/fluke.key");
         if (!file.open(QIODevice::ReadOnly))
             qFatal("Cannot open certificate file %s", qPrintable(file.fileName()));
         QSslKey key(file.readAll(), QSsl::Rsa, QSsl::Pem, QSsl::PrivateKey);
         sslSocket->setPrivateKey(key);
-        auto localCert = QSslCertificate::fromPath(QT_TESTCASE_SOURCEDIR "/certs/fluke.cert");
+        auto localCert = QSslCertificate::fromPath(certDir + "certs/fluke.cert");
         sslSocket->setLocalCertificateChain(localCert);
         sslSocket->setSocketDescriptor(socketDescriptor, QAbstractSocket::ConnectedState);
         // Stop listening.
@@ -416,6 +435,8 @@ void Http2Server::triggerGOAWAYEmulation()
     timer->setSingleShot(true);
     connect(timer, &QTimer::timeout, [this]() {
         sendGOAWAY(quint32(connectionStreamID), quint32(goawayCode), 0);
+        if (goawayDisconnect)
+            socket->disconnectFromHost();
     });
     timer->start(goawayTimeout);
 }

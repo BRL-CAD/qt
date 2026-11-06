@@ -1,5 +1,6 @@
 // Copyright (C) 2021 The Qt Company Ltd.
 // SPDX-License-Identifier: LicenseRef-Qt-Commercial OR LGPL-3.0-only OR GPL-2.0-only OR GPL-3.0-only
+// Qt-Security score:significant reason:default
 
 #include <qglobal.h>
 
@@ -54,6 +55,7 @@ static bool qt_pixmap_thread_test()
     }
     if (QGuiApplicationPrivate::instance()
         && !QThread::isMainThread()
+        && Q_LIKELY(QGuiApplicationPrivate::platformIntegration())
         && !QGuiApplicationPrivate::platformIntegration()->hasCapability(QPlatformIntegration::ThreadedPixmaps)) {
         qWarning("QPixmap: It is not safe to use pixmaps outside the GUI thread on this platform");
         return false;
@@ -197,7 +199,7 @@ QPixmap::QPixmap(const QPixmap &pixmap)
 /*! \fn QPixmap::QPixmap(QPixmap &&other)
     Move-constructs a QPixmap instance from \a other.
 
-    \sa swap() operator=(QPixmap&&)
+    \sa swap(), operator=(QPixmap&&)
 */
 
 QT_DEFINE_QESDP_SPECIALIZATION_DTOR(QPlatformPixmap)
@@ -999,7 +1001,7 @@ bool QPixmap::convertFromImage(const QImage &image, Qt::ImageConversionFlags fla
     transformation modes specified by \a aspectRatioMode and \a
     transformMode.
 
-    \image qimage-scaling.png
+    \image qimage-scaling.png {Three aspect ratio modes compared}
 
     \list
     \li If \a aspectRatioMode is Qt::IgnoreAspectRatio, the pixmap

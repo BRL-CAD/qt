@@ -15,6 +15,7 @@
 #include <QtCore/qglobal.h>
 #include <QtCore/qtypeinfo.h>
 
+#include <QtCore/q20type_traits.h>
 #include <QtCore/qxptype_traits.h>
 
 #include <cstring>
@@ -33,11 +34,17 @@ namespace QtPrivate
   Returns whether \a p is within a range [b, e). In simplest form equivalent to:
   b <= p < e.
 */
-template<typename T, typename Cmp = std::less<>>
-static constexpr bool q_points_into_range(const T *p, const T *b, const T *e,
-                                          Cmp less = {}) noexcept
+template<typename T>
+static constexpr bool q_points_into_range(const T *p, const T *b, const T *e)
 {
-    return !less(p, b) && less(p, e);
+    if (q20::is_constant_evaluated()) {
+        for (; b != e; ++b) {
+            if (b == p)
+                return true;
+        }
+        return false;
+    }
+    return !std::less{}(p, b) && std::less{}(p, e);
 }
 
 /*!
@@ -75,10 +82,16 @@ void q_uninitialized_relocate_n(T* first, N n, T* out)
     if constexpr (QTypeInfo<T>::isRelocatable) {
         static_assert(std::is_copy_constructible_v<T> || std::is_move_constructible_v<T>,
                       "Refusing to relocate this non-copy/non-move-constructible type.");
-        if (n != N(0)) { // even if N == 0, out == nullptr or first == nullptr are UB for memcpy()
+        // Even if n == 0, out == nullptr or first == nullptr are UB for memcpy().
+        // Negative n shouldn't happen, but the compiler can't see that and might warn about
+        // memcpy being called with an out-of-range argument. Since we need to check for n == 0
+        // anyway, check for n > 0 instead and assert below.
+        if (n > N(0)) {
             std::memcpy(static_cast<void *>(out),
                         static_cast<const void *>(first),
                         n * sizeof(T));
+        } else {
+            Q_ASSERT(n == N(0));
         }
     } else {
         q_uninitialized_move_if_noexcept_n(first, n, out);

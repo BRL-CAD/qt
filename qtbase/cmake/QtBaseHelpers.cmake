@@ -87,6 +87,9 @@ macro(qt_internal_qtbase_pre_project_setup)
         # qtbase. Set it here so qt_add_plugin can compute the proper plugin flavor.
         set(QT6_IS_SHARED_LIBS_BUILD ${BUILD_SHARED_LIBS})
 
+        # Include this early enough for a qtbase / top-level build.
+        include("${CMAKE_CURRENT_SOURCE_DIR}/cmake/QtPublicCMakeIncludeGuardHelpers.cmake")
+
         # BUILD_SHARED_LIBS influences the minimum required CMake version. The value is set either
         # by:
         #   a cache variable provided on the configure command line
@@ -240,6 +243,13 @@ macro(qt_internal_qtbase_build_repo)
             include(src/corelib/Qt6AndroidDynamicFeatureHelpers.cmake)
             include(src/corelib/Qt6AndroidGradleHelpers.cmake)
             include(src/corelib/Qt6AndroidPermissionHelpers.cmake)
+        endif()
+
+        # Needed when building qtbase for HarmonyOS.
+        if(OHOS)
+            include(src/corelib/Qt6HarmonyOSMacros.cmake)
+            include(src/corelib/Qt6HarmonyOSPermissionHelpers.cmake)
+            include(src/corelib/Qt6HarmonyOSBlockingTestDialogHelpers.cmake)
         endif()
 
         # Needed when building for WebAssembly.

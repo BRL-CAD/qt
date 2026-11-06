@@ -632,7 +632,13 @@ static inline void fixTopLevelWindowFlags(Qt::WindowFlags &flags)
 {
     // Not supported on Windows, also do correction when it is set.
     flags &= ~Qt::WindowFullscreenButtonHint;
-    switch (flags) {
+    // Qt::ExpandedClientAreaHint / Qt::NoTitleBarBackgroundHint customize the client
+    // area, not the decoration set, so ignore them when matching a bare window type.
+    // NOTE: keep exact equality otherwise - a loose testFlag(Qt::Window) check
+    // regressed Qt::CustomizeWindowHint (QTBUG-133940) and was reverted.
+    constexpr Qt::WindowFlags clientAreaHints =
+        Qt::ExpandedClientAreaHint | Qt::NoTitleBarBackgroundHint;
+    switch (flags & ~clientAreaHints) {
     case Qt::Window:
         flags |= Qt::WindowTitleHint | Qt::WindowSystemMenuHint | Qt::WindowMinimizeButtonHint
               |Qt::WindowMaximizeButtonHint|Qt::WindowCloseButtonHint;
@@ -1871,6 +1877,20 @@ void QWindowsWindow::setVisible(bool visible)
                 ShowWindow(m_data.hwnd, SW_HIDE);
             else
                 hide_sys();
+#ifndef QT_NO_CURSOR
+            // QTBUG-140455: After hiding a modal dialog, directly re-apply
+            // the parent window's cursor via SetCursor(). This is needed
+            // because hide_sys() uses SWP_NOACTIVATE which does not trigger
+            // WM_SETCURSOR, and the normal changeCursor() path is blocked
+            // by multiple optimizations (unchanged cursor shape/handle,
+            // stale windowUnderMouse).
+            if (win->isModal()) {
+                if (QWindow *parent = win->transientParent()) {
+                    if (auto *pw = QWindowsWindow::windowsWindowOf(parent))
+                        pw->applyCursor();
+                }
+            }
+#endif
             fireExpose(QRegion());
         }
     }
@@ -2135,6 +2155,11 @@ void QWindowsWindow::handleDpiChanged(HWND hwnd, WPARAM wParam, LPARAM lParam)
     setSavedDpi(dpi);
 
     QWindowsThemeCache::clearThemeCache(hwnd);
+
+    // QTBUG-148525: The icons are created for a specific DPI, so they have to
+    // be recreated for the DPI of the monitor the window has been moved to.
+    if (isTopLevel() && !window()->icon().isNull())
+        setWindowIcon(window()->icon());
 
     // Send screen change first, so that the new screen is set during any following resize
     const auto prcNewWindow = reinterpret_cast<const RECT *>(lParam);
@@ -2407,6 +2432,10 @@ void QWindowsWindow::handleGeometryChange()
     const QRect previousGeometry = m_data.geometry;
     updateFullFrameMargins();
     m_data.geometry = geometry_sys();
+    // Avoid superfluous geometry change events, possibly triggered by window
+    // customization frameworks.
+    if (m_data.geometry == previousGeometry)
+        return;
     QWindowSystemInterface::handleGeometryChange(window(), m_data.geometry);
     // QTBUG-32121: OpenGL/normal windows (with exception of ANGLE
     // which we no longer support in Qt 6) do not receive expose
@@ -2865,24 +2894,8 @@ void QWindowsWindow::setWindowState_sys(Qt::WindowStates newState)
             setFlag(WithinMaximize);
             if (newState & Qt::WindowFullScreen)
                 setFlag(MaximizeToFullScreen);
-            if (m_data.flags & Qt::FramelessWindowHint) {
-                if (newState == Qt::WindowNoState) {
-                    const QRect &rect = m_savedFrameGeometry;
-                    MoveWindow(m_data.hwnd, rect.x(), rect.y(), rect.width(), rect.height(), true);
-                } else {
-                    HMONITOR monitor = MonitorFromWindow(m_data.hwnd, MONITOR_DEFAULTTONEAREST);
-                    MONITORINFO monitorInfo = {};
-                    monitorInfo.cbSize = sizeof(MONITORINFO);
-                    GetMonitorInfo(monitor, &monitorInfo);
-                    const RECT &rect = monitorInfo.rcWork;
-                    m_savedFrameGeometry = geometry();
-                    MoveWindow(m_data.hwnd, rect.left, rect.top,
-                               rect.right - rect.left, rect.bottom - rect.top, true);
-                }
-            } else {
-                ShowWindow(m_data.hwnd,
-                           (newState & Qt::WindowMaximized) ? SW_MAXIMIZE : SW_SHOWNOACTIVATE);
-            }
+            ShowWindow(m_data.hwnd,
+                       (newState & Qt::WindowMaximized) ? SW_MAXIMIZE : SW_SHOWNOACTIVATE);
             clearFlag(WithinMaximize);
             clearFlag(MaximizeToFullScreen);
         } else if (visible && (oldState & newState & Qt::WindowMinimized)) {
@@ -3045,7 +3058,7 @@ void QWindowsWindow::calculateFullFrameMargins()
     // by handling WM_NCCALCSIZE). If that is the case, i.e., the client area and the window area
     // have identical sizes, we don't want to override the user-defined margins.
 
-    if (qrectFromRECT(windowRect).size() == qrectFromRECT(clientRect).size())
+    if (qSizeOfRect(windowRect) == qSizeOfRect(clientRect))
         return;
 
     // Normally obtained from WM_NCCALCSIZE. This calculation only works
@@ -3312,6 +3325,25 @@ void QWindowsWindow::setFrameStrutEventsEnabled(bool enabled)
 void QWindowsWindow::getSizeHints(MINMAXINFO *mmi) const
 {
     QWindowsGeometryHint::applyToMinMaxInfo(window(), fullFrameMargins(), mmi);
+
+    // A frameless (WS_POPUP) window maximizes to the full screen geometry
+    // instead of the work area (QTBUG-129791). Constrain the maximize rect
+    // here, unless the window is meant to fill the screen.
+    if ((m_data.flags & Qt::FramelessWindowHint) && window()->isTopLevel()
+        && !testFlag(MaximizeToFullScreen)) {
+        const HMONITOR monitor = MonitorFromWindow(m_data.hwnd, MONITOR_DEFAULTTONEAREST);
+        MONITORINFO monitorInfo = {};
+        monitorInfo.cbSize = sizeof(MONITORINFO);
+        GetMonitorInfoW(monitor, &monitorInfo);
+        const RECT &work = monitorInfo.rcWork;
+        const RECT &screen = monitorInfo.rcMonitor;
+        // ptMaxPosition and ptMaxSize are relative to the monitor the window
+        // maximizes on, which handles multi-monitor setups.
+        mmi->ptMaxPosition.x = work.left - screen.left;
+        mmi->ptMaxPosition.y = work.top - screen.top;
+        mmi->ptMaxSize.x = work.right - work.left;
+        mmi->ptMaxSize.y = work.bottom - work.top;
+    }
     qCDebug(lcQpaWindow) << __FUNCTION__ << window() << *mmi;
 }
 
@@ -3624,7 +3656,10 @@ void QWindowsWindow::updateCustomTitlebar()
             p.drawRect(rect);
         }
         p.setPen(textPen);
-        p.drawText(rect,QStringLiteral("\uE922"), QTextOption(Qt::AlignVCenter | Qt::AlignHCenter));
+        // Show the restore glyph while maximized, the maximize glyph otherwise.
+        const QString maximizeGlyph = IsZoomed(m_data.hwnd) ? QStringLiteral("\uE923")   // ChromeRestore
+                                                            : QStringLiteral("\uE922");  // ChromeMaximize
+        p.drawText(rect, maximizeGlyph, QTextOption(Qt::AlignVCenter | Qt::AlignHCenter));
         buttons++;
     }
 
@@ -3803,11 +3838,32 @@ void QWindowsWindow::setEnabled(bool enabled)
         setStyle(newStyle);
 }
 
-static HICON createHIcon(const QIcon &icon, int xSize, int ySize)
+static UINT primaryScreenDpi()
+{
+    // The primary monitor is the one that has its origin at (0, 0).
+    const POINT origin{0, 0};
+    if (const HMONITOR monitor = MonitorFromPoint(origin, MONITOR_DEFAULTTOPRIMARY)) {
+        UINT dpiX;
+        UINT dpiY;
+        if (SUCCEEDED(GetDpiForMonitor(monitor, MDT_EFFECTIVE_DPI, &dpiX, &dpiY)))
+            return dpiX;
+    }
+    return GetDpiForSystem();
+}
+
+static HICON createHIcon(const QIcon &icon, UINT dpi, int xSizeMetric, int ySizeMetric)
 {
     if (!icon.isNull()) {
-        // QTBUG-90363, request DPR=1 for the title bar.
-        const QPixmap pm = icon.pixmap(icon.actualSize(QSize(xSize, ySize)), 1);
+        // QTBUG-90363, QTBUG-148524: Deliver the icon in exactly the physical
+        // size that is expected at the given DPI, so that it does not have to be
+        // rescaled for display. GetSystemMetrics() must not be used, as it
+        // reports metrics for the system (primary monitor) DPI only. Pass the
+        // corresponding device pixel ratio rather than 1, so that QIcon can
+        // pick a representation authored for fractional scale factors.
+        const qreal dpr = qreal(dpi) / QWindowsScreen::baseDpi;
+        const QSize physicalSize(GetSystemMetricsForDpi(xSizeMetric, dpi),
+                                 GetSystemMetricsForDpi(ySizeMetric, dpi));
+        const QPixmap pm = icon.pixmap(icon.actualSize(physicalSize / dpr), dpr);
         if (!pm.isNull())
             return qt_pixmapToWinHICON(pm);
     }
@@ -3819,8 +3875,20 @@ void QWindowsWindow::setWindowIcon(const QIcon &icon)
     if (m_data.hwnd) {
         destroyIcon();
 
-        m_iconSmall = createHIcon(icon, GetSystemMetrics(SM_CXSMICON), GetSystemMetrics(SM_CYSMICON));
-        m_iconBig = createHIcon(icon, GetSystemMetrics(SM_CXICON), GetSystemMetrics(SM_CYICON));
+        // The small icon is drawn in the window's title bar, so it is sized for the
+        // monitor the window is shown on. Note: Do not use savedDpi() here, it is
+        // initialized in initialize(), whereas setWindowIcon() is already called
+        // from the constructor.
+        const UINT windowDpi = GetDpiForWindow(m_data.hwnd);
+        const UINT titleBarDpi = windowDpi ? windowDpi : UINT(QWindowsScreen::baseDpi);
+        m_iconSmall = createHIcon(icon, titleBarDpi, SM_CXSMICON, SM_CYSMICON);
+
+        // The big icon is used by the task bar and the Alt+Tab dialog. The task bar
+        // is shown on every monitor, so there is no size that is correct on all of
+        // them. Size it for the primary monitor, which keeps it sharp where the task
+        // bar usually is, and, more importantly, keeps it stable when the window is
+        // moved to a monitor with a different scale factor.
+        m_iconBig = createHIcon(icon, primaryScreenDpi(), SM_CXICON, SM_CYICON);
 
         if (m_iconBig) {
             SendMessage(m_data.hwnd, WM_SETICON, 0 /* ICON_SMALL */, LPARAM(m_iconSmall));
@@ -4037,6 +4105,11 @@ void QWindowsWindow::requestUpdate()
     QWindow *w = window();
     QDxgiVSyncService *vs = QDxgiVSyncService::instance();
     if (vs->supportsWindow(w)) {
+        // The base class's timer-based fallback may still be running from an
+        // earlier requestUpdate() serviced before DXGI vsync became available.
+        // Stop it now that DXGI vsync callbacks take over delivery, otherwise
+        // both mechanisms end up delivering update requests concurrently.
+        QPlatformWindow::d_ptr->updateTimer.stop();
         if (m_vsyncServiceCallbackId == 0) {
             m_vsyncServiceCallbackId = vs->registerCallback([this, w](const QDxgiVSyncService::CallbackWindowList &windowList, qint64) {
                 if (windowList.contains(w)) {

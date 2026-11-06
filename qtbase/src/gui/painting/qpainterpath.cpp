@@ -1,5 +1,6 @@
 // Copyright (C) 2016 The Qt Company Ltd.
 // SPDX-License-Identifier: LicenseRef-Qt-Commercial OR LGPL-3.0-only OR GPL-2.0-only OR GPL-3.0-only
+// Qt-Security score:significant reason:default
 
 #include "qpainterpath.h"
 #include "qpainterpath_p.h"
@@ -198,6 +199,7 @@ static void qt_debug_path(const QPainterPath &path)
     \table 70%
     \row
     \li \inlineimage qpainterpath-construction.png
+                     {Path with rectangle and bezier curves}
     \li
     \snippet code/src_gui_painting_qpainterpath.cpp 0
     \endtable
@@ -214,14 +216,43 @@ static void qt_debug_path(const QPainterPath &path)
     \li Qt::OddEvenFill
     \li Qt::WindingFill
     \row
-    \li \inlineimage qt-fillrule-oddeven.png
-    \li \inlineimage qt-fillrule-winding.png
+    \li \inlineimage qt-fillrule-oddeven.png {Star with odd-even fill}
+    \li \inlineimage qt-fillrule-winding.png {Star with winding fill}
     \endtable
 
     See the Qt::FillRule documentation for the definition of the
     rules. A painter path's currently set fill rule can be retrieved
     using the fillRule() function, and altered using the setFillRule()
     function.
+
+    \section1 Arcs and Ellipses
+
+    The angle arguments of \l{arcTo()}, \l{arcMoveTo()},
+    \l{QPainter::drawArc()}, \l{QPainter::drawPie()}, and
+    \l{QPainter::drawChord()} are \e{eccentric} angles. An eccentric
+    angle parameterizes the ellipse that fits into the bounding
+    rectangle; it does not measure the direction from the center of that
+    rectangle to the resulting point. In general the two coincide only
+    when the bounding rectangle is square. On a 400 by 100 rectangle, for
+    example, an angle of 45 degrees yields a point that lies roughly 14
+    degrees above the horizontal as seen from the center.
+
+    To place a point at a given direction from the center instead,
+    compute that point yourself and pass it to \l{moveTo()} or
+    \l{lineTo()}. Alternatively, keep using these functions and convert
+    the direction: on a bounding rectangle of the given \c width and
+    \c height, the direction \c theta, in radians, corresponds to the
+    eccentric angle
+    \c{qRadiansToDegrees(qAtan2(width * qSin(theta), height * qCos(theta)))}.
+
+    Because a painter path stores only lines and Bezier segments, Qt
+    approximates arcs and ellipses with cubic Bezier curves instead of
+    evaluating them trigonometrically. For a circle, the approximation
+    places points less than 0.1% of the radius away from their true
+    positions. Code that compares a point from \l{arcMoveTo()} against
+    one computed with \l{<QtMath>::}{qSin()} and \l{<QtMath>::}{qCos()}
+    must therefore allow for a tolerance instead of testing for
+    equality.
 
     \section1 QPainterPath Information
 
@@ -289,8 +320,8 @@ static void qt_debug_path(const QPainterPath &path)
     \li \l {painting/painterpaths}{Painter Paths Example}
     \li \l {painting/deform}{Vector Deformation Example}
     \row
-    \li \inlineimage qpainterpath-example.png
-    \li \inlineimage qpainterpath-demo.png
+    \li \inlineimage qpainterpath-example.png {Painter Paths application}
+    \li \inlineimage qpainterpath-demo.png {Vector Deformation application}
     \endtable
 
     \sa QPainterPathStroker, QPainter, QRegion, {Painter Paths Example}
@@ -777,6 +808,7 @@ void QPainterPath::lineTo(const QPointF &p)
     \table 100%
     \row
     \li \inlineimage qpainterpath-cubicto.png
+                     {Cubic bezier curve with control points c1 and c2}
     \li
     \snippet code/src_gui_painting_qpainterpath.cpp 1
     \endtable
@@ -892,7 +924,10 @@ void QPainterPath::quadTo(const QPointF &c, const QPointF &e)
     counter-clockwise.
 
     Angles are specified in degrees. Clockwise arcs can be specified
-    using negative angles.
+    using negative angles. If \a rectangle is not square, the angles are
+    eccentric angles and do not measure the direction from the center of
+    the rectangle, as described in \l{QPainterPath#Arcs and
+    Ellipses}{Arcs and Ellipses}.
 
     Note that this function connects the starting point of the arc to
     the current position if they are not already connected. After the
@@ -903,6 +938,7 @@ void QPainterPath::quadTo(const QPointF &c, const QPointF &e)
     \table 100%
     \row
     \li \inlineimage qpainterpath-arcto.png
+                     {Arc path with bounding rectangle and start angle}
     \li
     \snippet code/src_gui_painting_qpainterpath.cpp 2
     \endtable
@@ -963,9 +999,13 @@ void QPainterPath::arcTo(const QRectF &rect, qreal startAngle, qreal sweepLength
     rectangle at \a angle.
 
     Angles are specified in degrees. Clockwise arcs can be specified
-    using negative angles.
+    using negative angles. If \a rectangle is not square, \a angle is an
+    eccentric angle and does not measure the direction from the center of
+    the rectangle, as described in \l{QPainterPath#Arcs and
+    Ellipses}{Arcs and Ellipses}.
 
-    \sa moveTo(), arcTo()
+    \sa moveTo(), arcTo(), {QPainterPath#Arcs and Ellipses}{Arcs and
+    Ellipses}
 */
 
 void QPainterPath::arcMoveTo(const QRectF &rect, qreal angle)
@@ -1021,6 +1061,7 @@ QPointF QPainterPath::currentPosition() const
     \table 100%
     \row
     \li \inlineimage qpainterpath-addrectangle.png
+                     {Rectangle with currentPosition marker}
     \li
     \snippet code/src_gui_painting_qpainterpath.cpp 3
     \endtable
@@ -1067,6 +1108,7 @@ void QPainterPath::addRect(const QRectF &r)
     \table 100%
     \row
     \li \inlineimage qpainterpath-addpolygon.png
+                     {Polygon with labeled point coordinates}
     \li
     \snippet code/src_gui_painting_qpainterpath.cpp 4
     \endtable
@@ -1096,11 +1138,15 @@ void QPainterPath::addPolygon(const QPolygonF &polygon)
     and adds it to the painter path as a closed subpath.
 
     The ellipse is composed of a clockwise curve, starting and
-    finishing at zero degrees (the 3 o'clock position).
+    finishing at zero degrees (the 3 o'clock position). The curve is a
+    cubic Bezier approximation of the ellipse, not an exact
+    representation of it, as described in \l{QPainterPath#Arcs and
+    Ellipses}{Arcs and Ellipses}.
 
     \table 100%
     \row
     \li \inlineimage qpainterpath-addellipse.png
+                     {Ellipse with bounding rectangle}
     \li
     \snippet code/src_gui_painting_qpainterpath.cpp 5
     \endtable
@@ -1152,7 +1198,7 @@ void QPainterPath::addEllipse(const QRectF &boundingRect)
 
     \table 100%
     \row
-    \li \inlineimage qpainterpath-addtext.png
+    \li \inlineimage qpainterpath-addtext.png {Qt text with baseline position}
     \li
     \snippet code/src_gui_painting_qpainterpath.cpp 6
     \endtable
@@ -1334,8 +1380,8 @@ Qt::FillRule QPainterPath::fillRule() const
     \li Qt::OddEvenFill (default)
     \li Qt::WindingFill
     \row
-    \li \inlineimage qt-fillrule-oddeven.png
-    \li \inlineimage qt-fillrule-winding.png
+    \li \inlineimage qt-fillrule-oddeven.png {Star with odd-even fill}
+    \li \inlineimage qt-fillrule-winding.png {Star with winding fill}
     \endtable
 
     \sa fillRule()
